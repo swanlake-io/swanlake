@@ -4,3 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0"
+arrow-array = "56.2.0"
+arrow-flight = { version = "56.2.0", features = ["flight-sql"] }
+arrow-schema = "56.2.0"
+dotenvy = "0.15"
+duckdb = { version = "1.4.1", features = ["bundled", "r2d2"] }
+futures = "0.3"
+prost = "0.13.5"
+r2d2 = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "signal"] }
+tonic = { version = "0.13.1", features = ["transport"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+toml = "0.8"

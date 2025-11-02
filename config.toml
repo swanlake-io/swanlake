@@ -1,0 +1,6 @@
+host = "127.0.0.1"
+port = 50051
+pool_size = 4
+duckdb_path = null
+ducklake_enable = true
+ducklake_init_sql = null
