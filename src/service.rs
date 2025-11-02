@@ -5,7 +5,8 @@ use arrow_flight::sql::server::FlightSqlService;
 use arrow_flight::sql::server::PeekableFlightDataStream;
 use arrow_flight::sql::{
     ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult,
-    CommandStatementQuery, CommandStatementUpdate, ProstMessageExt, SqlInfo, TicketStatementQuery,
+    CommandPreparedStatementQuery, CommandStatementQuery, CommandStatementUpdate, ProstMessageExt,
+    SqlInfo, TicketStatementQuery,
 };
 use arrow_flight::{
     flight_service_server::FlightService, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
@@ -305,5 +306,112 @@ impl FlightSqlService for SwanFlightSqlService {
             dataset_schema: dataset_schema.into(),
             parameter_schema: parameter_schema.into(),
         })
+    }
+
+    #[instrument(skip(self, request), fields(handle_len = query.prepared_statement_handle.len()))]
+    async fn get_flight_info_prepared_statement(
+        &self,
+        query: CommandPreparedStatementQuery,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        // Decode the prepared statement handle (which is just the SQL text)
+        let sql = String::from_utf8(query.prepared_statement_handle.to_vec())
+            .map_err(|err| Status::invalid_argument(format!("invalid handle encoding: {err}")))?;
+
+        let engine = self.engine.clone();
+        let sql_for_schema = sql.clone();
+
+        info!(%sql, "getting flight info for prepared statement");
+
+        // Get schema using schema_for_query (optimized with LIMIT 0)
+        //
+        // Implementation Note:
+        // We use SQL text as the handle and re-prepare on execution because:
+        // 1. DuckDB prepared statements are tied to specific connections
+        // 2. Connection pooling means we can't guarantee same connection
+        // 3. Multiple server instances can't share statement handles
+        // 4. Re-preparing is fast (~1-2ms) and avoids caching complexity
+        //
+        // The schema_for_query() uses LIMIT 0 optimization to extract schema
+        // without executing the full query. See PREPARED_STATEMENT_OPTIONS.md
+        let schema = tokio::task::spawn_blocking(move || engine.schema_for_query(&sql_for_schema))
+            .await
+            .map_err(Self::status_from_join)?
+            .map_err(Self::status_from_error)?;
+
+        debug!(
+            field_count = schema.fields().len(),
+            "prepared statement schema retrieved"
+        );
+
+        // Create ticket for execution
+        let handle_bytes = query.encode_to_vec();
+        let descriptor = request.into_inner();
+        let ticket = TicketStatementQuery {
+            statement_handle: handle_bytes.into(),
+        };
+        let ticket_bytes = ticket.as_any().encode_to_vec();
+        let endpoint = FlightEndpoint::new().with_ticket(Ticket::new(ticket_bytes));
+
+        let info = FlightInfo::new()
+            .try_with_schema(&schema)
+            .map_err(|err| Status::internal(format!("failed to encode schema: {err}")))?
+            .with_descriptor(descriptor)
+            .with_endpoint(endpoint)
+            .with_total_records(-1); // -1 = unknown row count (per Flight SQL protocol)
+
+        Ok(Response::new(info))
+    }
+
+    #[instrument(skip(self, _request), fields(handle_len = query.prepared_statement_handle.len()))]
+    async fn do_get_prepared_statement(
+        &self,
+        query: CommandPreparedStatementQuery,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        // Decode the prepared statement handle (which is just the SQL text)
+        let sql = String::from_utf8(query.prepared_statement_handle.to_vec())
+            .map_err(|err| Status::invalid_argument(format!("invalid handle encoding: {err}")))?;
+
+        let engine = self.engine.clone();
+        let sql_for_exec = sql.clone();
+
+        info!(%sql, "executing prepared statement via do_get_prepared_statement");
+
+        let QueryResult {
+            schema,
+            batches,
+            total_rows,
+            total_bytes,
+        } = tokio::task::spawn_blocking(move || engine.execute_query(&sql_for_exec))
+            .await
+            .map_err(Self::status_from_join)?
+            .map_err(Self::status_from_error)?;
+
+        let flight_data =
+            arrow_flight::utils::batches_to_flight_data(&schema, batches).map_err(|err| {
+                error!(%err, "failed to convert record batches to flight data");
+                Status::internal(format!(
+                    "failed to convert record batches to flight data: {err}"
+                ))
+            })?;
+
+        debug!(
+            batch_count = flight_data.len(),
+            "converted batches to flight data"
+        );
+
+        let stream = Self::into_stream(flight_data);
+        let mut response = Response::new(stream);
+        if let Ok(value) = MetadataValue::try_from(total_rows.to_string()) {
+            response.metadata_mut().insert("x-swandb-total-rows", value);
+        }
+        if let Ok(value) = MetadataValue::try_from(total_bytes.to_string()) {
+            response
+                .metadata_mut()
+                .insert("x-swandb-total-bytes", value);
+        }
+        info!(%sql, total_rows, total_bytes, "prepared statement completed");
+        Ok(response)
     }
 }

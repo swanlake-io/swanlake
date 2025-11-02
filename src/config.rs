@@ -7,7 +7,7 @@ use anyhow::Context;
 use serde::Deserialize;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 50051;
+const DEFAULT_PORT: u16 = 4214;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]

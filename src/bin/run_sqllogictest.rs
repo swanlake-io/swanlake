@@ -156,7 +156,7 @@ struct CliArgs {
 
 fn parse_args() -> Result<CliArgs> {
     let mut args = std::env::args().skip(1);
-    let mut endpoint = String::from("http://127.0.0.1:50051");
+    let mut endpoint = String::from("http://127.0.0.1:4214");
     let mut labels = Vec::new();
     let mut vars = HashMap::new();
     let mut test_files = Vec::new();

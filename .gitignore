@@ -4,3 +4,7 @@
 .env.*
 /ducklake_files/
 /ducklake_meta/
+
+# Go
+go-client/bin/
+go-client/go.sum
