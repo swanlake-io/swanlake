@@ -1,8 +1,9 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
-use duckdb::{Config, DuckdbConnectionManager};
+use duckdb::types::Value;
+use duckdb::{params_from_iter, Config, Connection, DuckdbConnectionManager};
 use r2d2::Pool;
 use tracing::{debug, info, instrument};
 
@@ -15,7 +16,10 @@ pub struct DuckDbEngine {
 }
 
 struct EngineInner {
-    pool: Pool<DuckdbConnectionManager>,
+    read_pool: Pool<DuckdbConnectionManager>,
+    write_pool: Pool<DuckdbConnectionManager>,
+    writes_enabled: bool,
+    session_inits: Mutex<Vec<String>>,
 }
 
 pub struct QueryResult {
@@ -27,20 +31,35 @@ pub struct QueryResult {
 
 impl DuckDbEngine {
     pub fn new(config: &ServerConfig) -> Result<Self, ServerError> {
-        let duckdb_config = Config::default()
-            .enable_autoload_extension(true)?
-            .allow_unsigned_extensions()?;
+        let read_manager = DuckdbConnectionManager::memory_with_flags(
+            Config::default()
+                .enable_autoload_extension(true)?
+                .allow_unsigned_extensions()?,
+        )?;
 
-        let manager = match config.duckdb_path.as_ref() {
-            Some(path) => DuckdbConnectionManager::file_with_flags(path, duckdb_config)?,
-            None => DuckdbConnectionManager::memory_with_flags(duckdb_config)?,
-        };
+        let write_manager = DuckdbConnectionManager::memory_with_flags(
+            Config::default()
+                .enable_autoload_extension(true)?
+                .allow_unsigned_extensions()?,
+        )?;
 
-        let pool_size = config.pool_size.max(1);
-        let pool = Pool::builder().max_size(pool_size).build(manager)?;
+        let read_pool_size = config.read_pool_size.unwrap_or(config.pool_size).max(1);
+        let write_pool_size = config.write_pool_size.unwrap_or(config.pool_size).max(1);
+
+        let read_pool = Pool::builder()
+            .max_size(read_pool_size)
+            .build(read_manager)?;
+        let write_pool = Pool::builder()
+            .max_size(write_pool_size)
+            .build(write_manager)?;
 
         let engine = Self {
-            inner: Arc::new(EngineInner { pool }),
+            inner: Arc::new(EngineInner {
+                read_pool,
+                write_pool,
+                writes_enabled: config.enable_writes,
+                session_inits: Mutex::new(Vec::new()),
+            }),
         };
 
         engine.initialize_ducklake(config)?;
@@ -54,7 +73,8 @@ impl DuckDbEngine {
             return Ok(());
         }
 
-        let conn = self.inner.pool.get()?;
+        let conn = self.inner.write_pool.get()?;
+        self.apply_session_inits(&conn)?;
         if let Some(sql) = config.ducklake_init_sql.as_ref() {
             let trimmed = sql.trim();
             if !trimmed.is_empty() {
@@ -94,9 +114,52 @@ impl DuckDbEngine {
     /// See PREPARED_STATEMENT_OPTIONS.md for detailed analysis.
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn schema_for_query(&self, sql: &str) -> Result<Schema, ServerError> {
-        let conn = self.inner.pool.get()?;
+        let conn = self.get_read_connection()?;
+        Self::schema_for_query_on_conn(&conn, sql)
+    }
 
-        // Wrap query with LIMIT 0 to extract schema without data scan
+    #[instrument(skip(self), fields(sql = %sql))]
+    pub fn execute_query(&self, sql: &str) -> Result<QueryResult, ServerError> {
+        let conn = self.get_read_connection()?;
+        Self::execute_query_on_conn(&conn, sql)
+    }
+
+    #[instrument(skip(self), fields(sql = %sql))]
+    pub fn execute_statement(&self, sql: &str) -> Result<i64, ServerError> {
+        if !self.inner.writes_enabled {
+            return Err(ServerError::WritesDisabled);
+        }
+        self.register_session_init(sql);
+        let conn = self.get_write_connection()?;
+        Self::execute_statement_on_conn(&conn, sql)
+    }
+
+    #[instrument(skip(self))]
+    pub fn get_read_connection(
+        &self,
+    ) -> Result<r2d2::PooledConnection<DuckdbConnectionManager>, ServerError> {
+        let conn = self.inner.read_pool.get()?;
+        self.apply_session_inits(&conn)?;
+        Ok(conn)
+    }
+
+    #[instrument(skip(self))]
+    pub fn get_write_connection(
+        &self,
+    ) -> Result<r2d2::PooledConnection<DuckdbConnectionManager>, ServerError> {
+        if !self.inner.writes_enabled {
+            return Err(ServerError::WritesDisabled);
+        }
+        let conn = self.inner.write_pool.get()?;
+        self.apply_session_inits(&conn)?;
+        Ok(conn)
+    }
+
+    pub fn writes_enabled(&self) -> bool {
+        self.inner.writes_enabled
+    }
+
+    pub fn schema_for_query_on_conn(conn: &Connection, sql: &str) -> Result<Schema, ServerError> {
         let schema_query = format!("SELECT * FROM ({}) LIMIT 0", sql);
 
         let mut stmt = conn.prepare(&schema_query)?;
@@ -110,9 +173,7 @@ impl DuckDbEngine {
         Ok(schema.as_ref().clone())
     }
 
-    #[instrument(skip(self), fields(sql = %sql))]
-    pub fn execute_query(&self, sql: &str) -> Result<QueryResult, ServerError> {
-        let conn = self.inner.pool.get()?;
+    pub fn execute_query_on_conn(conn: &Connection, sql: &str) -> Result<QueryResult, ServerError> {
         let mut stmt = conn.prepare(sql)?;
         let arrow = stmt.query_arrow([])?;
         let schema = arrow.get_schema();
@@ -139,20 +200,110 @@ impl DuckDbEngine {
         })
     }
 
-    #[instrument(skip(self), fields(sql = %sql))]
-    pub fn execute_statement(&self, sql: &str) -> Result<i64, ServerError> {
-        let conn = self.inner.pool.get()?;
+    pub fn execute_statement_on_conn(conn: &Connection, sql: &str) -> Result<i64, ServerError> {
         conn.execute_batch(sql)?;
-        // For DDL statements like ATTACH, CREATE, DROP, etc., we return 0 affected rows
-        // DuckDB's execute_batch doesn't provide affected row count
         debug!("executed statement");
         Ok(0)
     }
 
-    #[instrument(skip(self))]
-    pub(crate) fn get_connection(
-        &self,
-    ) -> Result<r2d2::PooledConnection<DuckdbConnectionManager>, ServerError> {
-        Ok(self.inner.pool.get()?)
+    pub fn execute_query_on_conn_with_params(
+        conn: &Connection,
+        sql: &str,
+        params: &[Value],
+    ) -> Result<QueryResult, ServerError> {
+        let mut stmt = conn.prepare(sql)?;
+        let arrow = stmt.query_arrow(params_from_iter(params.iter()))?;
+        let schema = arrow.get_schema();
+
+        let mut total_rows = 0usize;
+        let mut total_bytes = 0usize;
+        let batches: Vec<RecordBatch> = arrow
+            .map(|batch| {
+                total_rows += batch.num_rows();
+                total_bytes += batch.get_array_memory_size();
+                batch
+            })
+            .collect();
+
+        debug!(
+            batch_count = batches.len(),
+            total_rows, total_bytes, "executed query with parameters"
+        );
+        Ok(QueryResult {
+            schema: schema.as_ref().clone(),
+            batches,
+            total_rows,
+            total_bytes,
+        })
+    }
+
+    pub fn execute_statement_on_conn_with_params(
+        conn: &Connection,
+        sql: &str,
+        params: &[Value],
+    ) -> Result<usize, ServerError> {
+        let mut stmt = conn.prepare(sql)?;
+        let affected = if params.is_empty() {
+            stmt.execute([])?
+        } else {
+            stmt.execute(params_from_iter(params.iter()))?
+        };
+        debug!(affected, "executed statement with parameters");
+        Ok(affected)
+    }
+
+    pub fn register_session_init(&self, sql: &str) {
+        let mut guard = self
+            .inner
+            .session_inits
+            .lock()
+            .expect("session init mutex poisoned");
+        for stmt in Self::extract_session_init_statements(sql) {
+            if !guard.iter().any(|existing| existing == &stmt) {
+                guard.push(stmt);
+            }
+        }
+    }
+
+    fn apply_session_inits(&self, conn: &Connection) -> Result<(), ServerError> {
+        let statements = {
+            let guard = self
+                .inner
+                .session_inits
+                .lock()
+                .expect("session init mutex poisoned");
+            guard.clone()
+        };
+
+        for stmt in statements {
+            conn.execute_batch(&stmt)?;
+        }
+        Ok(())
+    }
+
+    fn extract_session_init_statements(sql: &str) -> Vec<String> {
+        sql.split(';')
+            .filter_map(|fragment| {
+                let trimmed = fragment.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                let upper = trimmed.to_ascii_uppercase();
+                if upper.starts_with("ATTACH ")
+                    || upper.starts_with("DETACH ")
+                    || upper.starts_with("USE ")
+                    || upper.starts_with("SET SCHEMA")
+                    || upper.starts_with("SET SEARCH_PATH")
+                {
+                    Some(trimmed.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn ensure_connection_state(&self, conn: &Connection) -> Result<(), ServerError> {
+        self.apply_session_inits(conn)
     }
 }

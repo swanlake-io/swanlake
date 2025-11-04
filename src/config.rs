@@ -1,105 +1,46 @@
-use std::env;
-use std::fs;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Context;
 use serde::Deserialize;
 
-const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 4214;
-
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    pub duckdb_path: Option<PathBuf>,
     /// Maximum size of the DuckDB connection pool.
     pub pool_size: u32,
+    /// Optional size override for the read-only DuckDB connection pool.
+    pub read_pool_size: Option<u32>,
+    /// Optional size override for the write DuckDB connection pool.
+    pub write_pool_size: Option<u32>,
+    /// Whether write operations are permitted.
+    pub enable_writes: bool,
     /// Whether to install/load the DuckLake extension during startup.
     pub ducklake_enable: bool,
     /// Optional SQL statement executed during startup for ducklake integration.
     pub ducklake_init_sql: Option<String>,
 }
 
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            host: DEFAULT_HOST.to_string(),
-            port: DEFAULT_PORT,
-            duckdb_path: None,
-            pool_size: 4,
-            ducklake_enable: true,
-            ducklake_init_sql: None,
-        }
-    }
-}
-
 impl ServerConfig {
-    pub fn load(config_path: Option<&Path>) -> anyhow::Result<Self> {
-        let mut cfg = if let Some(path) = config_path {
-            let contents = fs::read_to_string(path).with_context(|| {
-                format!("failed to read configuration file at {}", path.display())
-            })?;
-            toml::from_str(&contents).with_context(|| {
+    pub fn load(config_path: &Path) -> anyhow::Result<Self> {
+        let settings = config::Config::builder()
+            .add_source(config::File::with_name(config_path.to_str().unwrap()).required(true))
+            .add_source(config::Environment::with_prefix("SWANDB_").separator("_"))
+            .build()
+            .with_context(|| {
                 format!(
-                    "failed to deserialize configuration from {}",
-                    path.display()
+                    "failed to load configuration from {}",
+                    config_path.display()
                 )
-            })?
-        } else {
-            ServerConfig::default()
-        };
-        cfg.apply_env_overrides()?;
+            })?;
+        let cfg: ServerConfig = settings.try_deserialize().with_context(|| {
+            format!(
+                "failed to deserialize configuration from {}",
+                config_path.display()
+            )
+        })?;
         Ok(cfg)
-    }
-
-    fn apply_env_overrides(&mut self) -> anyhow::Result<()> {
-        if let Ok(host) = env::var("SWANDB_HOST") {
-            if !host.trim().is_empty() {
-                self.host = host;
-            }
-        }
-
-        if let Ok(port) = env::var("SWANDB_PORT") {
-            if !port.trim().is_empty() {
-                self.port = port.parse::<u16>().with_context(|| {
-                    format!("invalid u16 value for SWANDB_PORT: {}", port.trim())
-                })?;
-            }
-        }
-
-        if let Ok(path) = env::var("SWANDB_DUCKDB_PATH") {
-            if !path.trim().is_empty() {
-                self.duckdb_path = Some(PathBuf::from(path));
-            }
-        }
-
-        if let Ok(enable) = env::var("SWANDB_ENABLE_DUCKLAKE") {
-            if !enable.trim().is_empty() {
-                self.ducklake_enable = enable.parse::<bool>().with_context(|| {
-                    format!("invalid boolean for SWANDB_ENABLE_DUCKLAKE: {enable}")
-                })?;
-            }
-        }
-
-        if let Ok(size) = env::var("SWANDB_POOL_SIZE") {
-            if !size.trim().is_empty() {
-                self.pool_size = size
-                    .parse::<u32>()
-                    .with_context(|| format!("invalid u32 value for SWANDB_POOL_SIZE: {size}"))?;
-            }
-        }
-
-        if let Ok(sql) = env::var("SWANDB_DUCKLAKE_INIT_SQL") {
-            let trimmed = sql.trim();
-            if !trimmed.is_empty() {
-                self.ducklake_init_sql = Some(trimmed.to_string());
-            }
-        }
-
-        Ok(())
     }
 
     pub fn bind_addr(&self) -> anyhow::Result<SocketAddr> {

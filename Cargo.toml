@@ -30,5 +30,5 @@ tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "signal"] }
 tonic = { version = "0.13.1", features = ["transport"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-toml = "0.8"
+config = "0.15"
 sqllogictest = { version = "0.28.4", optional = true }

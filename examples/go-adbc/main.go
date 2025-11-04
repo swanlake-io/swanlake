@@ -17,6 +17,8 @@ import (
 var schema = `
 ATTACH OR REPLACE 'ducklake:postgres:dbname=ducklake-test' AS swandb (DATA_PATH 'r2://ducklake-test/');
 
+use swandb;
+
 CREATE TABLE IF NOT EXISTS person (
     first_name VARCHAR,
     last_name VARCHAR,
@@ -54,9 +56,9 @@ func main() {
 	fmt.Println("Connected to SwanDB successfully!")
 
 	// Exec schema
-	if err := executeStatement(ctx, conn, schema); err != nil {
-		log.Fatalf("Failed to create schema: %v", err)
-	}
+	// if err := executeStatement(ctx, conn, schema); err != nil {
+	// 	log.Fatalf("Failed to create schema: %v", err)
+	// }
 
 	// Transaction handled via Commit/Rollback
 
@@ -90,20 +92,22 @@ func main() {
 	}
 
 	// Commit
-	if err := conn.Commit(ctx); err != nil {
-		log.Fatalf("Failed to commit: %v", err)
-	}
+	// if err := conn.Commit(ctx); err != nil {
+	// 	log.Fatalf("Failed to commit: %v", err)
+	// }
 
 	// Autocommit assumed default
 
 	// Select all people
-	people, err := selectPeople(ctx, conn, "SELECT * FROM person ORDER BY first_name ASC")
+	people, err := selectPeople(ctx, conn, "SELECT * FROM swandb.person ORDER BY first_name ASC")
 	if err != nil {
 		log.Fatalf("Failed to query people: %v", err)
 	}
 	if len(people) >= 2 {
 		jason, john := people[0], people[1]
 		fmt.Printf("%#v\n%#v\n", jason, john)
+	} else {
+		log.Fatalf("Expect at least 2 people, got %d", len(people))
 	}
 
 	// Select single person (simulate QueryRow)
@@ -199,6 +203,13 @@ func connect(ctx context.Context, endpoint string) (adbc.Connection, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open connection: %w", err)
 	}
+
+	// if opts, ok := conn.(adbc.PostInitOptions); ok {
+	// 	if err := opts.SetOption(adbc.OptionKeyAutoCommit, adbc.OptionValueDisabled); err != nil {
+	// 		conn.Close()
+	// 		return nil, fmt.Errorf("failed to disable autocommit: %w", err)
+	// 	}
+	// }
 
 	return conn, nil
 }

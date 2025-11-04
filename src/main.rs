@@ -21,8 +21,7 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let config_path = parse_args()?;
-    let config =
-        ServerConfig::load(config_path.as_deref()).context("failed to load configuration")?;
+    let config = ServerConfig::load(&config_path).context("failed to load configuration")?;
     let addr = config
         .bind_addr()
         .context("failed to resolve bind address")?;
@@ -54,15 +53,15 @@ fn init_tracing() {
         .init();
 }
 
-fn parse_args() -> Result<Option<PathBuf>> {
+fn parse_args() -> Result<PathBuf> {
     let mut args = env::args().skip(1);
-    let mut config_path = None;
+    let mut config_path = PathBuf::from("config.toml");
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--config" | "-c" => {
                 let path = args.next().context("--config requires a path argument")?;
-                config_path = Some(PathBuf::from(path));
+                config_path = PathBuf::from(path);
             }
             "--help" | "-h" => {
                 println!("Usage: swandb [--config <path>]");

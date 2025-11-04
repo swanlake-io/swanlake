@@ -1,7 +1,12 @@
 host = "127.0.0.1"
 port = 4214
 pool_size = 1
-
+read_pool_size = 1
+write_pool_size = 1
+# pool_size = 10
+# read_pool_size = 10
+# write_pool_size = 2
+enable_writes = true
 ducklake_enable = true
 ducklake_init_sql = """
     -- Install required extensions
@@ -18,4 +23,20 @@ ducklake_init_sql = """
 
     -- Start the UI server at http://localhost:4213/
     call start_ui_server();
+
+    ATTACH IF NOT EXISTS 'ducklake:postgres:dbname=ducklake-test' AS swandb (DATA_PATH 'r2://ducklake-test/');
+
+    CREATE OR REPLACE TABLE swandb.person (
+        first_name VARCHAR,
+        last_name VARCHAR,
+        email VARCHAR
+    );
+
+    CREATE OR REPLACE TABLE swandb.place (
+        country VARCHAR,
+        city VARCHAR NULL,
+        telcode INTEGER
+    );
+
+    use swandb;
 """
