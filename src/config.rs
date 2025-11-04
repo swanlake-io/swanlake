@@ -41,7 +41,7 @@ impl Default for ServerConfig {
             ducklake_init_sql: None,
             enable_ui_server: true,
             max_sessions: Some(100),
-            session_timeout_seconds: Some(1800), // 30 minutes
+            session_timeout_seconds: Some(900),
         }
     }
 }

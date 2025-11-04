@@ -88,9 +88,4 @@ impl EngineFactory {
         info!("DuckDB connection created and initialized");
         Ok(DuckDbConnection::new(conn))
     }
-
-    /// Check if UI server should be enabled
-    pub fn enable_ui_server(&self) -> bool {
-        self.enable_ui_server
-    }
 }

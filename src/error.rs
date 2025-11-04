@@ -14,8 +14,6 @@ pub enum ServerError {
     TransactionNotFound,
     #[error("prepared statement not found")]
     PreparedStatementNotFound,
-    #[error("session not found")]
-    SessionNotFound,
     #[error("maximum number of sessions reached")]
     MaxSessionsReached,
     #[error("unsupported parameter type: {0}")]

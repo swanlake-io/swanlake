@@ -124,11 +124,11 @@ See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed performance documentation.
 
 - `config`: loads runtime configuration from the environment.
 - `engine/`: connection factory that creates initialized DuckDB connections with extensions and optimizations.
-- `session/`: session management with dedicated connections, prepared statements, transactions, and automatic cleanup.
+- `session/`: session management with per-connection sessions, dedicated connections, prepared statements, transactions, and automatic cleanup.
 - `service`: minimal [`FlightSqlService`](https://docs.rs/arrow-flight/latest/arrow_flight/sql/server/trait.FlightSqlService.html) implementation that handles `CommandStatementQuery` (SELECT queries) and `CommandStatementUpdate` (DDL/DML statements) and streams results via Arrow Flight.
 - `main`: wires configuration, logging, the Flight SQL gRPC server, and idle session cleanup together.
 
-The implementation uses a session-based architecture where each client gets a dedicated DuckDB connection with persistent state. Queries are executed directly and the resulting `RecordBatch`es are converted to Flight `FlightData`. DuckLake is handled as a DuckDB extension: we install/load it at connection creation (unless disabled) and optionally run custom SQL afterwards so we fail fast if attachment fails. Sessions are automatically cleaned up after 30 minutes of inactivity.
+The implementation uses a per-connection session-based architecture where each gRPC connection gets a dedicated session with a DuckDB connection and persistent state. No global state is used. Queries are executed directly and the resulting `RecordBatch`es are converted to Flight `FlightData`. DuckLake extensions and user SQL initialize per session; UI server initializes once on first connection. Sessions are automatically cleaned up after 30 minutes of inactivity.
 
 ### Flight SQL Operations
 

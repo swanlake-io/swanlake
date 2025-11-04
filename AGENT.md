@@ -37,6 +37,7 @@ SwanDB is an **Apache Arrow Flight SQL server** powered by **DuckDB** with optio
 │  ┌────────────────────────────────────┐ │
 │  │  session/ - Session Management     │ │
 │  │  - Session Registry (max 100)      │ │
+│  │  - Per-Connection Sessions         │ │
 │  │  - Dedicated Connections           │ │
 │  │  - Idle Session Cleanup            │ │
 │  └────────────────────────────────────┘ │
@@ -61,8 +62,8 @@ SwanDB is an **Apache Arrow Flight SQL server** powered by **DuckDB** with optio
 
 1. **`config`** - Loads runtime configuration from environment variables, config.toml, or CLI args
 2. **`engine/`** - Connection factory and DuckDB wrapper with schema extraction optimization
-3. **`session/`** - Session management with dedicated connections, prepared statements, and transactions
-4. **`service`** - Flight SQL service implementation handling queries and statements
+3. **`session/`** - Session management with per-connection sessions, dedicated connections, prepared statements, and transactions
+4. **`service`** - Flight SQL service implementation with session registry for queries and statements
 5. **`main`** - Entry point that wires everything together with idle session cleanup
 
 ## Critical Performance Optimizations
@@ -89,7 +90,7 @@ pub fn schema_for_query(&self, sql: &str) -> Result<Schema, ServerError> {
 
 ### 2. Session-Based Architecture
 
-Each client gets a dedicated DuckDB connection with persistent state for transactions and temp tables. Sessions are automatically cleaned up after 30 minutes of inactivity.
+Each gRPC connection gets a dedicated session with a DuckDB connection, persistent state for transactions and temp tables. Sessions are automatically cleaned up after 30 minutes of inactivity. DuckLake extensions and user SQL initialize per session; UI server initializes once on first connection.
 
 ### 3. Async Task Offload
 
@@ -377,7 +378,7 @@ RUST_LOG=info cargo run 2>&1 | grep "idle sessions"
 
 ## Summary
 
-SwanDB is a production-ready Arrow Flight SQL server with a session-based architecture that provides persistent state for complex client workflows. The LIMIT 0 schema optimization delivers ~50% performance improvements while maintaining full Flight SQL protocol compliance. Sessions automatically manage connection lifecycle, prepared statements, and transactions with configurable limits and timeouts.
+SwanDB is a production-ready Arrow Flight SQL server with a per-connection session-based architecture that provides persistent state for complex client workflows. The LIMIT 0 schema optimization delivers ~50% performance improvements while maintaining full Flight SQL protocol compliance. Sessions automatically manage connection lifecycle, prepared statements, and transactions with configurable limits and timeouts.
 
 ---
 

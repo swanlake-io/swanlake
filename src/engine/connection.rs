@@ -56,6 +56,11 @@ impl DuckDbConnection {
     /// **Performance Impact:** ~20x faster than full execution
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn schema_for_query(&self, sql: &str) -> Result<Schema, ServerError> {
+        if sql.contains('\0') {
+            return Err(ServerError::UnsupportedParameter(
+                "SQL contains null bytes".to_string(),
+            ));
+        }
         let schema_query = format!("SELECT * FROM ({}) LIMIT 0", sql);
 
         let conn = self.conn.lock().expect("connection mutex poisoned");
@@ -79,6 +84,11 @@ impl DuckDbConnection {
     /// Execute a SELECT query and return results
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn execute_query(&self, sql: &str) -> Result<QueryResult, ServerError> {
+        if sql.contains('\0') {
+            return Err(ServerError::UnsupportedParameter(
+                "SQL contains null bytes".to_string(),
+            ));
+        }
         let conn = self.conn.lock().expect("connection mutex poisoned");
         let mut stmt = conn.prepare(sql)?;
         let param_count = stmt.parameter_count();
@@ -119,6 +129,11 @@ impl DuckDbConnection {
         sql: &str,
         params: &[Value],
     ) -> Result<QueryResult, ServerError> {
+        if sql.contains('\0') {
+            return Err(ServerError::UnsupportedParameter(
+                "SQL contains null bytes".to_string(),
+            ));
+        }
         let conn = self.conn.lock().expect("connection mutex poisoned");
         let mut stmt = conn.prepare(sql)?;
         let arrow = stmt.query_arrow(params_from_iter(params.iter()))?;
@@ -149,6 +164,11 @@ impl DuckDbConnection {
     /// Execute a statement (DDL/DML) without returning results
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn execute_statement(&self, sql: &str) -> Result<i64, ServerError> {
+        if sql.contains('\0') {
+            return Err(ServerError::UnsupportedParameter(
+                "SQL contains null bytes".to_string(),
+            ));
+        }
         let conn = self.conn.lock().expect("connection mutex poisoned");
         conn.execute_batch(sql)?;
         debug!("executed statement");
@@ -162,6 +182,11 @@ impl DuckDbConnection {
         sql: &str,
         params: &[Value],
     ) -> Result<usize, ServerError> {
+        if sql.contains('\0') {
+            return Err(ServerError::UnsupportedParameter(
+                "SQL contains null bytes".to_string(),
+            ));
+        }
         let conn = self.conn.lock().expect("connection mutex poisoned");
         let mut stmt = conn.prepare(sql)?;
         let affected = if params.is_empty() {
@@ -176,6 +201,11 @@ impl DuckDbConnection {
     /// Execute a batch of SQL statements
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn execute_batch(&self, sql: &str) -> Result<(), ServerError> {
+        if sql.contains('\0') {
+            return Err(ServerError::UnsupportedParameter(
+                "SQL contains null bytes".to_string(),
+            ));
+        }
         let conn = self.conn.lock().expect("connection mutex poisoned");
         conn.execute_batch(sql)?;
         debug!("executed batch");

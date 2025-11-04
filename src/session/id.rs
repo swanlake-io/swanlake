@@ -20,16 +20,6 @@ impl SessionId {
     pub fn from_string(s: String) -> Self {
         Self(s)
     }
-
-    /// Get the session ID as a string slice
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Convert to owned string
-    pub fn into_string(self) -> String {
-        self.0
-    }
 }
 
 impl Default for SessionId {

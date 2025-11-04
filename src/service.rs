@@ -102,7 +102,7 @@ impl SwanFlightSqlService {
             ServerError::PreparedStatementNotFound => {
                 Status::invalid_argument("unknown prepared statement")
             }
-            ServerError::SessionNotFound => Status::invalid_argument("session not found"),
+
             ServerError::MaxSessionsReached => {
                 Status::resource_exhausted("maximum number of sessions reached")
             }
@@ -711,7 +711,7 @@ impl FlightSqlService for SwanFlightSqlService {
 
         // Store in session-scoped prepared statement storage (Phase 2)
         let handle_bytes = session
-            .create_prepared_statement(sql.clone(), is_query, None)
+            .create_prepared_statement(sql.clone(), is_query)
             .map_err(Self::status_from_error)?;
 
         info!(

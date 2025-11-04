@@ -11,5 +11,3 @@ pub mod registry;
 pub mod session;
 
 pub use id::SessionId;
-pub use registry::SessionRegistry;
-pub use session::PreparedStatementMeta;

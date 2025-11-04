@@ -21,7 +21,6 @@ use crate::session::id::{SessionId, StatementHandleGenerator, TransactionIdGener
 pub struct PreparedStatementMeta {
     pub sql: String,
     pub is_query: bool,
-    pub transaction_id: Option<Vec<u8>>,
 }
 
 /// State for a prepared statement including pending parameters
@@ -70,24 +69,6 @@ pub struct Session {
 }
 
 impl Session {
-    /// Create a new session with a dedicated connection
-    #[instrument(skip(connection))]
-    pub fn new(connection: DuckDbConnection, writes_enabled: bool) -> Self {
-        let id = SessionId::new();
-        debug!(session_id = %id, "created new session");
-
-        Self {
-            id,
-            connection,
-            transactions: Arc::new(Mutex::new(HashMap::new())),
-            prepared_statements: Arc::new(Mutex::new(HashMap::new())),
-            transaction_id_gen: Arc::new(TransactionIdGenerator::new()),
-            statement_handle_gen: Arc::new(StatementHandleGenerator::new()),
-            last_activity: Arc::new(Mutex::new(Instant::now())),
-            writes_enabled,
-        }
-    }
-
     /// Create a new session with a specific ID (for connection-based persistence)
     #[instrument(skip(connection))]
     pub fn new_with_id(id: SessionId, connection: DuckDbConnection, writes_enabled: bool) -> Self {
@@ -103,11 +84,6 @@ impl Session {
             last_activity: Arc::new(Mutex::new(Instant::now())),
             writes_enabled,
         }
-    }
-
-    /// Get the session ID
-    pub fn id(&self) -> &SessionId {
-        &self.id
     }
 
     /// Update last activity timestamp
@@ -177,21 +153,6 @@ impl Session {
         self.connection.schema_for_query(sql)
     }
 
-    /// Execute a batch of SQL statements
-    #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
-    pub fn execute_batch(&self, sql: &str) -> Result<(), ServerError> {
-        if !self.writes_enabled {
-            return Err(ServerError::WritesDisabled);
-        }
-        self.touch();
-        self.connection.execute_batch(sql)
-    }
-
-    /// Get reference to underlying connection (for advanced usage)
-    pub fn connection(&self) -> &DuckDbConnection {
-        &self.connection
-    }
-
     // === Prepared Statements ===
 
     /// Create a prepared statement and return its handle
@@ -200,16 +161,11 @@ impl Session {
         &self,
         sql: String,
         is_query: bool,
-        transaction_id: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, ServerError> {
         self.touch();
 
         let handle = self.statement_handle_gen.next();
-        let meta = PreparedStatementMeta {
-            sql,
-            is_query,
-            transaction_id,
-        };
+        let meta = PreparedStatementMeta { sql, is_query };
 
         let mut prepared = self
             .prepared_statements
@@ -353,14 +309,5 @@ impl Session {
         transactions.remove(transaction_id);
         debug!("rolled back transaction");
         Ok(())
-    }
-
-    /// Check if a transaction exists
-    pub fn has_transaction(&self, transaction_id: &[u8]) -> bool {
-        let transactions = self
-            .transactions
-            .lock()
-            .expect("transactions mutex poisoned");
-        transactions.contains_key(transaction_id)
     }
 }
