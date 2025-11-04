@@ -80,6 +80,7 @@ impl DuckDbEngine {
             if !trimmed.is_empty() {
                 info!("Running ducklake init SQL:\n{}", trimmed);
                 conn.execute_batch(trimmed)?;
+                self.register_session_init(trimmed);
             }
         }
 
@@ -163,7 +164,13 @@ impl DuckDbEngine {
         let schema_query = format!("SELECT * FROM ({}) LIMIT 0", sql);
 
         let mut stmt = conn.prepare(&schema_query)?;
-        let arrow = stmt.query_arrow([])?;
+        let param_count = stmt.parameter_count();
+        let arrow = if param_count == 0 {
+            stmt.query_arrow([])?
+        } else {
+            let nulls: Vec<Value> = (0..param_count).map(|_| Value::Null).collect();
+            stmt.query_arrow(params_from_iter(nulls))?
+        };
         let schema = arrow.get_schema();
 
         debug!(
@@ -175,7 +182,13 @@ impl DuckDbEngine {
 
     pub fn execute_query_on_conn(conn: &Connection, sql: &str) -> Result<QueryResult, ServerError> {
         let mut stmt = conn.prepare(sql)?;
-        let arrow = stmt.query_arrow([])?;
+        let param_count = stmt.parameter_count();
+        let arrow = if param_count == 0 {
+            stmt.query_arrow([])?
+        } else {
+            let nulls: Vec<Value> = (0..param_count).map(|_| Value::Null).collect();
+            stmt.query_arrow(params_from_iter(nulls))?
+        };
         let schema = arrow.get_schema();
 
         let mut total_rows = 0usize;

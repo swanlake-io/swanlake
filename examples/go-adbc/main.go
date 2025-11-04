@@ -15,10 +15,6 @@ import (
 )
 
 var schema = `
-ATTACH OR REPLACE 'ducklake:postgres:dbname=ducklake-test' AS swandb (DATA_PATH 'r2://ducklake-test/');
-
-use swandb;
-
 CREATE TABLE IF NOT EXISTS person (
     first_name VARCHAR,
     last_name VARCHAR,
@@ -56,9 +52,9 @@ func main() {
 	fmt.Println("Connected to SwanDB successfully!")
 
 	// Exec schema
-	// if err := executeStatement(ctx, conn, schema); err != nil {
-	// 	log.Fatalf("Failed to create schema: %v", err)
-	// }
+	if err := executeStatement(ctx, conn, schema); err != nil {
+		log.Fatalf("Failed to create schema: %v", err)
+	}
 
 	// Transaction handled via Commit/Rollback
 

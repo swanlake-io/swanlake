@@ -10,10 +10,8 @@ enable_writes = true
 ducklake_enable = true
 ducklake_init_sql = """
     -- Install required extensions
-    INSTALL ducklake;
-    LOAD ducklake;
-    INSTALL postgres;
-    LOAD postgres;
+    INSTALL ducklake; INSTALL httpfs; INSTALL aws; INSTALL postgres;
+    LOAD ducklake; LOAD httpfs; LOAD aws; LOAD postgres;
 
     -- Attach your own table
     -- Export the secrets in the environment variables
@@ -24,7 +22,8 @@ ducklake_init_sql = """
     -- Start the UI server at http://localhost:4213/
     call start_ui_server();
 
-    ATTACH IF NOT EXISTS 'ducklake:postgres:dbname=ducklake-test' AS swandb (DATA_PATH 'r2://ducklake-test/');
+    -- ATTACH IF NOT EXISTS 'ducklake:postgres:dbname=ducklake-test' AS swandb (DATA_PATH 'r2://ducklake-test/');
+    ATTACH IF NOT EXISTS 'ducklake:postgres:dbname=ducklake-test' AS swandb (DATA_PATH '/Users/wangfenjin/github/swandb/swandb/.duckdb/');
 
     CREATE OR REPLACE TABLE swandb.person (
         first_name VARCHAR,
