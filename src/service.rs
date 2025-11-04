@@ -492,6 +492,37 @@ impl FlightSqlService for SwanFlightSqlService {
         ticket: TicketStatementQuery,
         request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        // Try to decode as prepared statement first
+        if let Ok(prepared_query) =
+            CommandPreparedStatementQuery::decode(ticket.statement_handle.as_ref())
+        {
+            let handle = &prepared_query.prepared_statement_handle;
+
+            // Get session (Phase 2: reuses existing session for same connection)
+            let session = self.get_session(&request)?;
+
+            // Try to get prepared statement metadata, but fall back to direct query if not found
+            if let Ok(meta) = session.get_prepared_statement_meta(handle) {
+                if !meta.is_query {
+                    return Err(Status::invalid_argument(
+                        "prepared statement does not return a result set",
+                    ));
+                }
+
+                info!(
+                    handle = ?handle,
+                    sql = %meta.sql,
+                    "executing prepared statement via do_get_statement"
+                );
+
+                return self
+                    .execute_prepared_query_handle(&session, handle, meta)
+                    .await;
+            }
+            // If prepared statement not found, fall through to direct query path
+        }
+
+        // Fall back to direct query
         let command = CommandStatementQuery::decode(ticket.statement_handle.as_ref())
             .map_err(|err| Status::invalid_argument(format!("invalid statement handle: {err}")))?;
         let sql = command.query.clone();
