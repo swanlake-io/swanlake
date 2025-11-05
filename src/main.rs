@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
 
     let flight_service = SwanFlightSqlService::new(registry);
 
-    info!(%addr, "starting SwanDB Flight SQL server");
+    info!(%addr, "starting SwanLake Flight SQL server");
 
     Server::builder()
         .add_service(arrow_flight::flight_service_server::FlightServiceServer::new(flight_service))
@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
 
 fn init_tracing(config: &ServerConfig) {
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,swandb::service=debug"));
+        .unwrap_or_else(|_| EnvFilter::new("info,swanlake::service=debug"));
 
     if config.log_format == "json" {
         tracing_subscriber::fmt()

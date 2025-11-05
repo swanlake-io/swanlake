@@ -8,4 +8,5 @@ ducklake*
 
 # Go
 examples/go-adbc/go-adbc
+examples/go-adbc/go-sqlx
 tests/runner-go/runner-go

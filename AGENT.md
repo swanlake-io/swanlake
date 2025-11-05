@@ -1,12 +1,12 @@
-# SwanDB - Agent Guide
+# SwanLake - Agent Guide
 
 > **"It's not just a duck — it's a swan in flight."**
 
-This guide consolidates key information from all project documentation for AI assistants and developers working with the SwanDB codebase.
+This guide consolidates key information from all project documentation for AI assistants and developers working with the SwanLake codebase.
 
-## What is SwanDB?
+## What is SwanLake?
 
-SwanDB is an **Apache Arrow Flight SQL server** powered by **DuckDB** with optional **DuckLake** extension support. It provides a high-performance, Flight SQL-compliant interface to DuckDB's analytical capabilities.
+SwanLake is an **Apache Arrow Flight SQL server** powered by **DuckDB** with optional **DuckLake** extension support. It provides a high-performance, Flight SQL-compliant interface to DuckDB's analytical capabilities.
 
 ### Key Features
 
@@ -27,7 +27,7 @@ SwanDB is an **Apache Arrow Flight SQL server** powered by **DuckDB** with optio
        │ Arrow Flight
        ▼
 ┌─────────────────────────────────────────┐
-│  SwanDB Flight SQL Server (Rust)        │
+│  SwanLake Flight SQL Server (Rust)        │
 │  ┌────────────────────────────────────┐ │
 │  │  service.rs - FlightSqlService     │ │
 │  │  - CommandStatementQuery           │ │
@@ -186,13 +186,13 @@ Keyword-based analysis in `is_query_statement()`:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `SWANDB_HOST` | Server bind address | `127.0.0.1` |
-| `SWANDB_PORT` | TCP port | `4214` |
-| `SWANDB_DUCKDB_PATH` | Database file path | _in-memory_ |
-| `SWANDB_MAX_SESSIONS` | Maximum concurrent sessions | `100` |
-| `SWANDB_SESSION_TIMEOUT_SECONDS` | Session idle timeout | `1800` |
-| `SWANDB_ENABLE_DUCKLAKE` | Load DuckLake extension | `true` |
-| `SWANDB_DUCKLAKE_INIT_SQL` | SQL after extension loads | _unset_ |
+| `SWANLAKE_HOST` | Server bind address | `127.0.0.1` |
+| `SWANLAKE_PORT` | TCP port | `4214` |
+| `SWANLAKE_DUCKDB_PATH` | Database file path | _in-memory_ |
+| `SWANLAKE_MAX_SESSIONS` | Maximum concurrent sessions | `100` |
+| `SWANLAKE_SESSION_TIMEOUT_SECONDS` | Session idle timeout | `1800` |
+| `SWANLAKE_ENABLE_DUCKLAKE` | Load DuckLake extension | `true` |
+| `SWANLAKE_DUCKLAKE_INIT_SQL` | SQL after extension loads | _unset_ |
 
 ### Configuration Precedence
 
@@ -226,11 +226,11 @@ cargo run -- --config path/to/custom.toml
 
 # Manual testing:
 # Terminal 1:
-SWANDB_PORT=50051 cargo run
+SWANLAKE_PORT=50051 cargo run
 
 # Terminal 2:
 cd examples/go
-SWANDB_PORT=50051 go run main.go
+SWANLAKE_PORT=50051 go run main.go
 ```
 
 ## Testing Framework
@@ -357,7 +357,7 @@ BenchmarkSchemaExtraction-8          2000     0.5ms/op  # LIMIT 0 optimization
 ```bash
 # Server logs should show:
 # "session registry initialized"
-# "SwanDB Flight SQL server listening on 127.0.0.1:4214"
+# "SwanLake Flight SQL server listening on 127.0.0.1:4214"
 # "Cleaned up X idle sessions" (every 5 minutes if sessions were cleaned)
 ```
 
@@ -380,7 +380,7 @@ RUST_LOG=info cargo run 2>&1 | grep "idle sessions"
 
 ## Summary
 
-SwanDB is a production-ready Arrow Flight SQL server with a per-connection session-based architecture that provides persistent state for complex client workflows. The LIMIT 0 schema optimization delivers ~50% performance improvements while maintaining full Flight SQL protocol compliance. Sessions automatically manage connection lifecycle, prepared statements, and transactions with configurable limits and timeouts.
+SwanLake is a production-ready Arrow Flight SQL server with a per-connection session-based architecture that provides persistent state for complex client workflows. The LIMIT 0 schema optimization delivers ~50% performance improvements while maintaining full Flight SQL protocol compliance. Sessions automatically manage connection lifecycle, prepared statements, and transactions with configurable limits and timeouts.
 
 ---
 

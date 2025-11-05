@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENDPOINT="${ENDPOINT:-http://127.0.0.1:4214}"
 TEST_FILE="${TEST_FILE:-$ROOT_DIR/tests/sql/ducklake_basic.test}"
 CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.toml}"
-SERVER_BIN="${SERVER_BIN:-cargo run --bin swandb --}"
+SERVER_BIN="${SERVER_BIN:-cargo run --bin swanlake --}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"
 
 if [[ -z "${DUCKDB_LIB_DIR:-}" && -f "$ROOT_DIR/.duckdb/env.sh" ]]; then

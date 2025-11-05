@@ -60,7 +60,7 @@ impl ServerConfig {
             .add_source(
                 config::File::from_str(&defaults_json, config::FileFormat::Json).required(false),
             )
-            .add_source(config::Environment::with_prefix("SWANDB"))
+            .add_source(config::Environment::with_prefix("SWANLAKE"))
             .build()
             .with_context(|| "failed to load configuration")?;
         let cfg: ServerConfig = settings

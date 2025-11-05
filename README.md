@@ -1,4 +1,4 @@
-# SwanDB - It's not just a duck — it's a swan in flight.
+# SwanLake - It's not just a duck — it's a swan in flight.
 
 > **For AI Assistants/Developers:** See [AGENT.md](AGENT.md) for a comprehensive guide consolidating all project documentation.
 
@@ -6,7 +6,7 @@ An Arrow Flight SQL server powered by DuckDB with DuckLake extension support.
 
 ## Overview
 
-SwanDB is a arrow flight sql server:
+SwanLake is a arrow flight sql server:
 https://github.com/apache/arrow-rs/blob/main/arrow-flight/src/sql/server.rs
 
 that powered by duckdb https://duckdb.org/docs/stable/clients/rust and ducklake https://ducklake.select/docs/stable/duckdb/introduction
@@ -45,15 +45,15 @@ The server listens on `127.0.0.1:4214` by default and can be configured through 
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `SWANDB_HOST` | Address to bind the Flight SQL server | `127.0.0.1` |
-| `SWANDB_PORT` | TCP port for the Flight SQL server | `4214` |
-| `SWANDB_DUCKDB_PATH` | Optional path to a DuckDB database file (in-memory when omitted) | _in-memory_ |
-| `SWANDB_MAX_SESSIONS` | Maximum number of concurrent client sessions | `100` |
-| `SWANDB_SESSION_TIMEOUT_SECONDS` | Idle session timeout in seconds | `1800` |
-| `SWANDB_ENABLE_DUCKLAKE` | Toggle automatic `ducklake` extension install/load | `true` |
-| `SWANDB_DUCKLAKE_INIT_SQL` | Optional SQL executed after the extension loads (e.g. ATTACH commands) | _unset_ |
-| `SWANDB_LOG_FORMAT` | Log output format: "compact" or "json" | `compact` |
-| `SWANDB_LOG_ANSI` | Enable ANSI colors in logs | `true` |
+| `SWANLAKE_HOST` | Address to bind the Flight SQL server | `127.0.0.1` |
+| `SWANLAKE_PORT` | TCP port for the Flight SQL server | `4214` |
+| `SWANLAKE_DUCKDB_PATH` | Optional path to a DuckDB database file (in-memory when omitted) | _in-memory_ |
+| `SWANLAKE_MAX_SESSIONS` | Maximum number of concurrent client sessions | `100` |
+| `SWANLAKE_SESSION_TIMEOUT_SECONDS` | Idle session timeout in seconds | `1800` |
+| `SWANLAKE_ENABLE_DUCKLAKE` | Toggle automatic `ducklake` extension install/load | `true` |
+| `SWANLAKE_DUCKLAKE_INIT_SQL` | Optional SQL executed after the extension loads (e.g. ATTACH commands) | _unset_ |
+| `SWANLAKE_LOG_FORMAT` | Log output format: "compact" or "json" | `compact` |
+| `SWANLAKE_LOG_ANSI` | Enable ANSI colors in logs | `true` |
 
 `.env` files are loaded automatically via `dotenvy`. You can also point the binary at a custom `config.toml` with `--config`; environment variables always take precedence.
 
@@ -67,11 +67,11 @@ A Go client using Apache Arrow ADBC is available in the `examples/go/` directory
 
 # Or manually:
 # Terminal 1: Start the server
-SWANDB_PORT=50051 cargo run
+SWANLAKE_PORT=50051 cargo run
 
 # Terminal 2: Run the Go client tests
 cd examples/go
-SWANDB_PORT=50051 ./test.sh
+SWANLAKE_PORT=50051 ./test.sh
 ```
 
 The Go client tests:
@@ -102,11 +102,11 @@ The script stores the archive inside `.duckdb/<version>` (ignored by git) and ke
 
 ## Performance
 
-SwanDB includes several optimizations for efficient query execution:
+SwanLake includes several optimizations for efficient query execution:
 
 ### Schema Extraction Optimization
 
-When clients request query schemas (via `GetFlightInfo`), SwanDB uses a `LIMIT 0` optimization to avoid executing expensive queries:
+When clients request query schemas (via `GetFlightInfo`), SwanLake uses a `LIMIT 0` optimization to avoid executing expensive queries:
 
 ```sql
 -- Instead of executing the full query twice:

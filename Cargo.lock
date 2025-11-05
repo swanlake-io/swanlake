@@ -2252,7 +2252,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "swandb"
+name = "swanlake"
 version = "0.1.0"
 dependencies = [
  "anyhow",

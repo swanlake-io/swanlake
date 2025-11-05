@@ -1,4 +1,4 @@
-module github.com/wangfenjin/swandb/examples/go-sqlx
+module github.com/swanlake-io/swanlake/examples/go-sqlx
 
 go 1.24.0
 

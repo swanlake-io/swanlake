@@ -1,6 +1,6 @@
 # Session Architecture
 
-SwanDB implements a **connection-based session architecture** where each gRPC connection gets a dedicated DuckDB session with persistent state. This enables correct semantics for prepared statements, transactions, and connection-scoped settings.
+SwanLake implements a **connection-based session architecture** where each gRPC connection gets a dedicated DuckDB session with persistent state. This enables correct semantics for prepared statements, transactions, and connection-scoped settings.
 
 ## Overview
 
@@ -43,7 +43,7 @@ SwanDB implements a **connection-based session architecture** where each gRPC co
 
 ### Session Lifecycle
 
-1. **Client Connects**: Opens a gRPC connection to SwanDB
+1. **Client Connects**: Opens a gRPC connection to SwanLake
 2. **First Request**: 
    - SessionID generated from `remote_addr()` (e.g., `"192.168.1.100:54321"`)
    - New session created with dedicated DuckDB connection
@@ -159,11 +159,11 @@ ducklake_init_sql = """
 ### Environment Variables
 
 ```bash
-export SWANDB_MAX_SESSIONS=100
-export SWANDB_SESSION_TIMEOUT_SECONDS=1800
-export SWANDB_DUCKLAKE_ENABLE=true
-export SWANDB_ENABLE_UI_SERVER=true
-export SWANDB_DUCKLAKE_INIT_SQL="ATTACH 's3://bucket/data' AS mydata;"
+export SWANLAKE_MAX_SESSIONS=100
+export SWANLAKE_SESSION_TIMEOUT_SECONDS=1800
+export SWANLAKE_DUCKLAKE_ENABLE=true
+export SWANLAKE_ENABLE_UI_SERVER=true
+export SWANLAKE_DUCKLAKE_INIT_SQL="ATTACH 's3://bucket/data' AS mydata;"
 ```
 
 ## Connection Initialization
@@ -423,7 +423,7 @@ pub struct SwanFlightSqlService {
 Support explicit session IDs via headers:
 
 ```
-x-swandb-session-id: custom-session-id-123
+x-swanlake-session-id: custom-session-id-123
 ```
 
 **Use Case:** Client wants explicit session control
@@ -432,7 +432,7 @@ x-swandb-session-id: custom-session-id-123
 ```rust
 fn extract_session_id<T>(request: &Request<T>) -> SessionId {
     // Try custom header first
-    if let Some(header) = request.metadata().get("x-swandb-session-id") {
+    if let Some(header) = request.metadata().get("x-swanlake-session-id") {
         return SessionId::from_string(header.to_str().unwrap().to_string());
     }
     
@@ -519,5 +519,5 @@ impl SessionRegistry {
 - [Arrow Flight SQL Protocol](https://arrow.apache.org/docs/format/FlightSql.html)
 - [DuckDB Extensions](https://duckdb.org/docs/extensions/overview)
 - [DuckLake Extension](https://github.com/duckdb/duckdb)
-- SwanDB README: `../README.md`
+- SwanLake README: `../README.md`
 - Configuration: `../config.toml.example`

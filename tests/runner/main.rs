@@ -143,7 +143,7 @@ impl AsyncDB for FlightSqlDb {
     }
 
     fn engine_name(&self) -> &str {
-        "swandb"
+        "swanlake"
     }
 }
 

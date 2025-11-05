@@ -1,4 +1,4 @@
-module github.com/wangfenjin/swandb/examples/go-adbc
+module github.com/swanlake-io/swanlake/examples/go-adbc
 
 go 1.21
 

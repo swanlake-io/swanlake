@@ -41,14 +41,14 @@ type Place struct {
 func main() {
 	ctx := context.Background()
 
-	// Connect to SwanDB
+	// Connect to SwanLake
 	conn, err := connect(ctx, "grpc://localhost:4214")
 	if err != nil {
 		log.Fatalln(err)
 	}
 	defer conn.Close()
 
-	fmt.Println("Connected to SwanDB successfully!")
+	fmt.Println("Connected to SwanLake successfully!")
 
 	// Exec schema
 	if err := executeStatement(ctx, conn, schema); err != nil {

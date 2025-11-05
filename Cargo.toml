@@ -1,10 +1,10 @@
 [package]
-name = "swandb"
+name = "swanlake"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "swandb"
+name = "swanlake"
 path = "src/main.rs"
 
 [features]
