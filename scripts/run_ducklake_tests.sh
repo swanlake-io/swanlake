@@ -65,7 +65,7 @@ if [[ -n "${TEST_DIR:-}" ]]; then
 else
   ARGS=()
 fi
-cargo test --features test-runner --test runner -- "$TEST_FILE" --endpoint "$ENDPOINT" "${ARGS[@]}"
+cargo test-runner -- "$TEST_FILE" --endpoint "$ENDPOINT" "${ARGS[@]}"
 
 cleanup
 trap - EXIT
