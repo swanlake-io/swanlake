@@ -126,7 +126,9 @@ pub(crate) async fn do_get_statement(
     let stream = SwanFlightSqlService::into_stream(flight_data);
     let mut response = Response::new(stream);
     if let Ok(value) = MetadataValue::try_from(total_rows.to_string()) {
-        response.metadata_mut().insert("x-swanlake-total-rows", value);
+        response
+            .metadata_mut()
+            .insert("x-swanlake-total-rows", value);
     }
     if let Ok(value) = MetadataValue::try_from(total_bytes.to_string()) {
         response
