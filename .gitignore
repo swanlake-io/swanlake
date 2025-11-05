@@ -8,6 +8,6 @@ ducklake.db*
 
 examples/go-adbc/go-adbc
 examples/go-sqlx/go-sqlx
-tests/runner-go/runner-go
 examples/rust-adbc/target
 examples/rust-adbc/Cargo.lock
+tests/runner/target

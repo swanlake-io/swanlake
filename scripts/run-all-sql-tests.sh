@@ -28,5 +28,6 @@ for test_file in "$ROOT_DIR/tests/sql"/*.test; do
     rm -rf "$TEST_DIR"
   else
     echo "Test failed, keeping TEST_DIR: $TEST_DIR"
+    exit 1
   fi
 done

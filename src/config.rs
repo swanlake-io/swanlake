@@ -2,7 +2,6 @@ use std::net::{SocketAddr, ToSocketAddrs};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use serde_json;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerConfig {

@@ -7,7 +7,7 @@ use tracing::{debug, error, info};
 
 use crate::engine::connection::QueryResult;
 use crate::session::id::StatementHandle;
-use crate::session::session::{PreparedStatementMeta, Session};
+use crate::session::{PreparedStatementMeta, Session};
 
 use super::SwanFlightSqlService;
 

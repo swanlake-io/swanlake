@@ -9,7 +9,7 @@ use tracing::{error, Span};
 use uuid::Uuid;
 
 use crate::error::ServerError;
-use crate::session::{registry::SessionRegistry, session::Session, SessionId};
+use crate::session::{registry::SessionRegistry, Session, SessionId};
 
 mod convert;
 mod execute;
@@ -74,10 +74,7 @@ impl SwanFlightSqlService {
                 error!(error = %e, "arrow conversion error");
                 Status::internal(format!("arrow error: {e}"))
             }
-            ServerError::Pool(e) => {
-                error!(error = %e, "connection pool error");
-                Status::internal(format!("connection pool error: {e}"))
-            }
+
             ServerError::WritesDisabled => {
                 error!("write operations are disabled by configuration");
                 Status::permission_denied("write operations are disabled by configuration")

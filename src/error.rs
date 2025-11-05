@@ -6,8 +6,7 @@ pub enum ServerError {
     DuckDb(#[from] duckdb::Error),
     #[error("arrow error: {0}")]
     Arrow(#[from] arrow_schema::ArrowError),
-    #[error("connection pool error: {0}")]
-    Pool(#[from] r2d2::Error),
+
     #[error("write operations are disabled by configuration")]
     WritesDisabled,
     #[error("transaction not found")]

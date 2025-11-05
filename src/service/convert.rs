@@ -45,9 +45,9 @@ impl SwanFlightSqlService {
 
         for col_idx in 0..column_count {
             let column = batch.column(col_idx);
-            for row_idx in 0..row_count {
+            for (row_idx, row) in rows.iter_mut().enumerate().take(row_count) {
                 let value = Self::value_from_array(column, row_idx)?;
-                rows[row_idx].push(value);
+                row.push(value);
             }
         }
 

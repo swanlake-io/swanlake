@@ -65,7 +65,7 @@ if [[ -n "${TEST_DIR:-}" ]]; then
 else
   ARGS=()
 fi
-cargo test-runner -- "$TEST_FILE" --endpoint "$ENDPOINT" "${ARGS[@]}"
+cargo run --manifest-path "$ROOT_DIR/tests/runner/Cargo.toml" -- "$TEST_FILE" --endpoint "$ENDPOINT" "${ARGS[@]}"
 
 cleanup
 trap - EXIT
