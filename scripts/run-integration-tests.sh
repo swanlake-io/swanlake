@@ -11,21 +11,26 @@ fi
 # Source the environment
 source "$ROOT_DIR/.duckdb/env.sh"
 
-# Export llvm-cov environment for coverage instrumentation
-export RUSTFLAGS="${RUSTFLAGS:-} -C instrument-coverage"
-export LLVM_PROFILE_FILE="$ROOT_DIR/target/llvm-cov-target/swanlake-%p-%m.profraw"
-export CARGO_LLVM_COV_TARGET_DIR="$ROOT_DIR/target/llvm-cov-target"
+# Clean old coverage data
+cargo llvm-cov clean --workspace
 
-# Build with coverage
-cargo llvm-cov --no-report clean --workspace
-cargo build
+# Export llvm-cov environment for coverage instrumentation
+source <(cargo llvm-cov show-env --export-prefix)
+
+# Override target directories to use llvm-cov-target for consistency with report
+export CARGO_TARGET_DIR="$ROOT_DIR/target/llvm-cov-target"
+export CARGO_LLVM_COV_TARGET_DIR="$ROOT_DIR/target/llvm-cov-target"
+export LLVM_PROFILE_FILE="$ROOT_DIR/target/llvm-cov-target/swanlake-%p-%m.profraw"
+
+# Build with coverage using explicit target directory
+cargo build --target-dir "$CARGO_TARGET_DIR"
 
 # Run SQL tests with SERVER_BIN set to built binary for coverage
-export SERVER_BIN="$CARGO_LLVM_COV_TARGET_DIR/debug/swanlake"
+export SERVER_BIN="$CARGO_TARGET_DIR/debug/swanlake"
 bash "$ROOT_DIR/scripts/run-all-sql-tests.sh"
 
-# Start server for examples using cargo llvm-cov run
-cargo llvm-cov run --no-report &
+# Start server for examples
+"$CARGO_TARGET_DIR/debug/swanlake" &
 SERVER_PID=$!
 
 # Wait for server to be ready
@@ -76,4 +81,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 # Give a moment for profraw files to be fully written
 sleep 2
 
-echo "Integration tests completed. Coverage data written to $CARGO_LLVM_COV_TARGET_DIR"
+echo "Integration tests completed. Coverage data collected in target/llvm-cov-target/"

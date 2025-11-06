@@ -11,3 +11,5 @@ examples/go-sqlx/go-sqlx
 examples/rust-adbc/target
 examples/rust-adbc/Cargo.lock
 tests/runner/target
+
+lcov.info
