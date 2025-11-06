@@ -47,11 +47,49 @@ async fn main() -> Result<()> {
 
     info!(%addr, "starting SwanLake Flight SQL server");
 
+    // Set up graceful shutdown
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+    tokio::spawn(async move {
+        let ctrl_c = async {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install CTRL+C handler");
+        };
+
+        #[cfg(unix)]
+        let terminate = async {
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => {
+                info!("received SIGINT, initiating graceful shutdown");
+            }
+            _ = terminate => {
+                info!("received SIGTERM, initiating graceful shutdown");
+            }
+        }
+
+        let _ = shutdown_tx.send(());
+    });
+
     Server::builder()
         .add_service(arrow_flight::flight_service_server::FlightServiceServer::new(flight_service))
-        .serve(addr)
+        .serve_with_shutdown(addr, async {
+            shutdown_rx.await.ok();
+        })
         .await
-        .context("Flight SQL server terminated unexpectedly")
+        .context("Flight SQL server terminated unexpectedly")?;
+
+    info!("server shutdown complete");
+    Ok(())
 }
 
 fn init_tracing(config: &ServerConfig) {
