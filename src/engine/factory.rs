@@ -3,8 +3,6 @@
 //! Each connection is created with the same configuration and initialization SQL
 //! (extensions, ATTACH statements, etc.).
 
-use std::sync::{Arc, Mutex};
-
 use duckdb::{Config, Connection};
 use tracing::{info, instrument};
 
@@ -16,8 +14,6 @@ use crate::error::ServerError;
 #[derive(Clone)]
 pub struct EngineFactory {
     init_sql: String,
-    enable_ui_server: bool,
-    ui_server_started: Arc<Mutex<bool>>,
 }
 
 impl EngineFactory {
@@ -49,11 +45,7 @@ impl EngineFactory {
 
         let init_sql = init_statements.join("\n");
 
-        Ok(Self {
-            init_sql,
-            enable_ui_server: config.enable_ui_server,
-            ui_server_started: Arc::new(Mutex::new(false)),
-        })
+        Ok(Self { init_sql })
     }
 
     /// Create a new initialized DuckDB connection
@@ -70,19 +62,6 @@ impl EngineFactory {
         if !self.init_sql.is_empty() {
             info!("Initializing connection with extensions and config");
             conn.execute_batch(&self.init_sql)?;
-        }
-
-        // Start UI server once (first connection only)
-        if self.enable_ui_server {
-            let mut started = self
-                .ui_server_started
-                .lock()
-                .expect("ui_server_started mutex poisoned");
-            if !*started {
-                info!("Starting UI server on first connection: http://localhost:4213");
-                conn.execute_batch("CALL start_ui_server();")?;
-                *started = true;
-            }
         }
 
         info!("DuckDB connection created and initialized");

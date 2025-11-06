@@ -149,7 +149,6 @@ session_timeout_seconds = 1800      # 30 minutes
 
 # DuckDB initialization
 ducklake_enable = true
-enable_ui_server = true
 ducklake_init_sql = """
   ATTACH 's3://my-bucket/data' AS mydata;
   ATTACH 'postgresql://host/db' AS pgdb;
@@ -162,7 +161,6 @@ ducklake_init_sql = """
 export SWANLAKE_MAX_SESSIONS=100
 export SWANLAKE_SESSION_TIMEOUT_SECONDS=1800
 export SWANLAKE_DUCKLAKE_ENABLE=true
-export SWANLAKE_ENABLE_UI_SERVER=true
 export SWANLAKE_DUCKLAKE_INIT_SQL="ATTACH 's3://bucket/data' AS mydata;"
 ```
 
@@ -182,10 +180,7 @@ Every new session connection is initialized with:
    ATTACH 'postgresql://host/db' AS pgdb;
    ```
 
-3. **UI Server** (once, first connection only):
-   ```sql
-   CALL start_ui_server();  -- Available at http://localhost:4213
-   ```
+
 
 ## Session Management
 
@@ -269,8 +264,6 @@ impl SessionRegistry {
 ```rust
 pub struct EngineFactory {
     init_sql: String,
-    enable_ui_server: bool,
-    ui_server_started: Arc<Mutex<bool>>,
 }
 
 impl EngineFactory {
@@ -500,19 +493,7 @@ impl SessionRegistry {
 - Decrease `session_timeout_seconds`
 - Fix client connection leaks
 
-### UI Server Not Starting
 
-**Symptom:** http://localhost:4213 not accessible
-
-**Causes:**
-- `enable_ui_server = false` in config
-- Port 4213 already in use
-- DuckDB extension not loaded
-
-**Solution:**
-- Set `enable_ui_server = true`
-- Check port availability
-- Verify `ducklake_enable = true`
 
 ## References
 

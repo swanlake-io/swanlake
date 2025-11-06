@@ -19,8 +19,6 @@ pub struct ServerConfig {
     pub ducklake_enable: bool,
     /// Optional SQL statement executed during startup for ducklake integration.
     pub ducklake_init_sql: Option<String>,
-    /// Whether to start the UI server automatically.
-    pub enable_ui_server: bool,
     /// Maximum number of concurrent sessions.
     pub max_sessions: Option<usize>,
     /// Session idle timeout in seconds.
@@ -34,7 +32,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            host: "127.0.0.1".to_string(),
+            host: "0.0.0.0".to_string(),
             port: 4214,
             pool_size: 10,
             read_pool_size: Some(10),
@@ -42,7 +40,6 @@ impl Default for ServerConfig {
             enable_writes: true,
             ducklake_enable: true,
             ducklake_init_sql: None,
-            enable_ui_server: true,
             max_sessions: Some(100),
             session_timeout_seconds: Some(900),
             log_format: "compact".to_string(),
