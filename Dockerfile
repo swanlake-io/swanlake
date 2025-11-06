@@ -17,12 +17,12 @@ COPY . .
 RUN bash -c "source .duckdb/env.sh && cargo build --release"
 
 # Runtime stage
-FROM ubuntu:22.04
+FROM debian:trixie-slim
 
 WORKDIR /app
 
 # Install runtime deps (if needed, e.g., for DuckDB)
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Copy DuckDB setup
 COPY --from=builder /app/.duckdb .duckdb
@@ -38,4 +38,4 @@ COPY scripts/run_ducklake_tests.sh scripts/
 EXPOSE 4214
 
 # Default command
-CMD ["./swanlake"]
+CMD ["bash", "-c", "source .duckdb/env.sh && ./swanlake"]

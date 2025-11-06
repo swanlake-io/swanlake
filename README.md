@@ -1,3 +1,6 @@
+[![codecov](https://codecov.io/gh/swanlake-io/swanlake/graph/badge.svg?token=BPEVOE3Z8Y)](https://codecov.io/gh/swanlake-io/swanlake)
+
+
 # SwanLake
 
 SwanLake is a Rust-based Arrow Flight SQL server backed by DuckDB with optional DuckLake extensions. It delivers per-connection sessions, streaming analytics, and a compact deployment footprint.
