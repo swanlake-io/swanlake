@@ -36,8 +36,27 @@ Key environment variables (all prefixed with `SWANLAKE_`):
 `.env` files are read automatically via `dotenvy`. Command-line flags always override file-based configuration.
 
 ## Testing
+
+### Integration Tests
 - `./scripts/test-integration.sh` builds the server and runs the Go ADBC client flow.
 - `examples/go-adbc` and `examples/go-sqlx` provide minimal client samples for manual testing.
+
+### SQL Logic Tests
+The standalone test runner (`tests/runner`) executes SQL logic tests against a running SwanLake server:
+
+```bash
+# Start the server
+cargo run
+
+# In another terminal, run SQL tests
+cd tests/runner
+cargo run -- --endpoint grpc://127.0.0.1:4214 ../../tests/sql/ducklake_basic.test
+
+# Or use the helper script
+./scripts/run_ducklake_tests.sh
+```
+
+The test runner uses Arrow 56.x for ADBC compatibility, while the main project uses Arrow 57.x.
 
 ## Documentation
 - `AGENT.md` offers a guided tour of the architecture for contributors.

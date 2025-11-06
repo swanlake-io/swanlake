@@ -102,10 +102,9 @@ impl DuckDbConnection {
         let mut total_rows = 0usize;
         let mut total_bytes = 0usize;
         let batches: Vec<RecordBatch> = arrow
-            .map(|batch| {
+            .inspect(|batch| {
                 total_rows += batch.num_rows();
                 total_bytes += batch.get_array_memory_size();
-                batch
             })
             .collect();
 
@@ -141,10 +140,9 @@ impl DuckDbConnection {
         let mut total_rows = 0usize;
         let mut total_bytes = 0usize;
         let batches: Vec<RecordBatch> = arrow
-            .map(|batch| {
+            .inspect(|batch| {
                 total_rows += batch.num_rows();
                 total_bytes += batch.get_array_memory_size();
-                batch
             })
             .collect();
 

@@ -17,7 +17,7 @@ use crate::config::ServerConfig;
 use crate::engine::EngineFactory;
 use crate::error::ServerError;
 use crate::session::id::SessionId;
-use crate::session::session::Session;
+use crate::session::Session;
 
 /// Registry for managing all active sessions
 #[derive(Clone)]

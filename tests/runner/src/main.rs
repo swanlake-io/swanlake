@@ -15,8 +15,14 @@ use adbc_core::{
 use adbc_driver_flightsql::DRIVER_PATH;
 use adbc_driver_manager::{ManagedConnection, ManagedDriver};
 use anyhow::{anyhow, bail, Context, Result};
-use arrow_array::{Array, RecordBatchReader};
-use arrow_cast::display::array_value_to_string;
+#[allow(unused_imports)]
+use arrow_array::{
+    Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
+    RecordBatchReader, StringArray, TimestampMicrosecondArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
+};
+
 use arrow_schema::DataType;
 use async_trait::async_trait;
 use sqllogictest::{AsyncDB, DBOutput, DefaultColumnType, Runner};
@@ -118,10 +124,7 @@ impl FlightSqlDb {
                         if column.is_null(row_idx) {
                             row.push("NULL".to_string());
                         } else {
-                            row.push(
-                                array_value_to_string(column.as_ref(), row_idx)
-                                    .context("failed to render value")?,
-                            );
+                            row.push(array_value_to_string(column.as_ref(), row_idx)?);
                         }
                     }
                     rows.push(row);
@@ -385,6 +388,106 @@ async fn run_sqllogictest(args: &CliArgs) -> Result<()> {
     info!("All SQLLogicTest scripts completed");
 
     Ok(())
+}
+
+fn array_value_to_string(column: &dyn Array, row_idx: usize) -> Result<String> {
+    use arrow_array::*;
+    use arrow_schema::DataType;
+
+    if column.is_null(row_idx) {
+        return Ok("NULL".to_string());
+    }
+
+    match column.data_type() {
+        DataType::Boolean => {
+            let arr = column.as_any().downcast_ref::<BooleanArray>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::Int8 => {
+            let arr = column.as_any().downcast_ref::<Int8Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::Int16 => {
+            let arr = column.as_any().downcast_ref::<Int16Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::Int32 => {
+            let arr = column.as_any().downcast_ref::<Int32Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::Int64 => {
+            let arr = column.as_any().downcast_ref::<Int64Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::UInt8 => {
+            let arr = column.as_any().downcast_ref::<UInt8Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::UInt16 => {
+            let arr = column.as_any().downcast_ref::<UInt16Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::UInt32 => {
+            let arr = column.as_any().downcast_ref::<UInt32Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::UInt64 => {
+            let arr = column.as_any().downcast_ref::<UInt64Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::Float32 => {
+            let arr = column.as_any().downcast_ref::<Float32Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::Float64 => {
+            let arr = column.as_any().downcast_ref::<Float64Array>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::Utf8 => {
+            let arr = column.as_any().downcast_ref::<StringArray>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::LargeUtf8 => {
+            let arr = column.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        DataType::Binary => {
+            let arr = column.as_any().downcast_ref::<BinaryArray>().unwrap();
+            Ok(format!("{:?}", arr.value(row_idx)))
+        }
+        DataType::LargeBinary => {
+            let arr = column.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+            Ok(format!("{:?}", arr.value(row_idx)))
+        }
+        DataType::Date32 => {
+            let arr = column.as_any().downcast_ref::<Date32Array>().unwrap();
+            let days = arr.value(row_idx);
+            // Date32 is days since Unix epoch (1970-01-01)
+            let date = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                .unwrap()
+                .checked_add_signed(chrono::TimeDelta::days(days as i64))
+                .unwrap();
+            Ok(date.format("%Y-%m-%d").to_string())
+        }
+        DataType::Date64 => {
+            let arr = column.as_any().downcast_ref::<Date64Array>().unwrap();
+            let millis = arr.value(row_idx);
+            // Date64 is milliseconds since Unix epoch
+            let secs = millis / 1000;
+            let date = chrono::DateTime::from_timestamp(secs, 0)
+                .unwrap()
+                .date_naive();
+            Ok(date.format("%Y-%m-%d").to_string())
+        }
+        DataType::Timestamp(_, _) => {
+            let arr = column
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap();
+            Ok(arr.value(row_idx).to_string())
+        }
+        _ => Ok(format!("{:?}", column)),
+    }
 }
 
 fn init_logging() {

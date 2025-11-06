@@ -9,44 +9,23 @@ path = "src/main.rs"
 
 [features]
 default = []
-test-runner = [
-    "dep:arrow-cast",
-    "dep:async-trait",
-    "dep:sqllogictest",
-    "dep:adbc_core",
-    "dep:adbc_driver_manager",
-    "dep:adbc_driver_flightsql",
-]
 
 [dependencies]
 anyhow = "1.0"
-arrow-array = "56"
-arrow-flight = { version = "56", features = ["flight-sql"] }
-arrow-ipc = "56"
-arrow-schema = "56"
-arrow-cast = { version = "56", optional = true }
-async-trait = { version = "0.1", optional = true }
-dotenvy = "0.15"
-duckdb = { version = "1.4.1", default-features = false, features = ["r2d2"] }
-futures = "0.3"
-adbc_core = { version = "0.20.0", optional = true }
-adbc_driver_manager = { version = "0.20.0", optional = true }
-adbc_driver_flightsql = { package = "adbc-driver-flightsql", git = "https://github.com/swanlake-io/adbc-driver-flightsql", optional = true }
-prost = "0.13.5"
-r2d2 = "0.8"
-serde = { version = "1.0", features = ["derive"] }
-uuid = { version = "1.0", features = ["v4"] }
-serde_json = "1.0"
-thiserror = "1.0"
-tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "signal"] }
-tonic = { version = "0.13.1", features = ["transport"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
-config = "0.15"
-sqllogictest = { version = "0.28.4", optional = true }
-
-[[test]]
-name = "runner"
-path = "tests/runner/main.rs"
-harness = false
-required-features = ["test-runner"]
+arrow-array = "57"
+arrow-flight = { version = "57", features = ["flight-sql"] }
+arrow-ipc = "57"
+arrow-schema = "57"
+dotenvy = "0.15.7"
+duckdb = { git = "https://github.com/swanlake-io/duckdb-rs", branch = "wfj/cargo-version", default-features = false, submodules = false }
+futures = "0.3.31"
+prost = "0.14.1"
+serde = { version = "1.0.217", features = ["derive"] }
+uuid = { version = "1.11.0", features = ["v4"] }
+serde_json = "1.0.134"
+thiserror = "2.0.6"
+tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "signal"] }
+tonic = { version = "0.14.2", features = ["transport"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "json"] }
+config = "0.15.5"
