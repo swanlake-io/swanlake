@@ -71,4 +71,6 @@ jobs:
         run: docker run --rm -e SERVER_BIN="./swanlake" ghcr.io/${{ github.repository }}:${{ github.sha }} bash scripts/run-all-sql-tests.sh
 
       - name: Push Docker image
-        run: docker push ghcr.io/${{ github.repository }}:latest
+        run: |
+          docker tag ghcr.io/${{ github.repository }}:${{ github.sha }} ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }} --all-tags

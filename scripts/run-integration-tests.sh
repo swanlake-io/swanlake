@@ -67,4 +67,3 @@ cd -
 # Kill server
 kill "$SERVER_PID" >/dev/null 2>&1 || true
 wait "$SERVER_PID" 2>/dev/null || true
-```
