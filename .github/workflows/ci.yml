@@ -42,7 +42,9 @@ jobs:
         run: bash scripts/run-integration-tests.sh
 
       - name: Collect coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info
+        run: |
+          source .duckdb/env.sh
+          cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v5
