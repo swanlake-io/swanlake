@@ -22,7 +22,7 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 # Install runtime deps (if needed, e.g., for DuckDB)
-RUN apt update && apt install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Copy DuckDB setup
 COPY --from=builder /app/.duckdb .duckdb
@@ -34,8 +34,13 @@ COPY --from=builder /app/target/release/swanlake swanlake
 COPY scripts/run-all-sql-tests.sh scripts/
 COPY scripts/run_ducklake_tests.sh scripts/
 
+# Copy and set up entrypoint script
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Expose port
 EXPOSE 4214
 
-# Default command
-CMD ["bash", "-c", "source .duckdb/env.sh && ./swanlake"]
+# Entrypoint and command
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["./swanlake"]

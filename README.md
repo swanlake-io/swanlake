@@ -1,4 +1,4 @@
-[![codecov](https://codecov.io/gh/swanlake-io/swanlake/graph/badge.svg?token=BPEVOE3Z8Y)](https://codecov.io/gh/swanlake-io/swanlake)
+[![codecov](https://codecov.io/gh/swanlake-io/swanlake/graph/badge.svg)](https://codecov.io/gh/swanlake-io/swanlake)
 
 
 # SwanLake
