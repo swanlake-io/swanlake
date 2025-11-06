@@ -1,4 +1,4 @@
 #!/bin/sh
 set -e
-source .duckdb/env.sh
+. .duckdb/env.sh
 exec "$@"
