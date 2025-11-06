@@ -29,9 +29,6 @@ jobs:
       - name: Setup DuckDB
         run: bash scripts/setup_duckdb.sh
 
-      - name: Source DuckDB env
-        run: source .duckdb/env.sh
-
       - name: Check formatting
         run: cargo fmt --check
 
@@ -41,38 +38,22 @@ jobs:
       - name: Install llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Enable llvm-cov
-        run: source <(cargo llvm-cov show-env --export-prefix)
-
-      - name: Build with coverage
-        run: cargo build
-
-      - name: Run SQL tests
-        run: bash scripts/run-all-sql-tests.sh
-
-      - name: Run Go examples
-        run: |
-          for dir in examples/go-*; do
-            cd "$dir"
-            go run main.go
-            cd -
-          done
-
-      - name: Run Rust example
-        run: |
-          cd examples/rust-adbc
-          cargo run
+      - name: Run integration tests
+        run: bash scripts/run-integration-tests.sh
 
       - name: Collect coverage
         run: cargo llvm-cov --lcov --output-path lcov.info
 
       - name: Upload coverage to codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           file: lcov.info
 
   docker:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -90,4 +71,4 @@ jobs:
         run: docker run --rm -e SERVER_BIN="./swanlake" ghcr.io/${{ github.repository }}:${{ github.sha }} bash scripts/run-all-sql-tests.sh
 
       - name: Push Docker image
-        run: docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
+        run: docker push ghcr.io/${{ github.repository }}:latest
