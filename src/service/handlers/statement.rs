@@ -19,7 +19,8 @@ pub(crate) async fn get_flight_info_statement(
     query: CommandStatementQuery,
     request: Request<FlightDescriptor>,
 ) -> Result<Response<FlightInfo>, Status> {
-    let sql = query.query.clone();
+    let handle_bytes = query.encode_to_vec();
+    let sql = query.query;
     let session = service.prepare_request(&request)?;
 
     let schema = tokio::task::spawn_blocking(move || session.schema_for_query(&sql))
@@ -28,8 +29,6 @@ pub(crate) async fn get_flight_info_statement(
         .map_err(SwanFlightSqlService::status_from_error)?;
 
     debug!(field_count = schema.fields().len(), "planned schema");
-
-    let handle_bytes = query.encode_to_vec();
 
     let descriptor = request.into_inner();
     let ticket = TicketStatementQuery {
@@ -88,24 +87,22 @@ pub(crate) async fn do_get_statement(
         }
     }
 
-    let command =
+    let CommandStatementQuery { query: sql, .. } =
         CommandStatementQuery::decode(ticket.statement_handle.as_ref()).map_err(|err| {
             error!(%err, "failed to decode statement handle payload");
             Status::invalid_argument(format!("invalid statement handle: {err}"))
         })?;
-    let sql = command.query.clone();
 
-    info!(%sql, "executing query via do_get_statement");
+    info!(sql = %sql, "executing query via do_get_statement");
 
     let session = service.get_session(&request)?;
 
-    let sql_clone = sql.clone();
     let QueryResult {
         schema,
         batches,
         total_rows,
         total_bytes,
-    } = tokio::task::spawn_blocking(move || session.execute_query(&sql_clone))
+    } = tokio::task::spawn_blocking(move || session.execute_query(&sql))
         .await
         .map_err(SwanFlightSqlService::status_from_join)?
         .map_err(SwanFlightSqlService::status_from_error)?;
@@ -143,11 +140,10 @@ pub(crate) async fn do_put_statement_update(
     command: CommandStatementUpdate,
     request: Request<PeekableFlightDataStream>,
 ) -> Result<i64, Status> {
-    let sql = command.query.clone();
+    let sql = command.query;
     let session = service.prepare_request(&request)?;
 
-    let sql_clone = sql.clone();
-    let affected_rows = tokio::task::spawn_blocking(move || session.execute_statement(&sql_clone))
+    let affected_rows = tokio::task::spawn_blocking(move || session.execute_statement(&sql))
         .await
         .map_err(SwanFlightSqlService::status_from_join)?
         .map_err(SwanFlightSqlService::status_from_error)?;

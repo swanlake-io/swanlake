@@ -36,21 +36,24 @@ impl SwanFlightSqlService {
         handle: StatementHandle,
         meta: PreparedStatementMeta,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let PreparedStatementMeta { sql, .. } = meta;
+
         let parameters = session
             .take_prepared_statement_parameters(handle)
             .map_err(Self::status_from_error)?
             .unwrap_or_else(Vec::new);
 
+        let param_count = parameters.len();
         info!(
             handle = %handle,
-            sql = %meta.sql,
-            param_count = parameters.len(),
+            sql = %sql,
+            param_count,
             "executing prepared statement via handle"
         );
 
-        let sql_for_exec = meta.sql.clone();
-        let params_for_exec = parameters.clone();
         let session_clone = session.clone();
+        let params_for_exec = parameters;
+        let sql_for_exec = sql;
 
         let QueryResult {
             schema,
