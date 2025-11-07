@@ -15,6 +15,7 @@ use tracing::{debug, error, info};
 
 use crate::service::SwanFlightSqlService;
 use crate::session::id::StatementHandle;
+use crate::session::PreparedStatementMeta;
 
 fn parse_statement_handle(bytes: &[u8], context: &str) -> Result<StatementHandle, Status> {
     StatementHandle::from_bytes(bytes).ok_or_else(|| {
@@ -32,7 +33,7 @@ pub(crate) async fn do_action_create_prepared_statement(
     query: ActionCreatePreparedStatementRequest,
     request: Request<arrow_flight::Action>,
 ) -> Result<ActionCreatePreparedStatementResult, Status> {
-    let sql = query.query.clone();
+    let sql = query.query;
     let is_query = SwanFlightSqlService::is_query_statement(&sql);
     tracing::Span::current().record("is_query", is_query);
     let session = service.prepare_request(&request)?;
@@ -52,7 +53,7 @@ pub(crate) async fn do_action_create_prepared_statement(
     };
 
     let handle = session
-        .create_prepared_statement(sql.clone(), is_query)
+        .create_prepared_statement(sql, is_query)
         .map_err(SwanFlightSqlService::status_from_error)?;
 
     info!(
@@ -80,16 +81,16 @@ pub(crate) async fn get_flight_info_prepared_statement(
     )?;
     let session = service.prepare_request(&request)?;
 
-    let meta = session
+    let PreparedStatementMeta { sql, is_query } = session
         .get_prepared_statement_meta(handle)
         .map_err(SwanFlightSqlService::status_from_error)?;
 
-    tracing::Span::current().record("sql", meta.sql.as_str());
+    tracing::Span::current().record("sql", sql.as_str());
 
-    if !meta.is_query {
+    if !is_query {
         error!(
             handle = %handle,
-            sql = %meta.sql,
+            sql = %sql,
             "prepared statement does not return a result set"
         );
         return Err(Status::invalid_argument(
@@ -99,17 +100,15 @@ pub(crate) async fn get_flight_info_prepared_statement(
 
     info!(
         handle = %handle,
-        sql = %meta.sql,
+        sql = %sql,
         "getting flight info for prepared statement"
     );
 
-    let sql_for_schema = meta.sql.clone();
     let session_clone = Arc::clone(&session);
-    let schema =
-        tokio::task::spawn_blocking(move || session_clone.schema_for_query(&sql_for_schema))
-            .await
-            .map_err(SwanFlightSqlService::status_from_join)?
-            .map_err(SwanFlightSqlService::status_from_error)?;
+    let schema = tokio::task::spawn_blocking(move || session_clone.schema_for_query(&sql))
+        .await
+        .map_err(SwanFlightSqlService::status_from_join)?
+        .map_err(SwanFlightSqlService::status_from_error)?;
 
     debug!(
         handle = %handle,
@@ -241,16 +240,16 @@ pub(crate) async fn do_put_prepared_statement_update(
     )?;
     let session = service.prepare_request(&request)?;
 
-    let meta = session
+    let PreparedStatementMeta { sql, is_query } = session
         .get_prepared_statement_meta(handle)
         .map_err(SwanFlightSqlService::status_from_error)?;
 
-    tracing::Span::current().record("sql", meta.sql.as_str());
+    tracing::Span::current().record("sql", sql.as_str());
 
-    if meta.is_query {
+    if is_query {
         error!(
             handle = %handle,
-            sql = %meta.sql,
+            sql = %sql,
             "prepared statement returns rows; use ExecuteQuery"
         );
         return Err(Status::invalid_argument(
@@ -260,19 +259,19 @@ pub(crate) async fn do_put_prepared_statement_update(
 
     let parameter_sets = SwanFlightSqlService::collect_parameter_sets(request).await?;
 
+    let parameter_set_count = parameter_sets.len();
+
     info!(
         handle = %handle,
-        sql = %meta.sql,
-        parameter_sets = parameter_sets.len(),
+        sql = %sql,
+        parameter_sets = parameter_set_count,
         "executing prepared statement update"
     );
 
-    let sql_for_exec = meta.sql.clone();
-    let params = parameter_sets.clone();
     let session_clone = Arc::clone(&session);
 
     let affected_rows = tokio::task::spawn_blocking(move || {
-        SwanFlightSqlService::execute_statement_batches(&sql_for_exec, &params, &session_clone)
+        SwanFlightSqlService::execute_statement_batches(&sql, &parameter_sets, &session_clone)
     })
     .await
     .map_err(SwanFlightSqlService::status_from_join)?
