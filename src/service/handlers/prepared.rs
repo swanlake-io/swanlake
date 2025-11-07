@@ -105,11 +105,10 @@ pub(crate) async fn get_flight_info_prepared_statement(
     );
 
     let session_clone = Arc::clone(&session);
-    let schema =
-        tokio::task::spawn_blocking(move || session_clone.schema_for_query(&sql))
-            .await
-            .map_err(SwanFlightSqlService::status_from_join)?
-            .map_err(SwanFlightSqlService::status_from_error)?;
+    let schema = tokio::task::spawn_blocking(move || session_clone.schema_for_query(&sql))
+        .await
+        .map_err(SwanFlightSqlService::status_from_join)?
+        .map_err(SwanFlightSqlService::status_from_error)?;
 
     debug!(
         handle = %handle,

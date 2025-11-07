@@ -57,128 +57,48 @@ impl SwanFlightSqlService {
         Ok(rows)
     }
 
-    fn push_column_values(
-        array: &ArrayRef,
-        rows: &mut [Vec<Value>],
-    ) -> Result<(), ServerError> {
+    fn push_column_values(array: &ArrayRef, rows: &mut [Vec<Value>]) -> Result<(), ServerError> {
+        macro_rules! push_values {
+            ($array:expr, $rows:expr, $arr_type:ty, $variant:path) => {{
+                let values = $array
+                    .as_any()
+                    .downcast_ref::<$arr_type>()
+                    .expect(concat!(stringify!($arr_type), " array downcast"));
+                Self::push_array_values(values, $rows, |arr, idx| $variant(arr.value(idx)));
+            }};
+            ($array:expr, $rows:expr, $arr_type:ty, $variant:path, $conv:ident) => {{
+                let values = $array
+                    .as_any()
+                    .downcast_ref::<$arr_type>()
+                    .expect(concat!(stringify!($arr_type), " array downcast"));
+                Self::push_array_values(values, $rows, |arr, idx| $variant(arr.value(idx).$conv()));
+            }};
+        }
+
         match array.data_type() {
             DataType::Null => {
                 for row in rows.iter_mut() {
                     row.push(Value::Null);
                 }
             }
-            DataType::Boolean => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<BooleanArray>()
-                    .expect("boolean array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::Boolean(arr.value(idx)));
-            }
-            DataType::Int8 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<Int8Array>()
-                    .expect("int8 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::TinyInt(arr.value(idx)));
-            }
-            DataType::Int16 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<Int16Array>()
-                    .expect("int16 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::SmallInt(arr.value(idx)));
-            }
-            DataType::Int32 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .expect("int32 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::Int(arr.value(idx)));
-            }
-            DataType::Int64 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .expect("int64 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::BigInt(arr.value(idx)));
-            }
-            DataType::UInt8 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<UInt8Array>()
-                    .expect("uint8 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::UTinyInt(arr.value(idx)));
-            }
-            DataType::UInt16 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<UInt16Array>()
-                    .expect("uint16 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::USmallInt(arr.value(idx)));
-            }
-            DataType::UInt32 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<UInt32Array>()
-                    .expect("uint32 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::UInt(arr.value(idx)));
-            }
-            DataType::UInt64 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .expect("uint64 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::UBigInt(arr.value(idx)));
-            }
-            DataType::Float32 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<Float32Array>()
-                    .expect("float32 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::Float(arr.value(idx)));
-            }
-            DataType::Float64 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<Float64Array>()
-                    .expect("float64 array downcast");
-                Self::push_array_values(values, rows, |arr, idx| Value::Double(arr.value(idx)));
-            }
-            DataType::Utf8 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .expect("string array downcast");
-                Self::push_array_values(values, rows, |arr, idx| {
-                    Value::Text(arr.value(idx).to_string())
-                });
-            }
+            DataType::Boolean => push_values!(array, rows, BooleanArray, Value::Boolean),
+            DataType::Int8 => push_values!(array, rows, Int8Array, Value::TinyInt),
+            DataType::Int16 => push_values!(array, rows, Int16Array, Value::SmallInt),
+            DataType::Int32 => push_values!(array, rows, Int32Array, Value::Int),
+            DataType::Int64 => push_values!(array, rows, Int64Array, Value::BigInt),
+            DataType::UInt8 => push_values!(array, rows, UInt8Array, Value::UTinyInt),
+            DataType::UInt16 => push_values!(array, rows, UInt16Array, Value::USmallInt),
+            DataType::UInt32 => push_values!(array, rows, UInt32Array, Value::UInt),
+            DataType::UInt64 => push_values!(array, rows, UInt64Array, Value::UBigInt),
+            DataType::Float32 => push_values!(array, rows, Float32Array, Value::Float),
+            DataType::Float64 => push_values!(array, rows, Float64Array, Value::Double),
+            DataType::Utf8 => push_values!(array, rows, StringArray, Value::Text, to_string),
             DataType::LargeUtf8 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<LargeStringArray>()
-                    .expect("large string array downcast");
-                Self::push_array_values(values, rows, |arr, idx| {
-                    Value::Text(arr.value(idx).to_string())
-                });
+                push_values!(array, rows, LargeStringArray, Value::Text, to_string)
             }
-            DataType::Binary => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<BinaryArray>()
-                    .expect("binary array downcast");
-                Self::push_array_values(values, rows, |arr, idx| {
-                    Value::Blob(arr.value(idx).to_vec())
-                });
-            }
+            DataType::Binary => push_values!(array, rows, BinaryArray, Value::Blob, to_vec),
             DataType::LargeBinary => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<LargeBinaryArray>()
-                    .expect("large binary array downcast");
-                Self::push_array_values(values, rows, |arr, idx| {
-                    Value::Blob(arr.value(idx).to_vec())
-                });
+                push_values!(array, rows, LargeBinaryArray, Value::Blob, to_vec)
             }
             other => return Err(ServerError::UnsupportedParameter(other.to_string())),
         }
