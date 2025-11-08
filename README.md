@@ -47,7 +47,7 @@ Key environment variables (all prefixed with `SWANLAKE_`):
 | Variable | Description | Default |
 | --- | --- | --- |
 | `DUCKLING_QUEUE_ENABLE` | Enable the local DuckDB staging layer | `true` |
-| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | `"duckling_queue"` |
+| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | `duckling_queue` |
 | `DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Time-based rotation threshold | `300` |
 | `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation threshold | `100_000_000` |
 | `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | Frequency for scanning sealed files | `60` |

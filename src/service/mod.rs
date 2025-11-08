@@ -86,7 +86,7 @@ impl SwanFlightSqlService {
                 let conn = session
                     .raw_connection()
                     .lock()
-                    .expect("Failed to lock session raw_connection mutex: mutex was poisoned");
+                    .map_err(|_| Status::internal("session connection lock is poisoned"))?;
                 runtime.force_flush_on_connection(&conn).map_err(|err| {
                     Status::internal(format!("duckling queue flush failed: {err}"))
                 })?;

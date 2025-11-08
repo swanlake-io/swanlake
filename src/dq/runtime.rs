@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -135,6 +135,23 @@ fn flush_file(
     factory: Arc<EngineFactory>,
     path: PathBuf,
 ) -> Result<()> {
+    let conn = factory.create_raw_connection()?;
+    flush_file_on_connection(manager, &conn, path)
+}
+
+fn flush_file_on_connection(
+    manager: Arc<DucklingQueueManager>,
+    conn: &duckdb::Connection,
+    path: PathBuf,
+) -> Result<()> {
+    safe_flush_file(manager.as_ref(), conn, &path)
+}
+
+fn safe_flush_file(
+    manager: &DucklingQueueManager,
+    conn: &duckdb::Connection,
+    path: &Path,
+) -> Result<()> {
     info!(file = %path.display(), "start flush duckling queue file");
     if !path.exists() {
         return Ok(());
@@ -146,34 +163,7 @@ fn flush_file(
         return Ok(());
     }
 
-    let Some(lock) = FileLock::try_acquire(&path, manager.settings().lock_ttl)? else {
-        warn!(file = %path.display(), "duckling queue file already being flushed by another worker");
-        return Ok(());
-    };
-
-    let conn = factory.create_raw_connection()?;
-    flush_file_on_connection(manager, &conn, path)?;
-    drop(lock);
-    Ok(())
-}
-
-fn flush_file_on_connection(
-    manager: Arc<DucklingQueueManager>,
-    conn: &duckdb::Connection,
-    path: PathBuf,
-) -> Result<()> {
-    info!(file = %path.display(), "start flush duckling queue file on connection");
-    if !path.exists() {
-        return Ok(());
-    }
-
-    // Safety check: only process .db files
-    if path.extension() != Some(std::ffi::OsStr::new("db")) {
-        warn!(file = %path.display(), "skipping non-db file in sealed directory");
-        return Ok(());
-    }
-
-    let Some(lock) = FileLock::try_acquire(&path, manager.settings().lock_ttl)? else {
+    let Some(lock) = FileLock::try_acquire(path, manager.settings().lock_ttl)? else {
         warn!(file = %path.display(), "duckling queue file already being flushed by another worker");
         return Ok(());
     };
@@ -234,14 +224,13 @@ fn flush_file_on_connection(
     }
 
     detach_if_attached(conn, "duckling_queue").context("failed to detach sealed duckling queue")?;
-    drop(lock);
 
     // Move the flushed file to the flushed directory
     let flushed_path = manager.dirs().flushed.join(
         path.file_name()
             .ok_or_else(|| anyhow!("flushed queue file has no filename"))?,
     );
-    std::fs::rename(&path, &flushed_path).with_context(|| {
+    std::fs::rename(path, &flushed_path).with_context(|| {
         format!(
             "failed to move flushed queue file {:?} to {:?}",
             path, flushed_path
@@ -249,6 +238,7 @@ fn flush_file_on_connection(
     })?;
 
     info!(file = %path.display(), flushed = %flushed_path.display(), "duckling queue file flushed and moved");
+    drop(lock);
     Ok(())
 }
 
