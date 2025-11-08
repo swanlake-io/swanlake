@@ -8,6 +8,7 @@
 //! - Enforces max session limit
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -154,5 +155,55 @@ impl SessionRegistry {
         }
 
         Ok(session)
+    }
+
+    pub fn switch_duckling_queue_except(
+        &self,
+        new_path: &Path,
+        exclude: Option<&SessionId>,
+    ) -> anyhow::Result<()> {
+        let attach_new = format!(
+            "ATTACH IF NOT EXISTS '{}' AS duckling_queue;",
+            new_path.display()
+        );
+
+        let sessions = {
+            let inner = self.inner.read().expect("registry lock poisoned");
+            inner
+                .sessions
+                .iter()
+                .filter(|(id, _)| exclude != Some(*id))
+                .map(|(id, session)| (id.clone(), session.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        for (session_id, session) in sessions {
+            let attach_result = {
+                let conn = session
+                    .raw_connection()
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("session connection lock is poisoned"))?;
+                let _ = conn.execute_batch("DETACH duckling_queue;");
+                conn.execute_batch(&attach_new)
+            };
+
+            if let Err(err) = attach_result {
+                warn!(
+                    session_id = %session_id,
+                    error = %err,
+                    "failed to switch duckling_queue attachment; closing session"
+                );
+                self.remove_session(&session_id);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn remove_session(&self, session_id: &SessionId) {
+        let mut inner = self.inner.write().expect("registry lock poisoned");
+        if inner.sessions.remove(session_id).is_some() {
+            info!(session_id = %session_id, "session removed");
+        }
     }
 }

@@ -83,6 +83,10 @@ pub struct Session {
 }
 
 impl Session {
+    /// Return the session identifier.
+    pub fn id(&self) -> &SessionId {
+        &self.id
+    }
     /// Create a new session with a specific ID (for connection-based persistence)
     #[instrument(skip(connection))]
     pub fn new_with_id(id: SessionId, connection: DuckDbConnection, writes_enabled: bool) -> Self {

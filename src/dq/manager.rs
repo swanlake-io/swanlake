@@ -150,8 +150,10 @@ impl DucklingQueueManager {
         self.render_attach_sql(&active.path)
     }
 
-    /// Check whether rotation thresholds are exceeded and rotate if needed.
-    pub fn maybe_rotate(&self) -> Result<Option<SealedQueueFile>> {
+    pub fn maybe_rotate_with<F>(&self, switch: F) -> Result<Option<SealedQueueFile>>
+    where
+        F: FnOnce(&QueueFile) -> Result<()>,
+    {
         let mut state = self.state.lock().expect("queue state poisoned");
 
         // Refresh the active file lock to prevent expiration.
@@ -176,15 +178,18 @@ impl DucklingQueueManager {
         }
 
         if should_rotate {
-            Ok(Some(self.rotate_locked(&mut state)?))
+            Ok(Some(self.rotate_locked_with(&mut state, switch)?))
         } else {
             Ok(None)
         }
     }
 
-    pub(crate) fn force_rotate(&self) -> Result<SealedQueueFile> {
+    pub fn force_rotate_with<F>(&self, switch: F) -> Result<SealedQueueFile>
+    where
+        F: FnOnce(&QueueFile) -> Result<()>,
+    {
         let mut state = self.state.lock().expect("queue state poisoned");
-        self.rotate_locked(&mut state)
+        self.rotate_locked_with(&mut state, switch)
     }
 
     /// Sweep the active directory for orphaned files and move them into `sealed/`.
@@ -288,7 +293,10 @@ fn current_timestamp_millis() -> u128 {
 }
 
 impl DucklingQueueManager {
-    fn rotate_locked(&self, state: &mut QueueState) -> Result<SealedQueueFile> {
+    fn rotate_locked_with<F>(&self, state: &mut QueueState, switch: F) -> Result<SealedQueueFile>
+    where
+        F: FnOnce(&QueueFile) -> Result<()>,
+    {
         checkpoint_database(&state.active.path)?;
         let sealed_path =
             self.dirs
@@ -301,21 +309,26 @@ impl DucklingQueueManager {
                     )
                 }));
 
-        fs::rename(&state.active.path, &sealed_path).with_context(|| {
-            format!(
-                "failed to move active queue file {:?} to sealed location {:?}",
-                &state.active.path, &sealed_path
-            )
-        })?;
-
-        // Release the lock on the old active file.
-        state.active_lock = None;
+        let old_active = state.active.clone();
+        let old_lock = state.active_lock.take();
 
         let new_active = create_new_active_file(&self.dirs.active, &self.server_id)?;
         let new_lock = FileLock::try_acquire(&new_active.path, self.settings.lock_ttl)?
             .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for new active file"))?;
-        state.active = new_active;
+
+        state.active = new_active.clone();
         state.active_lock = Some(new_lock);
+
+        switch(&new_active)?;
+
+        fs::rename(&old_active.path, &sealed_path).with_context(|| {
+            format!(
+                "failed to move active queue file {:?} to sealed location {:?}",
+                &old_active.path, &sealed_path
+            )
+        })?;
+
+        drop(old_lock);
 
         Ok(SealedQueueFile { path: sealed_path })
     }

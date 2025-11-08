@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
         Arc::new(dq::DucklingQueueRuntime::new(
             manager.clone(),
             registry.engine_factory(),
+            registry.clone(),
         ))
     });
 

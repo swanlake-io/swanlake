@@ -70,13 +70,8 @@ impl SwanFlightSqlService {
             return Ok(None);
         };
 
-        let conn = session
-            .raw_connection()
-            .lock()
-            .map_err(|_| Status::internal("session connection lock is poisoned"))?;
-
         runtime
-            .execute_command(sql, &conn)
+            .execute_command(sql, session)
             .map_err(|err| Status::internal(format!("duckling queue command failed: {err}")))
     }
 
