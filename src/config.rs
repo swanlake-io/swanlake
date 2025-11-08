@@ -43,6 +43,8 @@ pub struct ServerConfig {
 
     /// Optional override template for the ATTACH SQL snippet.
     pub duckling_queue_attach_template: Option<String>,
+    /// Target schema name for flushing Duckling Queue data.
+    pub duckling_queue_target_schema: String,
 }
 
 impl Default for ServerConfig {
@@ -68,6 +70,7 @@ impl Default for ServerConfig {
             duckling_queue_max_parallel_flushes: 2,
 
             duckling_queue_attach_template: None,
+            duckling_queue_target_schema: "swanlake".to_string(),
         }
     }
 }

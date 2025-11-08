@@ -174,6 +174,7 @@ fn flush_file(
                 path.display()
             )
         })?;
+    let target_schema = &manager.settings().target_schema;
     let tables = list_queue_tables(&conn)?;
     for table in tables {
         let quoted = quote_ident(&table);
@@ -193,10 +194,10 @@ fn flush_file(
         }
         debug!(table = %table, source_count = %source_count, "source table row count");
 
-        let sql = format!("
-                CREATE TABLE IF NOT EXISTS swanlake.{quoted} AS FROM duckling_queue.{quoted} LIMIT 0;
-                INSERT INTO swanlake.{quoted} SELECT * FROM duckling_queue.{quoted};
-            ");
+        let sql = format!(
+            "CREATE TABLE IF NOT EXISTS {target_schema}.{quoted} AS FROM duckling_queue.{quoted} LIMIT 0;
+            INSERT INTO {target_schema}.{quoted} SELECT * FROM duckling_queue.{quoted};"
+        );
         conn.execute_batch(&sql)
             .map_err(|err| {
                 error!(error = %err, table = %table, path = %path.display(), "failed to insert data");
@@ -207,7 +208,7 @@ fn flush_file(
         // Check target row count after insert
         let target_count: i64 = conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM swanlake.{quoted}"),
+                &format!("SELECT COUNT(*) FROM {target_schema}.{quoted}"),
                 [],
                 |row| row.get(0),
             )

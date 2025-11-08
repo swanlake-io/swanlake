@@ -21,6 +21,7 @@ pub struct DucklingQueueSettings {
     pub max_parallel_flushes: usize,
     pub lock_ttl: Duration,
     pub attach_template: Option<String>,
+    pub target_schema: String,
 }
 
 impl DucklingQueueSettings {
@@ -43,6 +44,7 @@ impl DucklingQueueSettings {
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes,
             lock_ttl,
             attach_template: config.duckling_queue_attach_template.clone(),
+            target_schema: config.duckling_queue_target_schema.clone(),
         })
     }
 }
