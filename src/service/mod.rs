@@ -83,8 +83,11 @@ impl SwanFlightSqlService {
                 return Err(SwanFlightSqlService::status_from_error(err));
             }
             {
-                let conn = session.raw_connection().lock().unwrap();
-                runtime.force_flush_on_connection(&*conn).map_err(|err| {
+                let conn = session
+                    .raw_connection()
+                    .lock()
+                    .expect("Failed to lock session raw_connection mutex: mutex was poisoned");
+                runtime.force_flush_on_connection(&conn).map_err(|err| {
                     Status::internal(format!("duckling queue flush failed: {err}"))
                 })?;
             }

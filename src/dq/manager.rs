@@ -241,7 +241,7 @@ fn seal_orphaned_active_files(
     let mut moved = Vec::new();
     let db_files = list_db_files_in_dir(&dirs.active)?;
     for path in db_files {
-        if current_active.map_or(false, |active| active == path) {
+        if current_active.is_some_and(|active| active == path) {
             continue;
         }
         // Try to acquire lock; if successful, the file is orphaned and can be moved.
@@ -271,7 +271,7 @@ fn list_db_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
         if path.is_file()
             && path
                 .extension()
-                .map_or(false, |ext| ext == OsStr::new("db"))
+                .is_some_and(|ext| ext == OsStr::new("db"))
         {
             files.push(path);
         }

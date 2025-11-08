@@ -86,7 +86,7 @@ async fn rotation_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<Path
 
 async fn sealed_scan_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<PathBuf>) {
     let mut interval = tokio::time::interval(manager.settings().flush_interval.max(MIN_FLUSH_TICK));
-    info!("sealed scan loop internal {}", interval.period().as_secs());
+    info!("sealed scan loop interval {}", interval.period().as_secs());
     loop {
         interval.tick().await;
         match manager.sealed_files() {

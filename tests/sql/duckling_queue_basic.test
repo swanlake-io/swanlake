@@ -21,7 +21,7 @@ SELECT COUNT(*) FROM duckling_queue.queue_sink
 statement ok
 PRAGMA duckling_queue.flush;
 
-query II
+query I
 SELECT COUNT(*) FROM swanlake.queue_sink
 ----
 2
@@ -32,7 +32,7 @@ CREATE TABLE duckling_queue.queue_sink AS SELECT 3 AS i UNION ALL SELECT 4;
 statement ok
 PRAGMA duckling_queue.flush;
 
-query III
+query I
 SELECT * FROM swanlake.queue_sink ORDER BY i
 ----
 1
