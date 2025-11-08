@@ -9,6 +9,8 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -29,11 +31,27 @@ jobs:
       - name: Setup DuckDB
         run: bash scripts/setup_duckdb.sh
 
-      - name: Check formatting
-        run: cargo fmt --check
+      - name: Fix formatting
+        run: cargo fmt
 
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
+      - name: Fix clippy
+        run: cargo clippy --fix --allow-dirty --allow-staged -- -D warnings
+
+      - name: Commit and push fixes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add .
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-fix formatting and clippy issues"
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              git push origin HEAD:${{ github.head_ref }}
+            else
+              git push
+            fi
+          fi
 
       - name: Install llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
