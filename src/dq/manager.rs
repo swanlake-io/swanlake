@@ -268,11 +268,7 @@ fn list_db_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
     for entry in fs::read_dir(dir).with_context(|| format!("failed to read directory {:?}", dir))? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file()
-            && path
-                .extension()
-                .is_some_and(|ext| ext == OsStr::new("db"))
-        {
+        if path.is_file() && path.extension().is_some_and(|ext| ext == OsStr::new("db")) {
             files.push(path);
         }
     }
