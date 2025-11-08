@@ -47,7 +47,6 @@ All env vars use the `SWANLAKE_` prefix.
 | `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation threshold (bytes) | `100_000_000` |
 | `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | Scan cadence for sealed files | `60` |
 | `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush jobs | `2` |
-| `DUCKLING_QUEUE_LOCK_TTL_SECONDS` | Lease before stealing `.lock` files | `600` |
 
 Precedence: env > CLI `--config` > `config.toml` > `.env`.
 

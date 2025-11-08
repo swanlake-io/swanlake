@@ -11,11 +11,19 @@ pub struct FileLock {
     lock_path: PathBuf,
 }
 
+fn generate_lock_payload() -> String {
+    let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string());
+    let pid = std::process::id();
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("host={hostname}\npid={pid}\nacquired_at={now}\n")
+}
+
 impl FileLock {
     pub fn try_acquire(target: &Path, ttl: Duration) -> Result<Option<Self>> {
         let lock_path = lock_path_for(target);
-        let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string());
-        let pid = std::process::id();
 
         // best effort loop: try to grab lock; if stale, remove and retry once
         for attempt in 0..2 {
@@ -25,12 +33,7 @@ impl FileLock {
                 .open(&lock_path)
             {
                 Ok(mut file) => {
-                    let now = SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    let payload =
-                        format!("host={hostname}\npid={pid}\nacquired_at={now}\n");
+                    let payload = generate_lock_payload();
                     file.write_all(payload.as_bytes()).ok();
                     return Ok(Some(Self { lock_path }));
                 }
@@ -52,6 +55,14 @@ impl FileLock {
         }
 
         Ok(None)
+    }
+
+    /// Refresh the lock by updating its timestamp to prevent expiration.
+    pub fn refresh(&self) -> Result<()> {
+        let payload = generate_lock_payload();
+        fs::write(&self.lock_path, payload)
+            .with_context(|| format!("failed to refresh lock file {:?}", self.lock_path))?;
+        Ok(())
     }
 }
 

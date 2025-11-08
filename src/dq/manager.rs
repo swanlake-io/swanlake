@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -7,6 +8,7 @@ use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use crate::config::ServerConfig;
+use crate::dq::lock::FileLock;
 use duckdb::Connection;
 
 /// Derived Duckling Queue settings used by the manager.
@@ -27,13 +29,19 @@ impl DucklingQueueSettings {
             return None;
         }
         let root = config.duckling_queue_root.as_ref()?;
+        let rotate_interval = Duration::from_secs(config.duckling_queue_rotate_interval_seconds);
+        let lock_ttl = if rotate_interval > Duration::ZERO {
+            3 * rotate_interval
+        } else {
+            Duration::from_secs(900) // 15 minutes as fallback
+        };
         Some(Self {
             root: PathBuf::from(root),
-            rotate_interval: Duration::from_secs(config.duckling_queue_rotate_interval_seconds),
+            rotate_interval,
             rotate_size_bytes: config.duckling_queue_rotate_size_bytes,
             flush_interval: Duration::from_secs(config.duckling_queue_flush_interval_seconds),
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes,
-            lock_ttl: Duration::from_secs(config.duckling_queue_lock_ttl_seconds),
+            lock_ttl,
             attach_template: config.duckling_queue_attach_template.clone(),
         })
     }
@@ -82,6 +90,7 @@ pub struct SealedQueueFile {
 
 struct QueueState {
     active: QueueFile,
+    active_lock: Option<FileLock>,
 }
 
 /// Manages Duckling Queue files and renders the ATTACH snippet used by DuckDB connections.
@@ -101,16 +110,21 @@ impl DucklingQueueManager {
         let dirs = QueueDirectories::new(settings.root.clone())?;
 
         // Before creating a new active file, move any leftover ones into sealed state.
-        let _ = seal_orphaned_active_files(&dirs, None);
+        let _ = seal_orphaned_active_files(&dirs, None, settings.lock_ttl);
 
         let server_id = Uuid::new_v4().to_string();
         let active = create_new_active_file(&dirs.active, &server_id)?;
+        let lock = FileLock::try_acquire(&active.path, settings.lock_ttl)?
+            .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for active file"))?;
 
         Ok(Some(Self {
             settings,
             dirs,
             server_id,
-            state: Mutex::new(QueueState { active }),
+            state: Mutex::new(QueueState {
+                active,
+                active_lock: Some(lock),
+            }),
         }))
     }
 
@@ -140,6 +154,11 @@ impl DucklingQueueManager {
     pub fn maybe_rotate(&self) -> Result<Option<SealedQueueFile>> {
         let mut state = self.state.lock().expect("queue state poisoned");
 
+        // Refresh the active file lock to prevent expiration.
+        if let Some(ref lock) = state.active_lock {
+            lock.refresh()?;
+        }
+
         let mut should_rotate = false;
         if self.settings.rotate_interval > Duration::ZERO {
             if let Ok(elapsed) = state.active.created_at.elapsed() {
@@ -157,12 +176,7 @@ impl DucklingQueueManager {
         }
 
         if should_rotate {
-            // Only rotate if the file has user tables to avoid empty files
-            if has_user_tables(&state.active.path)? {
-                Ok(Some(self.rotate_locked(&mut state)?))
-            } else {
-                Ok(None)
-            }
+            Ok(Some(self.rotate_locked(&mut state)?))
         } else {
             Ok(None)
         }
@@ -179,25 +193,12 @@ impl DucklingQueueManager {
             let state = self.state.lock().expect("queue state poisoned");
             state.active.path.clone()
         };
-        seal_orphaned_active_files(&self.dirs, Some(&active_path))
+        seal_orphaned_active_files(&self.dirs, Some(&active_path), self.settings.lock_ttl)
     }
 
     /// List all sealed queue files awaiting flush.
     pub fn sealed_files(&self) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
-        for entry in fs::read_dir(&self.dirs.sealed).with_context(|| {
-            format!(
-                "failed to read sealed queue directory {:?}",
-                &self.dirs.sealed
-            )
-        })? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "db") {
-                files.push(path);
-            }
-        }
-        Ok(files)
+        list_db_files_in_dir(&self.dirs.sealed)
     }
 
     fn render_attach_sql(&self, path: &Path) -> String {
@@ -244,32 +245,47 @@ fn create_new_active_file(active_dir: &Path, server_id: &str) -> Result<QueueFil
 fn seal_orphaned_active_files(
     dirs: &QueueDirectories,
     current_active: Option<&Path>,
+    ttl: Duration,
 ) -> Result<Vec<SealedQueueFile>> {
     let mut moved = Vec::new();
-    for entry in fs::read_dir(&dirs.active)
-        .with_context(|| format!("failed to read active queue directory {:?}", &dirs.active))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
+    let db_files = list_db_files_in_dir(&dirs.active)?;
+    for path in db_files {
         if current_active.map_or(false, |active| active == path) {
             continue;
         }
-
-        let basename = active_basename(&path)
-            .unwrap_or_else(|| format!("duckling_queue_orphan_{}.db", current_timestamp_millis()));
-        let sealed_path = dirs.sealed.join(basename);
-        fs::rename(&path, &sealed_path).with_context(|| {
-            format!(
-                "failed to move orphaned active queue file {:?} -> {:?}",
-                path, sealed_path
-            )
-        })?;
-        moved.push(SealedQueueFile { path: sealed_path });
+        // Try to acquire lock; if successful, the file is orphaned and can be moved.
+        if let Some(_lock) = FileLock::try_acquire(&path, ttl)? {
+            let basename = active_basename(&path).unwrap_or_else(|| {
+                format!("duckling_queue_orphan_{}.db", current_timestamp_millis())
+            });
+            let sealed_path = dirs.sealed.join(basename);
+            fs::rename(&path, &sealed_path).with_context(|| {
+                format!(
+                    "failed to move orphaned active queue file {:?} -> {:?}",
+                    path, sealed_path
+                )
+            })?;
+            moved.push(SealedQueueFile { path: sealed_path });
+        }
+        // If lock acquisition fails, skip (file is in use by another instance).
     }
     Ok(moved)
+}
+
+fn list_db_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read directory {:?}", dir))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .map_or(false, |ext| ext == OsStr::new("db"))
+        {
+            files.push(path);
+        }
+    }
+    Ok(files)
 }
 
 fn active_basename(path: &Path) -> Option<String> {
@@ -305,8 +321,14 @@ impl DucklingQueueManager {
             )
         })?;
 
+        // Release the lock on the old active file.
+        state.active_lock = None;
+
         let new_active = create_new_active_file(&self.dirs.active, &self.server_id)?;
+        let new_lock = FileLock::try_acquire(&new_active.path, self.settings.lock_ttl)?
+            .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for new active file"))?;
         state.active = new_active;
+        state.active_lock = Some(new_lock);
 
         Ok(SealedQueueFile { path: sealed_path })
     }
@@ -321,20 +343,4 @@ fn checkpoint_database(path: &Path) -> Result<()> {
     conn.execute_batch("FORCE CHECKPOINT;")
         .with_context(|| format!("failed to checkpoint duckling queue at {:?}", path))?;
     Ok(())
-}
-
-fn has_user_tables(path: &Path) -> Result<bool> {
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid duckling queue path {:?}", path))?
-        .to_string();
-    let conn = Connection::open(&path_str)?;
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_catalog = 'main' AND table_type = 'BASE TABLE'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    Ok(count > 0)
 }

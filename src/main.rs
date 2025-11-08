@@ -102,6 +102,7 @@ async fn main() -> Result<()> {
         .context("Flight SQL server terminated unexpectedly")?;
 
     info!("server shutdown complete");
+    // Locks held by dq_manager are released here as it goes out of scope
     Ok(())
 }
 

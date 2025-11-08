@@ -62,14 +62,19 @@ async fn rotation_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<Path
         manager
             .settings()
             .rotate_interval
-            .min(Duration::from_secs(60))
+            .min(Duration::from_secs(300))
             .max(MIN_ROTATION_TICK),
     );
 
+    info!("rotation_loop interval {}", interval.period().as_secs());
     loop {
         interval.tick().await;
 
         if let Ok(orphaned) = manager.sweep_active_dir() {
+            info!(
+                "found orphaned duckling queue files to flush {:?}",
+                orphaned
+            );
             for sealed in orphaned {
                 let _ = tx.send(sealed.path).await;
             }
@@ -90,10 +95,12 @@ async fn rotation_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<Path
 
 async fn sealed_scan_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<PathBuf>) {
     let mut interval = tokio::time::interval(manager.settings().flush_interval.max(MIN_FLUSH_TICK));
+    info!("sealed scan loop internal {}", interval.period().as_secs());
     loop {
         interval.tick().await;
         match manager.sealed_files() {
             Ok(files) => {
+                info!("try to flush sealed files {:?}", files);
                 for file in files {
                     let _ = tx.send(file).await;
                 }
@@ -142,12 +149,15 @@ fn flush_file(
         return Ok(());
     }
 
+    // Safety check: only process .db files
+    if path.extension() != Some(std::ffi::OsStr::new("db")) {
+        warn!(file = %path.display(), "skipping non-db file in sealed directory");
+        return Ok(());
+    }
+
     let Some(lock) = FileLock::try_acquire(&path, manager.settings().lock_ttl)? else {
-        error!(file = %path.display(), "duckling queue file locked elsewhere");
-        return Err(anyhow!(
-            "duckling queue file {:?} locked elsewhere",
-            path.display()
-        ));
+        warn!(file = %path.display(), "duckling queue file already being flushed by another worker");
+        return Ok(());
     };
 
     let conn = factory.create_raw_connection()?;
@@ -177,21 +187,17 @@ fn flush_file(
                 |row| row.get(0),
             )
             .unwrap_or(0);
+        if source_count == 0 {
+            debug!(table = %table, "source table is empty, skipping");
+            continue;
+        }
         debug!(table = %table, source_count = %source_count, "source table row count");
 
-        let create_sql = format!(
-            "CREATE TABLE IF NOT EXISTS swanlake.{quoted} AS FROM duckling_queue.{quoted} LIMIT 0;"
-        );
-        conn.execute_batch(&create_sql)
-            .map_err(|err| {
-                error!(error = %err, table = %table, path = %path.display(), "failed to create target table");
-                err
-            })
-            .with_context(|| format!("failed to create table swanlake.{}", table))?;
-
-        let insert_sql =
-            format!("INSERT INTO swanlake.{quoted} SELECT * FROM duckling_queue.{quoted};");
-        conn.execute_batch(&insert_sql)
+        let sql = format!("
+                CREATE TABLE IF NOT EXISTS swanlake.{quoted} AS FROM duckling_queue.{quoted} LIMIT 0;
+                INSERT INTO swanlake.{quoted} SELECT * FROM duckling_queue.{quoted};
+            ");
+        conn.execute_batch(&sql)
             .map_err(|err| {
                 error!(error = %err, table = %table, path = %path.display(), "failed to insert data");
                 err
@@ -207,8 +213,6 @@ fn flush_file(
             )
             .unwrap_or(0);
         debug!(table = %table, target_count = %target_count, "target table row count after insert");
-
-        // conn.execute_batch(&format!("DROP TABLE duckling_queue.{quoted};"))?;
     }
 
     detach_if_attached(&conn, "duckling_queue")
@@ -241,7 +245,6 @@ fn list_queue_tables(conn: &duckdb::Connection) -> Result<Vec<String>> {
         let name = row?;
         tables.push(name);
     }
-    info!("duckling_queue tables {:?}", tables);
     Ok(tables)
 }
 
