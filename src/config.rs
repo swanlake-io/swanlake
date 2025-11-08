@@ -1,3 +1,4 @@
+use std::fs;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 
@@ -42,8 +43,6 @@ pub struct ServerConfig {
     /// Maximum number of parallel flush tasks.
     pub duckling_queue_max_parallel_flushes: usize,
 
-    /// Optional override template for the ATTACH SQL snippet.
-    pub duckling_queue_attach_template: Option<String>,
     /// Target schema name for flushing Duckling Queue data.
     pub duckling_queue_target_schema: String,
 }
@@ -64,13 +63,12 @@ impl Default for ServerConfig {
             log_format: "compact".to_string(),
             log_ansi: true,
             duckling_queue_enable: true,
-            duckling_queue_root: None,
+            duckling_queue_root: Some("duckling_queue".to_string()),
             duckling_queue_rotate_interval_seconds: 300,
             duckling_queue_rotate_size_bytes: 100_000_000,
             duckling_queue_flush_interval_seconds: 60,
             duckling_queue_max_parallel_flushes: 2,
 
-            duckling_queue_attach_template: None,
             duckling_queue_target_schema: "swanlake".to_string(),
         }
     }
@@ -108,12 +106,13 @@ impl ServerConfig {
             })?;
             let path = Path::new(root);
             if !path.exists() {
-                anyhow::bail!(
-                    "duckling queue root path '{}' does not exist",
-                    path.display()
-                );
-            }
-            if !path.is_dir() {
+                fs::create_dir_all(path).with_context(|| {
+                    format!(
+                        "failed to create duckling queue root directory '{}'",
+                        path.display()
+                    )
+                })?;
+            } else if !path.is_dir() {
                 anyhow::bail!(
                     "duckling queue root path '{}' is not a directory",
                     path.display()

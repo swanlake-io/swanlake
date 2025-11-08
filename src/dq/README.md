@@ -64,7 +64,6 @@ client ─▶ session/connection ─▶ duckling_queue (local DuckDB file)
 | `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the worker scans for sealed files | `60` |
 | `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrency limit | `2` |
 | `DUCKLING_QUEUE_LOCK_TTL_SECONDS` | Lease duration before another host can steal a flush lock | `600` |
-| `DUCKLING_QUEUE_ATTACH_TEMPLATE` | Optional override for the SQL snippet injected into `ducklake_init_sql` | auto-generated |
 
 `ServerConfig` gets the matching fields, and `EngineFactory::new` uses them to append the queue `ATTACH` statement immediately after the DuckLake attachment logic.
 

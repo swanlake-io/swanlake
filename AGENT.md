@@ -32,21 +32,25 @@ All env vars use the `SWANLAKE_` prefix.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `HOST` | gRPC bind address | `127.0.0.1` |
+| `HOST` | gRPC bind address | `0.0.0.0` |
 | `PORT` | gRPC port | `4214` |
+| `POOL_SIZE` | DuckDB connection pool size | `10` |
+| `READ_POOL_SIZE` | Read-only pool size override | `10` |
+| `WRITE_POOL_SIZE` | Write pool size override | `3` |
+| `ENABLE_WRITES` | Permit write operations | `true` |
 | `MAX_SESSIONS` | Concurrent session cap | `100` |
-| `SESSION_TIMEOUT_SECONDS` | Idle timeout | `1800` |
+| `SESSION_TIMEOUT_SECONDS` | Idle timeout | `900` |
 | `DUCKLAKE_ENABLE` | Load DuckLake extension | `true` |
 | `DUCKLAKE_INIT_SQL` | Post-load SQL hook | _(unset)_ |
 | `LOG_FORMAT` | `compact` \| `json` | `compact` |
 | `LOG_ANSI` | Colored logs | `true` |
-| `DUCKLING_QUEUE_ENABLE` | Enable local DuckDB staging/flush layer | `false` |
-| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | _(required when enabled)_ |
+| `DUCKLING_QUEUE_ENABLE` | Enable local DuckDB staging/flush layer | `true` |
+| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | `"duckling_queue"` |
 | `DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Time-based rotation threshold | `300` |
 | `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation threshold (bytes) | `100_000_000` |
 | `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | Scan cadence for sealed files | `60` |
-| DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES | Concurrent flush jobs | 2 |
-| DUCKLING_QUEUE_TARGET_SCHEMA | Target schema name for flushing Duckling Queue data | swanlake |
+| `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush jobs | `2` |
+| `DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema name for flushing Duckling Queue data | `swanlake` |
 
 Precedence: env > CLI `--config` > `config.toml` > `.env`.
 

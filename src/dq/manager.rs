@@ -20,7 +20,6 @@ pub struct DucklingQueueSettings {
     pub flush_interval: Duration,
     pub max_parallel_flushes: usize,
     pub lock_ttl: Duration,
-    pub attach_template: Option<String>,
     pub target_schema: String,
 }
 
@@ -43,7 +42,6 @@ impl DucklingQueueSettings {
             flush_interval: Duration::from_secs(config.duckling_queue_flush_interval_seconds),
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes,
             lock_ttl,
-            attach_template: config.duckling_queue_attach_template.clone(),
             target_schema: config.duckling_queue_target_schema.clone(),
         })
     }
@@ -205,16 +203,7 @@ impl DucklingQueueManager {
 
     fn render_attach_sql(&self, path: &Path) -> String {
         let path_str = path.display().to_string();
-
-        if let Some(template) = &self.settings.attach_template {
-            if template.contains("{path}") {
-                template.replace("{path}", &path_str)
-            } else {
-                template.clone()
-            }
-        } else {
-            format!("ATTACH '{}' AS duckling_queue;", path_str)
-        }
+        format!("ATTACH '{}' AS duckling_queue;", path_str)
     }
 }
 

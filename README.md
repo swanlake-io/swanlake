@@ -27,11 +27,14 @@ Key environment variables (all prefixed with `SWANLAKE_`):
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `HOST` | Bind address | `127.0.0.1` |
+| `HOST` | Bind address | `0.0.0.0` |
 | `PORT` | gRPC port | `4214` |
-
+| `POOL_SIZE` | DuckDB connection pool size | `10` |
+| `READ_POOL_SIZE` | Read-only pool size override | `10` |
+| `WRITE_POOL_SIZE` | Write pool size override | `3` |
+| `ENABLE_WRITES` | Permit write operations | `true` |
 | `MAX_SESSIONS` | Concurrent session limit | `100` |
-| `SESSION_TIMEOUT_SECONDS` | Idle session timeout | `1800` |
+| `SESSION_TIMEOUT_SECONDS` | Idle session timeout | `900` |
 | `DUCKLAKE_ENABLE` | Auto-load DuckLake extension | `true` |
 | `DUCKLAKE_INIT_SQL` | SQL executed after DuckLake loads | _unset_ |
 | `LOG_FORMAT` | `compact` or `json` | `compact` |
@@ -43,14 +46,13 @@ Key environment variables (all prefixed with `SWANLAKE_`):
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `DUCKLING_QUEUE_ENABLE` | Enable the local DuckDB staging layer | `false` |
-| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | _required when enabled_ |
+| `DUCKLING_QUEUE_ENABLE` | Enable the local DuckDB staging layer | `true` |
+| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | `"duckling_queue"` |
 | `DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Time-based rotation threshold | `300` |
 | `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation threshold | `100_000_000` |
 | `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | Frequency for scanning sealed files | `60` |
 | `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush jobs | `2` |
-| `DUCKLING_QUEUE_LOCK_TTL_SECONDS` | File-lock lease before another host steals it | `600` |
-| `DUCKLING_QUEUE_ATTACH_TEMPLATE` | Override the auto-generated `ATTACH ... AS duckling_queue` SQL | _unset_ |
+| `DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema name for flushing Duckling Queue data | `swanlake` |
 
 With Duckling Queue enabled, every session can create or insert into `duckling_queue.*` tables. Use `PRAGMA duckling_queue.flush;` to force the active file to rotate and flush immediately (useful for tests and CI).
 
