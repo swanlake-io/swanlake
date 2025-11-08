@@ -3,19 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
-TEST_FILE="${TEST_FILE:-$ROOT_DIR/tests/sql/ducklake_basic.test}"
+TEST_FILES_CSV="${TEST_FILE:-$ROOT_DIR/tests/sql/duckling_queue_basic.test}"
 CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.toml}"
 SERVER_BIN="${SERVER_BIN:-cargo run --bin swanlake --}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"
+TEST_DIR="${TEST_DIR:-$ROOT_DIR/target/ducklake-tests}"
 
 if [[ -z "${DUCKDB_LIB_DIR:-}" && -f "$ROOT_DIR/.duckdb/env.sh" ]]; then
   # shellcheck disable=SC1090
   source "$ROOT_DIR/.duckdb/env.sh"
-fi
-
-if [[ ! -f "$TEST_FILE" ]]; then
-  echo "Test file not found: $TEST_FILE" >&2
-  exit 1
 fi
 
 pushd "$ROOT_DIR" >/dev/null
@@ -25,6 +21,20 @@ read -r -a SERVER_CMD <<<"$SERVER_BIN"
 if [[ -f "$CONFIG_FILE" ]]; then
   SERVER_CMD+=("--config" "$CONFIG_FILE")
 fi
+
+rm -rf "$TEST_DIR"
+mkdir -p "$TEST_DIR"
+if [[ -z "${SWANLAKE_DUCKLING_QUEUE_ROOT:-}" ]]; then
+  export SWANLAKE_DUCKLING_QUEUE_ROOT="$TEST_DIR/duckling_queue"
+fi
+mkdir -p "$SWANLAKE_DUCKLING_QUEUE_ROOT"
+export SWANLAKE_DUCKLING_QUEUE_ENABLE="${SWANLAKE_DUCKLING_QUEUE_ENABLE:-true}"
+export SWANLAKE_DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS="${SWANLAKE_DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS:-1}"
+export SWANLAKE_DUCKLING_QUEUE_ROTATE_SIZE_BYTES="${SWANLAKE_DUCKLING_QUEUE_ROTATE_SIZE_BYTES:-1}"
+export SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS="${SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS:-1}"
+export SWANLAKE_DUCKLING_QUEUE_LOCK_TTL_SECONDS="${SWANLAKE_DUCKLING_QUEUE_LOCK_TTL_SECONDS:-600}"
+# export SWANLAKE_DUCKLAKE_INIT_SQL="ATTACH '$TEST_DIR/duckling_sink.db' AS swanlake;"
+export RUST_LOG="${RUST_LOG:-info,swanlake::dq=debug}"
 
 "${SERVER_CMD[@]}" &
 SERVER_PID=$!
@@ -60,12 +70,14 @@ print(f"Timed out waiting for Flight SQL server at {host}:{port}", file=sys.stde
 sys.exit(1)
 PY
 
-if [[ -n "${TEST_DIR:-}" ]]; then
-  ARGS=(--test-dir "$TEST_DIR")
-else
-  ARGS=()
-fi
-cargo run --manifest-path "$ROOT_DIR/tests/runner/Cargo.toml" -- "$TEST_FILE" --endpoint "$ENDPOINT" "${ARGS[@]}"
+IFS=',' read -r -a TEST_FILES <<<"$TEST_FILES_CSV"
+for TEST_FILE in "${TEST_FILES[@]}"; do
+  if [[ ! -f "$TEST_FILE" ]]; then
+    echo "Test file not found: $TEST_FILE" >&2
+    exit 1
+  fi
+  cargo run --manifest-path "$ROOT_DIR/tests/runner/Cargo.toml" -- "$TEST_FILE" --endpoint "$ENDPOINT" --test-dir "$TEST_DIR"
+done
 
 cleanup
 trap - EXIT

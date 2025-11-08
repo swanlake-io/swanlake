@@ -14,6 +14,7 @@ use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
 
 use crate::config::ServerConfig;
+use crate::dq::DucklingQueueManager;
 use crate::engine::EngineFactory;
 use crate::error::ServerError;
 use crate::session::id::SessionId;
@@ -27,6 +28,8 @@ pub struct SessionRegistry {
     max_sessions: usize,
     session_timeout: Duration,
     writes_enabled: bool,
+    #[allow(dead_code)]
+    dq_manager: Option<Arc<DucklingQueueManager>>,
 }
 
 struct RegistryInner {
@@ -35,9 +38,12 @@ struct RegistryInner {
 
 impl SessionRegistry {
     /// Create a new session registry
-    #[instrument(skip(config))]
-    pub fn new(config: &ServerConfig) -> Result<Self, ServerError> {
-        let factory = EngineFactory::new(config)?;
+    #[instrument(skip(config, dq_manager))]
+    pub fn new(
+        config: &ServerConfig,
+        dq_manager: Option<Arc<DucklingQueueManager>>,
+    ) -> Result<Self, ServerError> {
+        let factory = EngineFactory::new(config, dq_manager.clone())?;
         let max_sessions = config.max_sessions.unwrap_or(100);
         let session_timeout = Duration::from_secs(config.session_timeout_seconds.unwrap_or(1800)); // 30min default
 
@@ -55,7 +61,12 @@ impl SessionRegistry {
             max_sessions,
             session_timeout,
             writes_enabled: config.enable_writes,
+            dq_manager,
         })
+    }
+
+    pub fn engine_factory(&self) -> EngineFactory {
+        self.factory.clone()
     }
 
     /// Clean up idle sessions that have exceeded the timeout

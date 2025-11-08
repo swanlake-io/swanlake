@@ -9,6 +9,7 @@ SwanLake is a Rust-based Arrow Flight SQL server backed by DuckDB with optional 
 - Arrow Flight SQL endpoint with prepared statement and streaming result support
 - Session-scoped DuckDB connections for predictable state management
 - Optional DuckLake extension loading and initialization hooks
+- Duckling Queue staging layer with `PRAGMA duckling_queue.flush` for crash-resilient write buffering
 - Structured logging and configurability via environment variables or `config.toml`
 
 ## Quick Start
@@ -38,6 +39,21 @@ Key environment variables (all prefixed with `SWANLAKE_`):
 
 `.env` files are read automatically via `dotenvy`. Command-line flags always override file-based configuration.
 
+### Duckling Queue (optional write buffer)
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `DUCKLING_QUEUE_ENABLE` | Enable the local DuckDB staging layer | `false` |
+| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | _required when enabled_ |
+| `DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Time-based rotation threshold | `300` |
+| `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation threshold | `100_000_000` |
+| `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | Frequency for scanning sealed files | `60` |
+| `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush jobs | `2` |
+| `DUCKLING_QUEUE_LOCK_TTL_SECONDS` | File-lock lease before another host steals it | `600` |
+| `DUCKLING_QUEUE_ATTACH_TEMPLATE` | Override the auto-generated `ATTACH ... AS duckling_queue` SQL | _unset_ |
+
+With Duckling Queue enabled, every session can create or insert into `duckling_queue.*` tables. Use `PRAGMA duckling_queue.flush;` to force the active file to rotate and flush immediately (useful for tests and CI).
+
 ## Testing
 
 ### Integration Tests
@@ -51,15 +67,14 @@ The standalone test runner (`tests/runner`) executes SQL logic tests against a r
 # Start the server
 cargo run
 
-# In another terminal, run SQL tests
-cd tests/runner
-cargo run -- --endpoint grpc://127.0.0.1:4214 ../../tests/sql/ducklake_basic.test
+# In another terminal, run SQL tests (runs both ducklake_basic + duckling_queue_basic)
+TEST_DIR=./target/ducklake-tests ./scripts/run_ducklake_tests.sh
 
-# Or use the helper script
-./scripts/run_ducklake_tests.sh
+# Run a specific script
+TEST_FILE=tests/sql/duckling_queue_basic.test ./scripts/run_ducklake_tests.sh
 ```
 
-The test runner uses Arrow 56.x for ADBC compatibility, while the main project uses Arrow 57.x.
+The test runner uses Arrow 56.x for ADBC compatibility, while the main project uses Arrow 57.x. `duckling_queue_basic.test` exercises the staging -> flush flow end to end via `PRAGMA duckling_queue.flush`.
 
 ## Documentation
 - `AGENT.md` offers a guided tour of the architecture for contributors.

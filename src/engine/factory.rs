@@ -3,23 +3,30 @@
 //! Each connection is created with the same configuration and initialization SQL
 //! (extensions, ATTACH statements, etc.).
 
+use std::sync::Arc;
+
 use duckdb::{Config, Connection};
 use tracing::{info, instrument};
 
 use crate::config::ServerConfig;
+use crate::dq::DucklingQueueManager;
 use crate::engine::connection::DuckDbConnection;
 use crate::error::ServerError;
 
 /// Factory for creating initialized DuckDB connections
 #[derive(Clone)]
 pub struct EngineFactory {
-    init_sql: String,
+    base_init_sql: String,
+    dq_manager: Option<Arc<DucklingQueueManager>>,
 }
 
 impl EngineFactory {
     /// Create a new factory from configuration
-    #[instrument(skip(config))]
-    pub fn new(config: &ServerConfig) -> Result<Self, ServerError> {
+    #[instrument(skip(config, dq_manager))]
+    pub fn new(
+        config: &ServerConfig,
+        dq_manager: Option<Arc<DucklingQueueManager>>,
+    ) -> Result<Self, ServerError> {
         let mut init_statements = Vec::new();
 
         // Build initialization SQL based on config
@@ -45,13 +52,22 @@ impl EngineFactory {
 
         let init_sql = init_statements.join("\n");
 
-        Ok(Self { init_sql })
+        Ok(Self {
+            base_init_sql: init_sql,
+            dq_manager,
+        })
     }
 
     /// Create a new initialized DuckDB connection
     #[instrument(skip(self))]
     pub fn create_connection(&self) -> Result<DuckDbConnection, ServerError> {
-        // Create in-memory connection with extensions enabled
+        let conn = self.create_raw_connection()?;
+        info!("DuckDB connection created and initialized");
+        Ok(DuckDbConnection::new(conn))
+    }
+
+    /// Create a raw DuckDB connection with initialization SQL executed.
+    pub fn create_raw_connection(&self) -> Result<Connection, ServerError> {
         let conn = Connection::open_in_memory_with_flags(
             Config::default()
                 .enable_autoload_extension(true)?
@@ -59,12 +75,26 @@ impl EngineFactory {
         )?;
 
         // Execute initialization SQL (extensions, ATTACH statements, etc.)
-        if !self.init_sql.is_empty() {
-            info!("Initializing connection with extensions and config");
-            conn.execute_batch(&self.init_sql)?;
+        let mut init_sql = self.base_init_sql.clone();
+
+        if let Some(manager) = &self.dq_manager {
+            let attach_sql = manager.attach_sql();
+            if !attach_sql.is_empty() {
+                if !init_sql.is_empty() {
+                    init_sql.push('\n');
+                }
+                init_sql.push_str(&attach_sql);
+            }
         }
 
-        info!("DuckDB connection created and initialized");
-        Ok(DuckDbConnection::new(conn))
+        if !init_sql.is_empty() {
+            info!(
+                "Initializing connection with extensions and config, {}",
+                init_sql
+            );
+            conn.execute_batch(&init_sql)?;
+        }
+
+        Ok(conn)
     }
 }

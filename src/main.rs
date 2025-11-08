@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::config::ServerConfig;
+use crate::dq::DucklingQueueManager;
 use crate::service::SwanFlightSqlService;
 use anyhow::{Context, Result};
 use tonic::transport::Server;
@@ -8,6 +9,7 @@ use tracing::info;
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 mod config;
+mod dq;
 mod engine;
 mod error;
 mod service;
@@ -24,11 +26,22 @@ async fn main() -> Result<()> {
         .bind_addr()
         .context("failed to resolve bind address")?;
 
+    let dq_manager = DucklingQueueManager::try_new(&config)
+        .context("failed to initialize duckling queue manager")?
+        .map(Arc::new);
+
     // Create session registry (Phase 2: connection-based session persistence)
     let registry = Arc::new(
-        crate::session::registry::SessionRegistry::new(&config)
+        crate::session::registry::SessionRegistry::new(&config, dq_manager.clone())
             .context("failed to initialize session registry")?,
     );
+
+    let dq_runtime = dq_manager.as_ref().map(|manager| {
+        Arc::new(dq::DucklingQueueRuntime::new(
+            manager.clone(),
+            registry.engine_factory(),
+        ))
+    });
 
     // Spawn periodic session cleanup task
     let registry_clone = registry.clone();
@@ -43,7 +56,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    let flight_service = SwanFlightSqlService::new(registry);
+    let flight_service = SwanFlightSqlService::new(registry, dq_runtime.clone());
 
     info!(%addr, "starting SwanLake Flight SQL server");
 

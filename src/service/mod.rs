@@ -8,6 +8,7 @@ use tonic::{Request, Status};
 use tracing::{error, Span};
 use uuid::Uuid;
 
+use crate::dq::DucklingQueueRuntime;
 use crate::error::ServerError;
 use crate::session::{registry::SessionRegistry, Session, SessionId};
 
@@ -24,11 +25,18 @@ mod handlers;
 #[derive(Clone)]
 pub struct SwanFlightSqlService {
     registry: Arc<SessionRegistry>,
+    dq_runtime: Option<Arc<DucklingQueueRuntime>>,
 }
 
 impl SwanFlightSqlService {
-    pub fn new(registry: Arc<SessionRegistry>) -> Self {
-        Self { registry }
+    pub fn new(
+        registry: Arc<SessionRegistry>,
+        dq_runtime: Option<Arc<DucklingQueueRuntime>>,
+    ) -> Self {
+        Self {
+            registry,
+            dq_runtime,
+        }
     }
 
     /// Extract session ID from tonic Request for session tracking (Phase 2)
@@ -51,6 +59,40 @@ impl SwanFlightSqlService {
         self.registry
             .get_or_create_by_id(&session_id)
             .map_err(Self::status_from_error)
+    }
+
+    pub(crate) async fn try_handle_duckling_queue_command(
+        &self,
+        sql: &str,
+        session: &Arc<Session>,
+    ) -> Result<Option<i64>, Status> {
+        let Some(runtime) = &self.dq_runtime else {
+            return Ok(None);
+        };
+        let trimmed = sql.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let normalized = trimmed.trim_end_matches(';').trim().to_ascii_lowercase();
+        if normalized == "pragma duckling_queue.flush"
+            || normalized == "call duckling_queue_flush()"
+        {
+            if let Err(err) = session.execute_statement("DETACH duckling_queue;") {
+                tracing::error!(error = %err, "duckling queue detach before flush failed");
+                return Err(SwanFlightSqlService::status_from_error(err));
+            }
+            runtime
+                .force_flush_now()
+                .await
+                .map_err(|err| Status::internal(format!("duckling queue flush failed: {err}")))?;
+            let active = runtime.manager().active_file();
+            let attach_sql = format!("ATTACH '{}' AS duckling_queue;", active.path.display());
+            session
+                .execute_statement(&attach_sql)
+                .map_err(SwanFlightSqlService::status_from_error)?;
+            return Ok(Some(0));
+        }
+        Ok(None)
     }
 
     /// Prepare request: extract session_id, record to tracing span, and get/create session

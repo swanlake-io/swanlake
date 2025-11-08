@@ -1,0 +1,38 @@
+# name: tests/sql/duckling_queue_basic.test
+# description: end-to-end duckling_queue staging and flush
+# group: [sql]
+
+require ducklake
+
+statement ok
+DROP TABLE IF EXISTS swanlake.queue_sink;
+
+statement ok
+CREATE TABLE duckling_queue.queue_sink AS SELECT 1 AS i UNION ALL SELECT 2;
+
+query I
+SELECT COUNT(*) FROM duckling_queue.queue_sink
+----
+2
+
+statement ok
+PRAGMA duckling_queue.flush;
+
+query II
+SELECT COUNT(*) FROM swanlake.queue_sink
+----
+2
+
+statement ok
+CREATE TABLE duckling_queue.queue_sink AS SELECT 3 AS i UNION ALL SELECT 4;
+
+statement ok
+PRAGMA duckling_queue.flush;
+
+query III
+SELECT * FROM swanlake.queue_sink ORDER BY i
+----
+1
+2
+3
+4

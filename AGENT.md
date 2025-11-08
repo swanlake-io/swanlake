@@ -41,6 +41,13 @@ All env vars use the `SWANLAKE_` prefix.
 | `DUCKLAKE_INIT_SQL` | Post-load SQL hook | _(unset)_ |
 | `LOG_FORMAT` | `compact` \| `json` | `compact` |
 | `LOG_ANSI` | Colored logs | `true` |
+| `DUCKLING_QUEUE_ENABLE` | Enable local DuckDB staging/flush layer | `false` |
+| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | _(required when enabled)_ |
+| `DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Time-based rotation threshold | `300` |
+| `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation threshold (bytes) | `100_000_000` |
+| `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | Scan cadence for sealed files | `60` |
+| `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush jobs | `2` |
+| `DUCKLING_QUEUE_LOCK_TTL_SECONDS` | Lease before stealing `.lock` files | `600` |
 
 Precedence: env > CLI `--config` > `config.toml` > `.env`.
 
@@ -50,6 +57,7 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 - **Prepared flow**: `CreatePreparedStatement` yields handle + schema, followed by `GetFlightInfo`/`DoGet` (queries) or `DoPut` (updates).
 - **Detection**: `is_query_statement()` strips comments and inspects the first keyword; SELECT/WITH/SHOW/etc. route to query path, everything else goes to update path.
 - **Metadata**: Responses attach `x-swanlake-total-rows` / `x-swanlake-total-bytes` when available.
+- **Duckling Queue admin command**: `PRAGMA duckling_queue.flush;` bypasses the async worker by rotating the active file and flushing every sealed DB immediately (handy for CI/tests).
 
 ## Testing & Tooling
 - `./scripts/test-integration.sh` — end-to-end (builds server, runs Go client tests).

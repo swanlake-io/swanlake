@@ -1,4 +1,5 @@
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::Path;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,22 @@ pub struct ServerConfig {
     pub log_format: String,
     /// Whether to enable ANSI colors in logs.
     pub log_ansi: bool,
+    /// Enable the Duckling Queue staging layer.
+    pub duckling_queue_enable: bool,
+    /// Persistent directory root for Duckling Queue files.
+    pub duckling_queue_root: Option<String>,
+    /// Time-based rotation threshold in seconds.
+    pub duckling_queue_rotate_interval_seconds: u64,
+    /// Size-based rotation threshold in bytes.
+    pub duckling_queue_rotate_size_bytes: u64,
+    /// Interval in seconds for scanning sealed files to flush.
+    pub duckling_queue_flush_interval_seconds: u64,
+    /// Maximum number of parallel flush tasks.
+    pub duckling_queue_max_parallel_flushes: usize,
+    /// Lease duration for flush locks in seconds.
+    pub duckling_queue_lock_ttl_seconds: u64,
+    /// Optional override template for the ATTACH SQL snippet.
+    pub duckling_queue_attach_template: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -44,6 +61,14 @@ impl Default for ServerConfig {
             session_timeout_seconds: Some(900),
             log_format: "compact".to_string(),
             log_ansi: true,
+            duckling_queue_enable: false,
+            duckling_queue_root: None,
+            duckling_queue_rotate_interval_seconds: 300,
+            duckling_queue_rotate_size_bytes: 100_000_000,
+            duckling_queue_flush_interval_seconds: 60,
+            duckling_queue_max_parallel_flushes: 2,
+            duckling_queue_lock_ttl_seconds: 600,
+            duckling_queue_attach_template: None,
         }
     }
 }
@@ -62,6 +87,7 @@ impl ServerConfig {
         let cfg: ServerConfig = settings
             .try_deserialize()
             .with_context(|| "failed to deserialize configuration")?;
+        cfg.validate()?;
         Ok(cfg)
     }
 
@@ -70,5 +96,28 @@ impl ServerConfig {
         addr.to_socket_addrs()?
             .next()
             .ok_or_else(|| anyhow::anyhow!("unable to resolve bind address for {addr}"))
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.duckling_queue_enable {
+            let root = self
+                .duckling_queue_root
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("DUCKLING_QUEUE_ROOT must be set when duckling queue is enabled"))?;
+            let path = Path::new(root);
+            if !path.exists() {
+                anyhow::bail!(
+                    "duckling queue root path '{}' does not exist",
+                    path.display()
+                );
+            }
+            if !path.is_dir() {
+                anyhow::bail!(
+                    "duckling queue root path '{}' is not a directory",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
     }
 }
