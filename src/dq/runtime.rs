@@ -98,7 +98,9 @@ async fn rotation_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<Path
                 orphaned
             );
             for sealed in orphaned {
-                let _ = tx.send(sealed.path).await;
+                if let Err(err) = tx.send(sealed.path).await {
+                    warn!("failed to queue rotated file for flushing: {}", err);
+                }
             }
         }
 
