@@ -13,6 +13,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -46,11 +48,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Auto-fix formatting and clippy issues"
-            if [ "${{ github.event_name }}" = "pull_request" ]; then
-              git push origin HEAD:${{ github.head_ref }}
-            else
-              git push
-            fi
+            git push
           fi
 
       - name: Install llvm-cov
