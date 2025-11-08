@@ -20,6 +20,7 @@ pub struct ServerConfig {
     pub ducklake_enable: bool,
     /// Optional SQL statement executed during startup for ducklake integration.
     pub ducklake_init_sql: Option<String>,
+
     /// Maximum number of concurrent sessions.
     pub max_sessions: Option<usize>,
     /// Session idle timeout in seconds.

@@ -77,16 +77,22 @@ impl SwanFlightSqlService {
         if normalized == "pragma duckling_queue.flush"
             || normalized == "call duckling_queue_flush()"
         {
-            if let Err(err) = session.execute_statement("DETACH duckling_queue;") {
+            if let Err(err) = session.execute_statement("DETACH DATABASE IF EXISTS duckling_queue;")
+            {
                 tracing::error!(error = %err, "duckling queue detach before flush failed");
                 return Err(SwanFlightSqlService::status_from_error(err));
             }
-            runtime
-                .force_flush_now()
-                .await
-                .map_err(|err| Status::internal(format!("duckling queue flush failed: {err}")))?;
+            {
+                let conn = session.raw_connection().lock().unwrap();
+                runtime.force_flush_on_connection(&*conn).map_err(|err| {
+                    Status::internal(format!("duckling queue flush failed: {err}"))
+                })?;
+            }
             let active = runtime.manager().active_file();
-            let attach_sql = format!("ATTACH '{}' AS duckling_queue;", active.path.display());
+            let attach_sql = format!(
+                "ATTACH IF NOT EXISTS '{}' AS duckling_queue;",
+                active.path.display()
+            );
             session
                 .execute_statement(&attach_sql)
                 .map_err(SwanFlightSqlService::status_from_error)?;

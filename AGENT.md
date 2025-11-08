@@ -34,7 +34,6 @@ All env vars use the `SWANLAKE_` prefix.
 | --- | --- | --- |
 | `HOST` | gRPC bind address | `127.0.0.1` |
 | `PORT` | gRPC port | `4214` |
-| `DUCKDB_PATH` | DuckDB database path (empty → in-memory) | _(unset)_ |
 | `MAX_SESSIONS` | Concurrent session cap | `100` |
 | `SESSION_TIMEOUT_SECONDS` | Idle timeout | `1800` |
 | `DUCKLAKE_ENABLE` | Load DuckLake extension | `true` |

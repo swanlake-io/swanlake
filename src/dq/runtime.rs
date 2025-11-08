@@ -16,6 +16,7 @@ const MIN_FLUSH_TICK: Duration = Duration::from_secs(5);
 /// Background runtime that drives Duckling Queue rotation and flushing.
 pub struct DucklingQueueRuntime {
     manager: Arc<DucklingQueueManager>,
+    #[allow(dead_code)]
     factory: Arc<EngineFactory>,
 }
 
@@ -32,28 +33,18 @@ impl DucklingQueueRuntime {
         Self { manager, factory }
     }
 
-    pub fn manager(&self) -> Arc<DucklingQueueManager> {
-        self.manager.clone()
-    }
-
-    /// Force a rotation and flush of all pending queue files. Used by tests/admin commands.
-    pub async fn force_flush_now(&self) -> Result<()> {
+    /// Force a rotation and flush of all pending queue files on a given connection.
+    pub fn force_flush_on_connection(&self, conn: &duckdb::Connection) -> Result<()> {
         let mut pending: Vec<PathBuf> = self.manager.sealed_files()?;
         pending.push(self.manager.force_rotate()?.path);
-        info!("pending flush file list {:?}", pending);
         for path in pending {
-            self.flush_file_now(path).await?;
+            flush_file_on_connection(self.manager.clone(), conn, path)?;
         }
         Ok(())
     }
 
-    async fn flush_file_now(&self, path: PathBuf) -> Result<()> {
-        let manager = self.manager.clone();
-        let factory = self.factory.clone();
-        tokio::task::spawn_blocking(move || flush_file(manager, factory, path))
-            .await
-            .map_err(|err| anyhow!(err))??;
-        Ok(())
+    pub fn manager(&self) -> Arc<DucklingQueueManager> {
+        self.manager.clone()
     }
 }
 
@@ -161,7 +152,33 @@ fn flush_file(
     };
 
     let conn = factory.create_raw_connection()?;
-    detach_if_attached(&conn, "duckling_queue")
+    flush_file_on_connection(manager, &conn, path)?;
+    drop(lock);
+    Ok(())
+}
+
+fn flush_file_on_connection(
+    manager: Arc<DucklingQueueManager>,
+    conn: &duckdb::Connection,
+    path: PathBuf,
+) -> Result<()> {
+    info!(file = %path.display(), "start flush duckling queue file on connection");
+    if !path.exists() {
+        return Ok(());
+    }
+
+    // Safety check: only process .db files
+    if path.extension() != Some(std::ffi::OsStr::new("db")) {
+        warn!(file = %path.display(), "skipping non-db file in sealed directory");
+        return Ok(());
+    }
+
+    let Some(lock) = FileLock::try_acquire(&path, manager.settings().lock_ttl)? else {
+        warn!(file = %path.display(), "duckling queue file already being flushed by another worker");
+        return Ok(());
+    };
+
+    detach_if_attached(conn, "duckling_queue")
         .context("failed to detach active duckling_queue before flush")?;
     conn.execute_batch(&format!("ATTACH '{}' AS duckling_queue;", path.display()))
         .map_err(|err| {
@@ -175,7 +192,7 @@ fn flush_file(
             )
         })?;
     let target_schema = &manager.settings().target_schema;
-    let tables = list_queue_tables(&conn)?;
+    let tables = list_queue_tables(conn)?;
     for table in tables {
         let quoted = quote_ident(&table);
         debug!(table = %table, "flushing duckling queue table");
@@ -216,8 +233,7 @@ fn flush_file(
         debug!(table = %table, target_count = %target_count, "target table row count after insert");
     }
 
-    detach_if_attached(&conn, "duckling_queue")
-        .context("failed to detach sealed duckling queue")?;
+    detach_if_attached(conn, "duckling_queue").context("failed to detach sealed duckling queue")?;
     drop(lock);
 
     // Move the flushed file to the flushed directory
@@ -325,15 +341,6 @@ fn cleanup_flushed_files(manager: &DucklingQueueManager) -> Result<()> {
 
 fn detach_if_attached(conn: &duckdb::Connection, alias: &str) -> Result<()> {
     let sql = format!("DETACH {alias};");
-    match conn.execute_batch(&sql) {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            let message = err.to_string();
-            if message.contains("does not exist") {
-                Ok(())
-            } else {
-                Err(anyhow!("failed to detach {alias}: {err}"))
-            }
-        }
-    }
+    let _ = conn.execute_batch(&sql); // Ignore errors, as detaching non-existing is fine
+    Ok(())
 }

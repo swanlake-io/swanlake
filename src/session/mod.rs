@@ -324,4 +324,9 @@ impl Session {
         debug!("rolled back transaction");
         Ok(())
     }
+
+    /// Get raw DuckDB connection for advanced operations
+    pub fn raw_connection(&self) -> &Mutex<duckdb::Connection> {
+        &self.connection.conn
+    }
 }

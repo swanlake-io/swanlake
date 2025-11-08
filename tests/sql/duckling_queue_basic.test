@@ -4,8 +4,8 @@
 
 require ducklake
 
-# statement ok
-# ATTACH 'ducklake:__TEST_DIR__/ducklake.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/swanlake.db' AS swanlake (DATA_PATH '__TEST_DIR__/swanlake_files', METADATA_CATALOG 'swanlake_meta')
 
 statement ok
 DROP TABLE IF EXISTS swanlake.queue_sink;

@@ -29,7 +29,7 @@ Key environment variables (all prefixed with `SWANLAKE_`):
 | --- | --- | --- |
 | `HOST` | Bind address | `127.0.0.1` |
 | `PORT` | gRPC port | `4214` |
-| `DUCKDB_PATH` | DuckDB database path (blank = in-memory) | _unset_ |
+
 | `MAX_SESSIONS` | Concurrent session limit | `100` |
 | `SESSION_TIMEOUT_SECONDS` | Idle session timeout | `1800` |
 | `DUCKLAKE_ENABLE` | Auto-load DuckLake extension | `true` |

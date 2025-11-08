@@ -27,7 +27,7 @@ pub struct QueryResult {
 /// RefCell internally and is not Sync. This allows the connection to be
 /// shared safely across async tasks.
 pub struct DuckDbConnection {
-    conn: Mutex<Connection>,
+    pub conn: Mutex<Connection>,
 }
 
 impl DuckDbConnection {
