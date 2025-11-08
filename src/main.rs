@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    let flight_service = SwanFlightSqlService::new(registry, dq_runtime.clone());
+    let flight_service = SwanFlightSqlService::new(registry, dq_runtime);
 
     info!(%addr, "starting SwanLake Flight SQL server");
 

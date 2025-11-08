@@ -33,19 +33,50 @@ impl DucklingQueueRuntime {
         Self { manager, factory }
     }
 
+    /// Execute a Duckling Queue administrative command on the given connection.
+    ///
+    /// Returns the number of rows affected (typically 0 for admin commands),
+    /// or None if the SQL is not a DQ command.
+    pub fn execute_command(&self, sql: &str, conn: &duckdb::Connection) -> Result<Option<i64>> {
+        if !is_dq_command(sql) {
+            return Ok(None);
+        }
+
+        // Force flush handles detach/flush/re-attach internally
+        self.force_flush_on_connection(conn)?;
+        Ok(Some(0))
+    }
+
     /// Force a rotation and flush of all pending queue files on a given connection.
     pub fn force_flush_on_connection(&self, conn: &duckdb::Connection) -> Result<()> {
         let mut pending: Vec<PathBuf> = self.manager.sealed_files()?;
         pending.push(self.manager.force_rotate()?.path);
         for path in pending {
-            flush_file_on_connection(self.manager.clone(), conn, path)?;
+            safe_flush_file(&self.manager, conn, &path)?;
         }
+
+        // Re-attach the active duckling_queue file after flushing
+        let active_file = self.manager.active_file();
+        let attach_sql = format!(
+            "ATTACH IF NOT EXISTS '{}' AS duckling_queue;",
+            active_file.path.display()
+        );
+        conn.execute_batch(&attach_sql)
+            .context("failed to re-attach active duckling_queue after flush")?;
+
         Ok(())
     }
+}
 
-    pub fn manager(&self) -> Arc<DucklingQueueManager> {
-        self.manager.clone()
+/// Detect if SQL is a Duckling Queue administrative command
+fn is_dq_command(sql: &str) -> bool {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return false;
     }
+
+    let normalized = trimmed.trim_end_matches(';').trim().to_ascii_lowercase();
+    normalized == "pragma duckling_queue.flush" || normalized == "call duckling_queue_flush()"
 }
 
 async fn rotation_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<PathBuf>) {
@@ -117,34 +148,19 @@ async fn flush_loop(
         let manager_clone = manager.clone();
         let factory_clone = factory.clone();
         tokio::spawn(async move {
-            if let Err(err) =
-                tokio::task::spawn_blocking(move || flush_file(manager_clone, factory_clone, path))
-                    .await
-                    .map_err(|join_err| anyhow!(join_err))
-                    .and_then(|res| res)
+            if let Err(err) = tokio::task::spawn_blocking(move || {
+                let conn = factory_clone.create_raw_connection()?;
+                safe_flush_file(&manager_clone, &conn, &path)
+            })
+            .await
+            .map_err(|join_err| anyhow!(join_err))
+            .and_then(|res| res)
             {
                 warn!(error = %err, "duckling queue flush failed");
             }
             drop(permit);
         });
     }
-}
-
-fn flush_file(
-    manager: Arc<DucklingQueueManager>,
-    factory: Arc<EngineFactory>,
-    path: PathBuf,
-) -> Result<()> {
-    let conn = factory.create_raw_connection()?;
-    flush_file_on_connection(manager, &conn, path)
-}
-
-fn flush_file_on_connection(
-    manager: Arc<DucklingQueueManager>,
-    conn: &duckdb::Connection,
-    path: PathBuf,
-) -> Result<()> {
-    safe_flush_file(manager.as_ref(), conn, &path)
 }
 
 fn safe_flush_file(

@@ -69,39 +69,15 @@ impl SwanFlightSqlService {
         let Some(runtime) = &self.dq_runtime else {
             return Ok(None);
         };
-        let trimmed = sql.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        let normalized = trimmed.trim_end_matches(';').trim().to_ascii_lowercase();
-        if normalized == "pragma duckling_queue.flush"
-            || normalized == "call duckling_queue_flush()"
-        {
-            if let Err(err) = session.execute_statement("DETACH DATABASE IF EXISTS duckling_queue;")
-            {
-                tracing::error!(error = %err, "duckling queue detach before flush failed");
-                return Err(SwanFlightSqlService::status_from_error(err));
-            }
-            {
-                let conn = session
-                    .raw_connection()
-                    .lock()
-                    .map_err(|_| Status::internal("session connection lock is poisoned"))?;
-                runtime.force_flush_on_connection(&conn).map_err(|err| {
-                    Status::internal(format!("duckling queue flush failed: {err}"))
-                })?;
-            }
-            let active = runtime.manager().active_file();
-            let attach_sql = format!(
-                "ATTACH IF NOT EXISTS '{}' AS duckling_queue;",
-                active.path.display()
-            );
-            session
-                .execute_statement(&attach_sql)
-                .map_err(SwanFlightSqlService::status_from_error)?;
-            return Ok(Some(0));
-        }
-        Ok(None)
+
+        let conn = session
+            .raw_connection()
+            .lock()
+            .map_err(|_| Status::internal("session connection lock is poisoned"))?;
+
+        runtime
+            .execute_command(sql, &conn)
+            .map_err(|err| Status::internal(format!("duckling queue command failed: {err}")))
     }
 
     /// Prepare request: extract session_id, record to tracing span, and get/create session
