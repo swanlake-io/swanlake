@@ -39,3 +39,6 @@ SELECT * FROM swanlake.queue_sink ORDER BY i
 2
 3
 4
+
+statement ok
+PRAGMA duckling_queue.cleanup;

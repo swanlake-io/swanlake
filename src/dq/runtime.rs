@@ -38,12 +38,22 @@ impl DucklingQueueRuntime {
     /// Returns the number of rows affected (typically 0 for admin commands),
     /// or None if the SQL is not a DQ command.
     pub fn execute_command(&self, sql: &str, conn: &duckdb::Connection) -> Result<Option<i64>> {
-        if !is_dq_command(sql) {
+        let trimmed = sql.trim();
+        let normalized = trimmed.trim_end_matches(';').trim().to_ascii_lowercase();
+
+        if normalized == "pragma duckling_queue.flush"
+            || normalized == "call duckling_queue_flush()"
+        {
+            // Force flush handles detach/flush/re-attach internally
+            self.force_flush_on_connection(conn)?;
+        } else if normalized == "pragma duckling_queue.cleanup"
+            || normalized == "call duckling_queue_cleanup()"
+        {
+            self.force_cleanup()?;
+        } else {
             return Ok(None);
         }
 
-        // Force flush handles detach/flush/re-attach internally
-        self.force_flush_on_connection(conn)?;
         Ok(Some(0))
     }
 
@@ -66,17 +76,11 @@ impl DucklingQueueRuntime {
 
         Ok(())
     }
-}
 
-/// Detect if SQL is a Duckling Queue administrative command
-fn is_dq_command(sql: &str) -> bool {
-    let trimmed = sql.trim();
-    if trimmed.is_empty() {
-        return false;
+    /// Force cleanup of flushed queue files.
+    pub fn force_cleanup(&self) -> Result<()> {
+        cleanup_flushed_files(&self.manager)
     }
-
-    let normalized = trimmed.trim_end_matches(';').trim().to_ascii_lowercase();
-    normalized == "pragma duckling_queue.flush" || normalized == "call duckling_queue_flush()"
 }
 
 async fn rotation_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<PathBuf>) {
