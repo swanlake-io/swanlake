@@ -143,13 +143,6 @@ pub(crate) async fn do_put_statement_update(
     let sql = command.query;
     let session = service.prepare_request(&request)?;
 
-    if let Some(result) = service
-        .try_handle_duckling_queue_command(&sql, &session)
-        .await?
-    {
-        return Ok(result);
-    }
-
     let affected_rows = tokio::task::spawn_blocking(move || session.execute_statement(&sql))
         .await
         .map_err(SwanFlightSqlService::status_from_join)?

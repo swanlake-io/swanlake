@@ -77,7 +77,7 @@ async fn run_duckling_queue_rotation(args: &CliArgs) -> Result<()> {
         peer.query_single_i64("SELECT COUNT(*) FROM duckling_queue.concurrent_case_b")
             .await?,
         1,
-        "writer sees its own table"
+        "peer sees its own table"
     );
 
     writer.exec("PRAGMA duckling_queue.flush;").await?;
@@ -85,13 +85,6 @@ async fn run_duckling_queue_rotation(args: &CliArgs) -> Result<()> {
     assert_eq!(
         writer
             .query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_a")
-            .await?,
-        1,
-        "flushed data should be available in swanlake"
-    );
-    assert_eq!(
-        writer
-            .query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_b")
             .await?,
         1,
         "flushed data should be available in swanlake"
@@ -100,25 +93,16 @@ async fn run_duckling_queue_rotation(args: &CliArgs) -> Result<()> {
     peer.exec("CREATE TABLE duckling_queue.concurrent_case_post AS SELECT 3 AS i")
         .await?;
 
-    writer.exec("PRAGMA duckling_queue.flush;").await?;
+    peer.exec("PRAGMA duckling_queue.flush;").await?;
 
     assert_eq!(
-        writer
-            .query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_a")
+        peer.query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_b")
             .await?,
         1,
         "flushed data should be available in swanlake"
     );
     assert_eq!(
-        writer
-            .query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_b")
-            .await?,
-        1,
-        "flushed data should be available in swanlake"
-    );
-    assert_eq!(
-        writer
-            .query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_post")
+        peer.query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_post")
             .await?,
         1,
         "flushed data should be available in swanlake"

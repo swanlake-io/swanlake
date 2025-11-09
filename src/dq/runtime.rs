@@ -2,16 +2,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tokio::sync::{mpsc, Semaphore};
 use tracing::{debug, error, info, warn};
 
 use crate::dq::lock::FileLock;
-use crate::dq::manager::SealedQueueFile;
 use crate::dq::DucklingQueueManager;
 use crate::engine::EngineFactory;
 use crate::session::registry::SessionRegistry;
-use crate::session::Session;
 
 const MIN_ROTATION_TICK: Duration = Duration::from_secs(5);
 const MIN_FLUSH_TICK: Duration = Duration::from_secs(5);
@@ -19,9 +17,11 @@ const FLUSHED_TABLE_PREFIX: &str = "__dq_flushed_";
 
 /// Background runtime that drives Duckling Queue rotation and flushing.
 pub struct DucklingQueueRuntime {
+    #[allow(dead_code)]
     manager: Arc<DucklingQueueManager>,
     #[allow(dead_code)]
     factory: Arc<Mutex<EngineFactory>>,
+    #[allow(dead_code)]
     registry: Arc<SessionRegistry>,
 }
 
@@ -45,71 +45,6 @@ impl DucklingQueueRuntime {
             registry,
         }
     }
-
-    /// Execute a Duckling Queue administrative command on the given connection.
-    ///
-    /// Returns the number of rows affected (typically 0 for admin commands),
-    /// or None if the SQL is not a DQ command.
-    pub fn execute_command(&self, sql: &str, session: &Arc<Session>) -> Result<Option<i64>> {
-        let trimmed = sql.trim();
-        let normalized = trimmed.trim_end_matches(';').trim().to_ascii_lowercase();
-
-        if normalized == "pragma duckling_queue.flush"
-            || normalized == "call duckling_queue_flush()"
-        {
-            // Force flush handles detach/flush/re-attach internally
-            self.force_flush_for_session(session)?;
-        } else if normalized == "pragma duckling_queue.cleanup"
-            || normalized == "call duckling_queue_cleanup()"
-        {
-            self.force_cleanup()?;
-        } else {
-            return Ok(None);
-        }
-
-        Ok(Some(0))
-    }
-
-    /// Force a rotation and flush of all pending queue files on a given connection.
-    fn force_flush_for_session(&self, _session: &Arc<Session>) -> Result<()> {
-        // Then sweep for any orphaned active files from other sessions
-        let orphaned = self.manager.sweep_active_dir()?;
-
-        let mut pending: Vec<PathBuf> = self.manager.sealed_files()?;
-
-        // Add orphaned files to pending list
-        for sealed in orphaned {
-            pending.push(sealed.path);
-        }
-
-        // Now rotate the current active file
-        let sealed = force_rotate_with_broadcast_internal(&self.manager, &self.registry)?;
-        pending.push(sealed.path);
-
-        let conn = self
-            .factory
-            .lock()
-            .unwrap()
-            .clone_connection()
-            .context("failed to create connection for duckling queue flush")?;
-
-        for path in pending {
-            let flushed = conn.with_inner(|inner| safe_flush_file(&self.manager, inner, &path))?;
-            if !flushed {
-                bail!(
-                    "duckling queue file {} is currently being flushed by another worker",
-                    path.display()
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Force cleanup of flushed queue files.
-    pub fn force_cleanup(&self) -> Result<()> {
-        cleanup_flushed_files(&self.manager)
-    }
 }
 
 async fn rotation_loop(
@@ -125,30 +60,29 @@ async fn rotation_loop(
             .max(MIN_ROTATION_TICK),
     );
 
-    info!("rotation_loop interval {}", interval.period().as_secs());
+    info!(
+        "rotation_loop interval {} seconds",
+        interval.period().as_secs()
+    );
     loop {
         interval.tick().await;
 
-        if let Ok(orphaned) = manager.sweep_active_dir() {
-            info!(
-                "found orphaned duckling queue files to flush {:?}",
-                orphaned
-            );
-            for sealed in orphaned {
-                if let Err(err) = tx.send(sealed.path).await {
-                    warn!("failed to queue rotated file for flushing: {}", err);
-                }
-            }
-        }
+        // 1. Check all sessions for size/time-based rotation
+        registry.maybe_rotate_all_queues();
 
-        match rotate_with_broadcast(&manager, &registry) {
-            Ok(Some(sealed)) => {
-                info!(file = %sealed.path.display(), "rotated duckling queue file");
-                let _ = tx.send(sealed.path).await;
-            }
-            Ok(None) => {}
-            Err(err) => {
-                warn!(error = %err, "duckling queue rotation attempt failed");
+        // 2. Sweep orphaned active files
+        let active_ids = registry.get_all_session_ids();
+        if let Ok(orphaned) = manager.sweep_orphaned_files(&active_ids) {
+            if !orphaned.is_empty() {
+                info!(
+                    "found {} orphaned duckling queue files to flush",
+                    orphaned.len()
+                );
+                for sealed in orphaned {
+                    if let Err(err) = tx.send(sealed).await {
+                        warn!("failed to queue orphaned file for flushing: {}", err);
+                    }
+                }
             }
         }
     }
@@ -156,14 +90,19 @@ async fn rotation_loop(
 
 async fn sealed_scan_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<PathBuf>) {
     let mut interval = tokio::time::interval(manager.settings().flush_interval.max(MIN_FLUSH_TICK));
-    info!("sealed scan loop interval {}", interval.period().as_secs());
+    info!(
+        "sealed scan loop interval {} seconds",
+        interval.period().as_secs()
+    );
     loop {
         interval.tick().await;
         match manager.sealed_files() {
             Ok(files) => {
-                info!("try to flush sealed files {:?}", files);
-                for file in files {
-                    let _ = tx.send(file).await;
+                if !files.is_empty() {
+                    info!("found {} sealed files to flush", files.len());
+                    for file in files {
+                        let _ = tx.send(file).await;
+                    }
                 }
             }
             Err(err) => {
@@ -189,8 +128,8 @@ async fn flush_loop(
         let path_for_log = path.clone();
         tokio::spawn(async move {
             let flush_result = tokio::task::spawn_blocking(move || {
-                let conn = factory_clone.lock().unwrap().clone_connection()?;
-                conn.with_inner(|inner| safe_flush_file(&manager_clone, inner, &path))
+                let conn = factory_clone.lock().unwrap().create_connection()?;
+                conn.with_inner(|inner| flush_sealed_file(&manager_clone, inner, &path))
             })
             .await
             .map_err(|join_err| anyhow!(join_err))
@@ -213,7 +152,9 @@ async fn flush_loop(
     }
 }
 
-fn safe_flush_file(
+/// Flush a sealed queue file into the target DuckLake schema.
+/// Returns true if flushed, false if file is busy (locked by another worker).
+pub fn flush_sealed_file(
     manager: &DucklingQueueManager,
     conn: &duckdb::Connection,
     path: &Path,
@@ -229,7 +170,7 @@ fn safe_flush_file(
     }
 
     let Some(lock) = FileLock::try_acquire(path, manager.settings().lock_ttl)? else {
-        warn!(file = %path.display(), "duckling queue file already being flushed by another worker");
+        debug!(file = %path.display(), "duckling queue file already being flushed by another worker");
         return Ok(false);
     };
     info!(file = %path.display(), "start flush duckling queue file");
@@ -325,7 +266,7 @@ fn list_queue_tables(conn: &duckdb::Connection) -> Result<Vec<String>> {
     let mut tables = Vec::new();
     for row in rows {
         let name = row?;
-        if !name.starts_with(FLUSHED_TABLE_PREFIX) {
+        if !name.starts_with(FLUSHED_TABLE_PREFIX) && !name.starts_with("__session_queue_") {
             tables.push(name);
         }
     }
@@ -404,28 +345,6 @@ fn cleanup_flushed_files(manager: &DucklingQueueManager) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn rotate_with_broadcast(
-    manager: &DucklingQueueManager,
-    registry: &SessionRegistry,
-) -> Result<Option<SealedQueueFile>> {
-    manager.maybe_rotate_with(|new_active| {
-        registry
-            .switch_duckling_queue_except(&new_active.path)
-            .context("failed to switch duckling_queue attachment during rotation")
-    })
-}
-
-fn force_rotate_with_broadcast_internal(
-    manager: &DucklingQueueManager,
-    registry: &SessionRegistry,
-) -> Result<SealedQueueFile> {
-    manager.force_rotate_with(|new_active| {
-        registry
-            .switch_duckling_queue_except(&new_active.path)
-            .context("failed to switch duckling_queue attachment during forced rotation")
-    })
 }
 
 fn detach_if_attached(conn: &duckdb::Connection, alias: &str) -> Result<()> {

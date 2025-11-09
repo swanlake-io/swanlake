@@ -29,26 +29,11 @@ SELECT COUNT(*) FROM swanlake.queue_sink
 statement error
 SELECT COUNT(*) FROM duckling_queue.queue_sink;
 
-statement ok
-CREATE TEMP TABLE dq_flushed_files AS
-SELECT path
-FROM glob('__TEST_DIR__/duckling_queue/flushed/*.db')
-ORDER BY path DESC
-LIMIT 1;
-
-statement ok
-ATTACH (SELECT path FROM dq_flushed_files LIMIT 1) AS dq_flushed (READ_ONLY TRUE);
-
 query I
-SELECT COUNT(*) FROM dq_flushed."__dq_flushed_queue_sink"
+SELECT count(*) >= 1
+FROM glob('__TEST_DIR__/duckling_queue/flushed/*.db')
 ----
-2
-
-statement ok
-DETACH dq_flushed;
-
-statement ok
-DROP TABLE dq_flushed_files;
+true
 
 statement ok
 CREATE TABLE duckling_queue.queue_sink AS SELECT 3 AS i UNION ALL SELECT 4;

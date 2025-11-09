@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
 
     // Create session registry (Phase 2: connection-based session persistence)
     let registry = Arc::new(
-        crate::session::registry::SessionRegistry::new(&config, dq_manager.clone())
+        crate::session::registry::SessionRegistry::new(&config, Some(dq_manager.clone()))
             .context("failed to initialize session registry")?,
     );
 

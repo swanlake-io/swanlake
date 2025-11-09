@@ -8,11 +8,10 @@
 //! - Enforces max session limit
 
 use std::collections::HashMap;
-use std::path::Path;
+
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use anyhow::Context;
 use tracing::{debug, info, instrument, warn};
 
 use crate::config::ServerConfig;
@@ -34,6 +33,7 @@ pub struct SessionRegistry {
 
 struct RegistryInner {
     sessions: HashMap<SessionId, Arc<Session>>,
+    dq_manager: Option<Arc<DucklingQueueManager>>,
 }
 
 impl SessionRegistry {
@@ -41,13 +41,10 @@ impl SessionRegistry {
     #[instrument(skip(config, dq_manager))]
     pub fn new(
         config: &ServerConfig,
-        dq_manager: Arc<DucklingQueueManager>,
+        dq_manager: Option<Arc<DucklingQueueManager>>,
     ) -> Result<Self, ServerError> {
-        let duckling_queue_path = dq_manager.active_file().path.display().to_string();
-        let factory = Arc::new(Mutex::new(EngineFactory::new(
-            config,
-            &duckling_queue_path,
-        )?));
+        // Note: We no longer need a global duckling queue path since each session manages its own
+        let factory = Arc::new(Mutex::new(EngineFactory::new(config, "")?));
         let max_sessions = config.max_sessions.unwrap_or(100);
         let session_timeout = Duration::from_secs(config.session_timeout_seconds.unwrap_or(1800)); // 30min default
 
@@ -60,6 +57,7 @@ impl SessionRegistry {
         Ok(Self {
             inner: Arc::new(RwLock::new(RegistryInner {
                 sessions: HashMap::new(),
+                dq_manager,
             })),
             factory,
             max_sessions,
@@ -85,6 +83,10 @@ impl SessionRegistry {
                     idle_duration = ?session.idle_duration(),
                     "removing idle session"
                 );
+                // Seal queue file before removing session
+                if let Err(e) = session.cleanup_queue() {
+                    warn!(session_id = %id, error = %e, "failed to cleanup session queue");
+                }
                 false
             } else {
                 true
@@ -136,14 +138,26 @@ impl SessionRegistry {
         }
 
         // Create new connection
-        let connection = self.factory.lock().unwrap().clone_connection()?;
+        let connection = self.factory.lock().unwrap().create_connection()?;
 
         // Create session with the specified ID
-        let session = Arc::new(Session::new_with_id(
-            session_id.clone(),
-            connection,
-            self.writes_enabled,
-        ));
+        let session = {
+            let inner = self.inner.read().expect("registry lock poisoned");
+            if let Some(ref dq_manager) = inner.dq_manager {
+                Arc::new(Session::new_with_id_and_dq(
+                    session_id.clone(),
+                    connection,
+                    self.writes_enabled,
+                    dq_manager.clone(),
+                )?)
+            } else {
+                Arc::new(Session::new_with_id(
+                    session_id.clone(),
+                    connection,
+                    self.writes_enabled,
+                ))
+            }
+        };
 
         // Register session
         {
@@ -159,86 +173,42 @@ impl SessionRegistry {
         Ok(session)
     }
 
-    pub fn switch_duckling_queue_except(&self, new_path: &Path) -> anyhow::Result<()> {
-        info!(
-            new_path = %new_path.display(),
-            "switching duckling queue to new path"
-        );
-
-        // Step 1: Recreate the base connection with new duckling queue path
-        self.factory
-            .lock()
-            .unwrap()
-            .recreate_base_connection(new_path)
-            .context("failed to recreate base connection")?;
-
-        // Step 2: Collect all sessions
+    /// Call maybe_rotate_queue() on all sessions
+    pub fn maybe_rotate_all_queues(&self) {
         let sessions = {
             let inner = self.inner.read().expect("registry lock poisoned");
-            inner
-                .sessions
-                .iter()
-                .map(|(id, session)| (id.clone(), session.clone()))
-                .collect::<Vec<_>>()
+            inner.sessions.values().cloned().collect::<Vec<_>>()
         };
 
-        // Step 3: Handle each session selectively
-        for (session_id, session) in sessions {
-            // Check if session has active transactions
-            if session.has_active_transactions() {
-                info!(
-                    session_id = %session_id,
-                    "removing session with active transactions during duckling queue rotation"
-                );
-                self.remove_session(&session_id);
-                continue;
-            }
-
-            // Check if session has prepared statements
-            if session.has_prepared_statements() {
-                info!(
-                    session_id = %session_id,
-                    "removing session with prepared statements during duckling queue rotation"
-                );
-                self.remove_session(&session_id);
-                continue;
-            }
-
-            // Session is clean - try to replace connection
-            match self.factory.lock().unwrap().clone_connection() {
-                Ok(new_conn) => {
-                    if let Err(err) = session.replace_connection(new_conn) {
-                        warn!(
-                            session_id = %session_id,
-                            error = %err,
-                            "failed to replace connection; removing session"
-                        );
-                        self.remove_session(&session_id);
-                    } else {
-                        debug!(
-                            session_id = %session_id,
-                            "successfully switched session to new duckling queue file"
-                        );
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        session_id = %session_id,
-                        error = %err,
-                        "failed to create new connection; removing session"
-                    );
-                    self.remove_session(&session_id);
-                }
+        for session in sessions {
+            if let Err(e) = session.maybe_rotate_queue() {
+                warn!(session_id = %session.id(), error = %e, "failed to rotate session queue");
             }
         }
-
-        Ok(())
     }
 
+    /// Get all active session IDs for orphan detection
+    pub fn get_all_session_ids(&self) -> Vec<SessionId> {
+        let inner = self.inner.read().expect("registry lock poisoned");
+        inner.sessions.keys().cloned().collect()
+    }
+
+    #[allow(dead_code)]
     pub fn remove_session(&self, session_id: &SessionId) {
         let mut inner = self.inner.write().expect("registry lock poisoned");
-        if inner.sessions.remove(session_id).is_some() {
+        if let Some(session) = inner.sessions.remove(session_id) {
+            // Seal queue file before removing session
+            if let Err(e) = session.cleanup_queue() {
+                warn!(session_id = %session_id, error = %e, "failed to cleanup session queue");
+            }
             info!(session_id = %session_id, "session removed");
         }
+    }
+
+    /// Get total session count
+    #[allow(dead_code)]
+    pub fn session_count(&self) -> usize {
+        let inner = self.inner.read().expect("registry lock poisoned");
+        inner.sessions.len()
     }
 }

@@ -25,15 +25,11 @@ mod handlers;
 #[derive(Clone)]
 pub struct SwanFlightSqlService {
     registry: Arc<SessionRegistry>,
-    dq_runtime: Arc<DucklingQueueRuntime>,
 }
 
 impl SwanFlightSqlService {
-    pub fn new(registry: Arc<SessionRegistry>, dq_runtime: Arc<DucklingQueueRuntime>) -> Self {
-        Self {
-            registry,
-            dq_runtime,
-        }
+    pub fn new(registry: Arc<SessionRegistry>, _dq_runtime: Arc<DucklingQueueRuntime>) -> Self {
+        Self { registry }
     }
 
     /// Extract session ID from tonic Request for session tracking (Phase 2)
@@ -56,16 +52,6 @@ impl SwanFlightSqlService {
         self.registry
             .get_or_create_by_id(&session_id)
             .map_err(Self::status_from_error)
-    }
-
-    pub(crate) async fn try_handle_duckling_queue_command(
-        &self,
-        sql: &str,
-        session: &Arc<Session>,
-    ) -> Result<Option<i64>, Status> {
-        self.dq_runtime
-            .execute_command(sql, session)
-            .map_err(|err| Status::internal(format!("duckling queue command failed: {err}")))
     }
 
     /// Prepare request: extract session_id, record to tracing span, and get/create session

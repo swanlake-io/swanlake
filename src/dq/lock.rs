@@ -58,6 +58,7 @@ impl FileLock {
     }
 
     /// Refresh the lock by updating its timestamp to prevent expiration.
+    #[allow(dead_code)]
     pub fn refresh(&self) -> Result<()> {
         let payload = generate_lock_payload();
         fs::write(&self.lock_path, payload)
