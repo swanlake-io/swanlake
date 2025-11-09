@@ -29,7 +29,7 @@ async fn run_duckling_queue_rotation(args: &CliArgs) -> Result<()> {
         .test_dir()
         .context("--test-dir is required for duckling queue scenario")?;
     let attach_sql = format!(
-        "ATTACH 'ducklake:{test_dir}/swanlake.db' AS swanlake \
+        "ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake \
          (DATA_PATH '{test_dir}/swanlake_files');"
     );
 
@@ -83,8 +83,7 @@ async fn run_duckling_queue_rotation(args: &CliArgs) -> Result<()> {
     writer.exec("PRAGMA duckling_queue.flush;").await?;
 
     assert_eq!(
-        writer
-            .query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_a")
+        peer.query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_a")
             .await?,
         1,
         "flushed data should be available in swanlake"
@@ -96,13 +95,15 @@ async fn run_duckling_queue_rotation(args: &CliArgs) -> Result<()> {
     peer.exec("PRAGMA duckling_queue.flush;").await?;
 
     assert_eq!(
-        peer.query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_b")
+        writer
+            .query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_b")
             .await?,
         1,
         "flushed data should be available in swanlake"
     );
     assert_eq!(
-        peer.query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_post")
+        writer
+            .query_single_i64("SELECT COUNT(*) FROM swanlake.concurrent_case_post")
             .await?,
         1,
         "flushed data should be available in swanlake"
