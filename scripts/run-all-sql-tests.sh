@@ -1,4 +1,19 @@
 #!/usr/bin/env bash
+# Run all SQL tests in tests/sql directory
+#
+# Usage:
+#   ./scripts/run-all-sql-tests.sh [TEST_FILTER]
+#
+# Examples:
+#   ./scripts/run-all-sql-tests.sh              # Run all *.test files
+#   ./scripts/run-all-sql-tests.sh "duck*.test" # Run only duckling/ducklake tests
+#   ./scripts/run-all-sql-tests.sh "show*.test" # Run only show_describe tests
+#
+# Environment variables:
+#   ENDPOINT - SwanLake endpoint (default: grpc://127.0.0.1:4214)
+#   CONFIG_FILE - Config file path (default: config.toml)
+#   SERVER_BIN - Server binary command (default: cargo run --bin swanlake --)
+#   WAIT_SECONDS - Server startup timeout (default: 30)
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -7,6 +22,7 @@ CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.toml}"
 SERVER_BIN="${SERVER_BIN:-cargo run --bin swanlake --}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"
 TEST_DIR="$ROOT_DIR/target/tmp/all-sql-tests-$(date +%s)"
+TEST_FILTER="${1:-*.test}"
 
 # Setup DuckDB if not already done
 if [[ ! -f "$ROOT_DIR/.duckdb/env.sh" ]]; then
@@ -18,18 +34,20 @@ if [[ -f "$ROOT_DIR/.duckdb/env.sh" ]]; then
   source "$ROOT_DIR/.duckdb/env.sh"
 fi
 
-# Collect all test files
+# Collect all test files matching the filter
 TEST_FILES=()
-for test_file in "$ROOT_DIR/tests/sql"/*.test; do
+for test_file in "$ROOT_DIR/tests/sql"/$TEST_FILTER; do
   if [[ -f "$test_file" ]]; then
     TEST_FILES+=("$test_file")
   fi
 done
 
 if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
-  echo "No test files found in $ROOT_DIR/tests/sql/"
+  echo "No test files found matching: $ROOT_DIR/tests/sql/$TEST_FILTER"
   exit 0
 fi
+
+echo "Found ${#TEST_FILES[@]} test file(s) to run"
 
 mkdir -p "$ROOT_DIR/target/tmp"
 
@@ -85,7 +103,7 @@ print(f"Timed out waiting for Flight SQL server at {host}:{port}", file=sys.stde
 sys.exit(1)
 PY
 
-echo "Running all SQL tests with TEST_DIR: $TEST_DIR"
+echo "Running SQL tests with filter '$TEST_FILTER' and TEST_DIR: $TEST_DIR"
 if cargo run --manifest-path "$ROOT_DIR/tests/runner/Cargo.toml" -- "${TEST_FILES[@]}" --endpoint "$ENDPOINT" --test-dir "$TEST_DIR"; then
   rm -rf "$TEST_DIR"
 else

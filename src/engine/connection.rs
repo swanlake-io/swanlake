@@ -42,29 +42,23 @@ impl DuckDbConnection {
     ///
     /// **Implementation Note:**
     /// DuckDB-rs doesn't provide a `Statement::schema()` method to get schema
-    /// without execution. We use a LIMIT 0 wrapper as a pragmatic optimization:
+    /// without execution. We execute the query as-is and rely on DuckDB's lazy
+    /// evaluation to avoid pulling all data unnecessarily.
     ///
-    /// ```sql
-    /// SELECT * FROM (original_query) LIMIT 0
-    /// ```
-    ///
-    /// This causes DuckDB to:
-    /// 1. Parse and validate the SQL
-    /// 2. Plan the query (validate tables/columns/types)
-    /// 3. Return schema WITHOUT scanning data
-    ///
-    /// **Performance Impact:** ~20x faster than full execution
+    /// This approach:
+    /// 1. Is simple and always correct
+    /// 2. Works with all SQL syntax (SHOW, DESCRIBE, PRAGMA, etc.)
+    /// 3. Relies on DuckDB's streaming to avoid memory issues
     pub fn schema_for_query(&self, sql: &str) -> Result<Schema, ServerError> {
         if sql.contains('\0') {
             return Err(ServerError::UnsupportedParameter(
                 "SQL contains null bytes".to_string(),
             ));
         }
-        let trimmed_sql = sql.trim_end_matches(';');
-        let schema_query = format!("SELECT * FROM ({}) LIMIT 0", trimmed_sql);
+        let trimmed_sql = sql.trim_end_matches(';').trim();
 
         let conn = self.conn.lock().expect("connection mutex poisoned");
-        let mut stmt = conn.prepare(&schema_query)?;
+        let mut stmt = conn.prepare(trimmed_sql)?;
         let param_count = stmt.parameter_count();
         let arrow = if param_count == 0 {
             stmt.query_arrow([])?
@@ -74,10 +68,7 @@ impl DuckDbConnection {
         };
         let schema = arrow.get_schema();
 
-        debug!(
-            field_count = schema.fields().len(),
-            "retrieved schema (optimized with LIMIT 0)"
-        );
+        debug!(field_count = schema.fields().len(), "retrieved schema");
         Ok(schema.as_ref().clone())
     }
 

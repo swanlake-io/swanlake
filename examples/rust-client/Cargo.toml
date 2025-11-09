@@ -1,0 +1,26 @@
+[package]
+name = "swanlake-client"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "swanlake_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "swanlake-cli"
+path = "src/bin/cli.rs"
+
+[dependencies]
+anyhow = "1.0"
+arrow-array = "56"
+arrow-schema = "56"
+adbc_core = "0.20.0"
+adbc_driver_manager = "0.20.0"
+adbc_driver_flightsql = { package = "adbc-driver-flightsql", git = "https://github.com/swanlake-io/adbc-driver-flightsql" }
+clap = { version = "4.5", features = ["derive"] }
+comfy-table = "7.1"
+dirs = "5.0"
+rustyline = "14.0"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }

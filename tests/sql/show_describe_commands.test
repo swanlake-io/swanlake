@@ -1,0 +1,52 @@
+# name: tests/sql/show_describe_commands.test
+# description: Test that SHOW, DESCRIBE, and PRAGMA commands work correctly (no schema optimization, executed as-is)
+# group: [sql]
+
+# Test SHOW TABLES command
+statement ok
+CREATE TABLE test_table (id INT, name VARCHAR);
+
+query I
+SELECT COUNT(*) > 0 FROM (SHOW TABLES) WHERE name = 'test_table'
+----
+true
+
+# Test SHOW DATABASES command (was causing "LIMIT 0" syntax errors before fix)
+query I
+SELECT COUNT(*) >= 0 FROM (SHOW DATABASES)
+----
+true
+
+# Test SHOW DATABASES standalone
+statement ok
+SHOW DATABASES;
+
+# Test SHOW TABLES standalone
+statement ok
+SHOW TABLES;
+
+# Test DESCRIBE command with subquery
+query I
+SELECT COUNT(*) FROM (DESCRIBE test_table)
+----
+2
+
+# Test DESC command (alias for DESCRIBE)
+statement ok
+DESC test_table;
+
+# Test PRAGMA commands in subquery
+query I
+SELECT COUNT(*) FROM (PRAGMA table_info('test_table'))
+----
+2
+
+# Test SHOW with WHERE clause
+query I
+SELECT COUNT(*) FROM (SHOW TABLES) WHERE name LIKE 'test%'
+----
+1
+
+# Clean up
+statement ok
+DROP TABLE test_table;

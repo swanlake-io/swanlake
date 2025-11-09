@@ -31,8 +31,7 @@ COPY --from=builder /app/.duckdb .duckdb
 COPY --from=builder /app/target/release/swanlake swanlake
 
 # Copy scripts for tests
-COPY scripts/run-all-sql-tests.sh scripts/
-COPY scripts/run_ducklake_tests.sh scripts/
+COPY --from=builder /app/scripts scripts/
 
 # Copy and set up entrypoint script
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
