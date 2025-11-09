@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -21,17 +21,16 @@ const FLUSHED_TABLE_PREFIX: &str = "__dq_flushed_";
 pub struct DucklingQueueRuntime {
     manager: Arc<DucklingQueueManager>,
     #[allow(dead_code)]
-    factory: Arc<EngineFactory>,
+    factory: Arc<Mutex<EngineFactory>>,
     registry: Arc<SessionRegistry>,
 }
 
 impl DucklingQueueRuntime {
     pub fn new(
         manager: Arc<DucklingQueueManager>,
-        factory: EngineFactory,
+        factory: Arc<Mutex<EngineFactory>>,
         registry: Arc<SessionRegistry>,
     ) -> Self {
-        let factory = Arc::new(factory);
         let registry_clone = registry.clone();
         let (tx, rx) = mpsc::channel::<PathBuf>(64);
 
@@ -89,11 +88,13 @@ impl DucklingQueueRuntime {
 
         let conn = self
             .factory
-            .create_raw_connection()
+            .lock()
+            .unwrap()
+            .clone_connection()
             .context("failed to create connection for duckling queue flush")?;
 
         for path in pending {
-            let flushed = safe_flush_file(&self.manager, &conn, &path)?;
+            let flushed = conn.with_inner(|inner| safe_flush_file(&self.manager, inner, &path))?;
             if !flushed {
                 bail!(
                     "duckling queue file {} is currently being flushed by another worker",
@@ -174,7 +175,7 @@ async fn sealed_scan_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<P
 
 async fn flush_loop(
     manager: Arc<DucklingQueueManager>,
-    factory: Arc<EngineFactory>,
+    factory: Arc<Mutex<EngineFactory>>,
     mut rx: mpsc::Receiver<PathBuf>,
 ) {
     let semaphore = Arc::new(Semaphore::new(
@@ -188,8 +189,8 @@ async fn flush_loop(
         let path_for_log = path.clone();
         tokio::spawn(async move {
             let flush_result = tokio::task::spawn_blocking(move || {
-                let conn = factory_clone.create_raw_connection()?;
-                safe_flush_file(&manager_clone, &conn, &path)
+                let conn = factory_clone.lock().unwrap().clone_connection()?;
+                conn.with_inner(|inner| safe_flush_file(&manager_clone, inner, &path))
             })
             .await
             .map_err(|join_err| anyhow!(join_err))

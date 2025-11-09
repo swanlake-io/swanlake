@@ -209,4 +209,13 @@ impl DuckDbConnection {
         debug!("executed batch");
         Ok(())
     }
+
+    /// Execute a closure with access to the inner duckdb::Connection
+    pub fn with_inner<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&duckdb::Connection) -> R,
+    {
+        let conn = self.conn.lock().expect("connection mutex poisoned");
+        f(&conn)
+    }
 }

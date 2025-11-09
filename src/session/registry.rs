@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -26,12 +26,10 @@ use crate::session::Session;
 #[derive(Clone)]
 pub struct SessionRegistry {
     inner: Arc<RwLock<RegistryInner>>,
-    factory: EngineFactory,
+    factory: Arc<Mutex<EngineFactory>>,
     max_sessions: usize,
     session_timeout: Duration,
     writes_enabled: bool,
-    #[allow(dead_code)]
-    dq_manager: Option<Arc<DucklingQueueManager>>,
 }
 
 struct RegistryInner {
@@ -43,9 +41,13 @@ impl SessionRegistry {
     #[instrument(skip(config, dq_manager))]
     pub fn new(
         config: &ServerConfig,
-        dq_manager: Option<Arc<DucklingQueueManager>>,
+        dq_manager: Arc<DucklingQueueManager>,
     ) -> Result<Self, ServerError> {
-        let factory = EngineFactory::new(config, dq_manager.clone())?;
+        let duckling_queue_path = dq_manager.active_file().path.display().to_string();
+        let factory = Arc::new(Mutex::new(EngineFactory::new(
+            config,
+            &duckling_queue_path,
+        )?));
         let max_sessions = config.max_sessions.unwrap_or(100);
         let session_timeout = Duration::from_secs(config.session_timeout_seconds.unwrap_or(1800)); // 30min default
 
@@ -63,11 +65,10 @@ impl SessionRegistry {
             max_sessions,
             session_timeout,
             writes_enabled: config.enable_writes,
-            dq_manager,
         })
     }
 
-    pub fn engine_factory(&self) -> EngineFactory {
+    pub fn engine_factory(&self) -> Arc<Mutex<EngineFactory>> {
         self.factory.clone()
     }
 
@@ -135,7 +136,7 @@ impl SessionRegistry {
         }
 
         // Create new connection
-        let connection = self.factory.create_connection()?;
+        let connection = self.factory.lock().unwrap().clone_connection()?;
 
         // Create session with the specified ID
         let session = Arc::new(Session::new_with_id(
@@ -166,6 +167,8 @@ impl SessionRegistry {
 
         // Step 1: Recreate the base connection with new duckling queue path
         self.factory
+            .lock()
+            .unwrap()
             .recreate_base_connection(new_path)
             .context("failed to recreate base connection")?;
 
@@ -202,7 +205,7 @@ impl SessionRegistry {
             }
 
             // Session is clean - try to replace connection
-            match self.factory.create_connection() {
+            match self.factory.lock().unwrap().clone_connection() {
                 Ok(new_conn) => {
                     if let Err(err) = session.replace_connection(new_conn) {
                         warn!(

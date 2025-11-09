@@ -24,26 +24,23 @@ pub struct DucklingQueueSettings {
 }
 
 impl DucklingQueueSettings {
-    pub fn from_config(config: &ServerConfig) -> Option<Self> {
-        if !config.duckling_queue_enable {
-            return None;
-        }
-        let root = config.duckling_queue_root.as_ref()?;
+    pub fn from_config(config: &ServerConfig) -> Self {
+        let root = PathBuf::from(&config.duckling_queue_root);
         let rotate_interval = Duration::from_secs(config.duckling_queue_rotate_interval_seconds);
         let lock_ttl = if rotate_interval > Duration::ZERO {
             3 * rotate_interval
         } else {
             Duration::from_secs(900) // 15 minutes as fallback
         };
-        Some(Self {
-            root: PathBuf::from(root),
+        Self {
+            root,
             rotate_interval,
             rotate_size_bytes: config.duckling_queue_rotate_size_bytes,
             flush_interval: Duration::from_secs(config.duckling_queue_flush_interval_seconds),
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes,
             lock_ttl,
             target_schema: config.duckling_queue_target_schema.clone(),
-        })
+        }
     }
 }
 
@@ -102,11 +99,9 @@ pub struct DucklingQueueManager {
 }
 
 impl DucklingQueueManager {
-    /// Build a manager when the feature is enabled. Returns `Ok(None)` if disabled.
-    pub fn try_new(config: &ServerConfig) -> Result<Option<Self>> {
-        let Some(settings) = DucklingQueueSettings::from_config(config) else {
-            return Ok(None);
-        };
+    /// Build a manager.
+    pub fn new(config: &ServerConfig) -> Result<Self> {
+        let settings = DucklingQueueSettings::from_config(config);
         let dirs = QueueDirectories::new(settings.root.clone())?;
 
         // Before creating a new active file, move any leftover ones into sealed state.
@@ -117,7 +112,7 @@ impl DucklingQueueManager {
         let lock = FileLock::try_acquire(&active.path, settings.lock_ttl)?
             .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for active file"))?;
 
-        Ok(Some(Self {
+        Ok(Self {
             settings,
             dirs,
             server_id,
@@ -125,7 +120,7 @@ impl DucklingQueueManager {
                 active,
                 active_lock: Some(lock),
             }),
-        }))
+        })
     }
 
     /// Returns a reference to the derived settings.
@@ -142,12 +137,6 @@ impl DucklingQueueManager {
     /// Returns a reference to the queue directories.
     pub fn dirs(&self) -> &QueueDirectories {
         &self.dirs
-    }
-
-    /// Renders the ATTACH SQL snippet for the currently active file.
-    pub fn attach_sql(&self) -> String {
-        let active = self.active_file();
-        self.render_attach_sql(&active.path)
     }
 
     pub fn maybe_rotate_with<F>(&self, switch: F) -> Result<Option<SealedQueueFile>>
@@ -204,11 +193,6 @@ impl DucklingQueueManager {
     /// List all sealed queue files awaiting flush.
     pub fn sealed_files(&self) -> Result<Vec<PathBuf>> {
         list_db_files_in_dir(&self.dirs.sealed)
-    }
-
-    fn render_attach_sql(&self, path: &Path) -> String {
-        let path_str = path.display().to_string();
-        format!("ATTACH '{}' AS duckling_queue;", path_str)
     }
 }
 

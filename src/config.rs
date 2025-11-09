@@ -30,10 +30,8 @@ pub struct ServerConfig {
     pub log_format: String,
     /// Whether to enable ANSI colors in logs.
     pub log_ansi: bool,
-    /// Enable the Duckling Queue staging layer.
-    pub duckling_queue_enable: bool,
     /// Persistent directory root for Duckling Queue files.
-    pub duckling_queue_root: Option<String>,
+    pub duckling_queue_root: String,
     /// Time-based rotation threshold in seconds.
     pub duckling_queue_rotate_interval_seconds: u64,
     /// Size-based rotation threshold in bytes.
@@ -61,8 +59,7 @@ impl Default for ServerConfig {
             session_timeout_seconds: Some(900),
             log_format: "compact".to_string(),
             log_ansi: true,
-            duckling_queue_enable: true,
-            duckling_queue_root: Some("duckling_queue".to_string()),
+            duckling_queue_root: "duckling_queue".to_string(),
             duckling_queue_rotate_interval_seconds: 300,
             duckling_queue_rotate_size_bytes: 100_000_000,
             duckling_queue_flush_interval_seconds: 60,
@@ -99,24 +96,20 @@ impl ServerConfig {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
-        if self.duckling_queue_enable {
-            let root = self.duckling_queue_root.as_deref().ok_or_else(|| {
-                anyhow::anyhow!("DUCKLING_QUEUE_ROOT must be set when duckling queue is enabled")
-            })?;
-            let path = Path::new(root);
-            if !path.exists() {
-                fs::create_dir_all(path).with_context(|| {
-                    format!(
-                        "failed to create duckling queue root directory '{}'",
-                        path.display()
-                    )
-                })?;
-            } else if !path.is_dir() {
-                anyhow::bail!(
-                    "duckling queue root path '{}' is not a directory",
+        let root = &self.duckling_queue_root;
+        let path = Path::new(root);
+        if !path.exists() {
+            fs::create_dir_all(path).with_context(|| {
+                format!(
+                    "failed to create duckling queue root directory '{}'",
                     path.display()
-                );
-            }
+                )
+            })?;
+        } else if !path.is_dir() {
+            anyhow::bail!(
+                "duckling queue root path '{}' is not a directory",
+                path.display()
+            );
         }
         Ok(())
     }

@@ -25,14 +25,11 @@ mod handlers;
 #[derive(Clone)]
 pub struct SwanFlightSqlService {
     registry: Arc<SessionRegistry>,
-    dq_runtime: Option<Arc<DucklingQueueRuntime>>,
+    dq_runtime: Arc<DucklingQueueRuntime>,
 }
 
 impl SwanFlightSqlService {
-    pub fn new(
-        registry: Arc<SessionRegistry>,
-        dq_runtime: Option<Arc<DucklingQueueRuntime>>,
-    ) -> Self {
+    pub fn new(registry: Arc<SessionRegistry>, dq_runtime: Arc<DucklingQueueRuntime>) -> Self {
         Self {
             registry,
             dq_runtime,
@@ -66,11 +63,7 @@ impl SwanFlightSqlService {
         sql: &str,
         session: &Arc<Session>,
     ) -> Result<Option<i64>, Status> {
-        let Some(runtime) = &self.dq_runtime else {
-            return Ok(None);
-        };
-
-        runtime
+        self.dq_runtime
             .execute_command(sql, session)
             .map_err(|err| Status::internal(format!("duckling queue command failed: {err}")))
     }

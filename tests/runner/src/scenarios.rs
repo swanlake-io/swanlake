@@ -30,7 +30,7 @@ async fn run_duckling_queue_rotation(args: &CliArgs) -> Result<()> {
         .context("--test-dir is required for duckling queue scenario")?;
     let attach_sql = format!(
         "ATTACH 'ducklake:{test_dir}/swanlake.db' AS swanlake \
-         (DATA_PATH '{test_dir}/swanlake_files', METADATA_CATALOG 'swanlake_meta');"
+         (DATA_PATH '{test_dir}/swanlake_files');"
     );
 
     let mut writer = SqlClient::connect(args.endpoint()).await?;

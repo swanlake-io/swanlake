@@ -26,9 +26,10 @@ async fn main() -> Result<()> {
         .bind_addr()
         .context("failed to resolve bind address")?;
 
-    let dq_manager = DucklingQueueManager::try_new(&config)
-        .context("failed to initialize duckling queue manager")?
-        .map(Arc::new);
+    let dq_manager = Arc::new(
+        DucklingQueueManager::new(&config)
+            .context("failed to initialize duckling queue manager")?,
+    );
 
     // Create session registry (Phase 2: connection-based session persistence)
     let registry = Arc::new(
@@ -36,13 +37,11 @@ async fn main() -> Result<()> {
             .context("failed to initialize session registry")?,
     );
 
-    let dq_runtime = dq_manager.as_ref().map(|manager| {
-        Arc::new(dq::DucklingQueueRuntime::new(
-            manager.clone(),
-            registry.engine_factory(),
-            registry.clone(),
-        ))
-    });
+    let dq_runtime = Arc::new(dq::DucklingQueueRuntime::new(
+        dq_manager.clone(),
+        registry.engine_factory(),
+        registry.clone(),
+    ));
 
     // Spawn periodic session cleanup task
     let registry_clone = registry.clone();
