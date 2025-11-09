@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use duckdb::types::Value;
 use tracing::{debug, instrument};
 
-use crate::dq::{DucklingQueueManager, SessionQueue};
+use crate::dq::{QueueManager, QueueSession};
 use crate::engine::{DuckDbConnection, QueryResult};
 use crate::error::ServerError;
 use crate::session::id::{
@@ -80,15 +80,15 @@ pub struct Session {
     transaction_id_gen: Arc<TransactionIdGenerator>,
     statement_handle_gen: Arc<StatementHandleGenerator>,
     last_activity: Arc<Mutex<Instant>>,
-    writes_enabled: bool,
     // Duckling Queue support
-    dq_queue: Arc<Mutex<Option<SessionQueue>>>,
+    dq_manager: Option<Arc<QueueManager>>,
+    dq_queue: Arc<Mutex<Option<QueueSession>>>,
 }
 
 impl Session {
     /// Create a new session with a specific ID (for connection-based persistence)
     #[instrument(skip(connection))]
-    pub fn new_with_id(id: SessionId, connection: DuckDbConnection, writes_enabled: bool) -> Self {
+    pub fn new_with_id(id: SessionId, connection: DuckDbConnection) -> Self {
         debug!(session_id = %id, "created new session with specific ID");
 
         Self {
@@ -99,7 +99,7 @@ impl Session {
             transaction_id_gen: Arc::new(TransactionIdGenerator::new()),
             statement_handle_gen: Arc::new(StatementHandleGenerator::new()),
             last_activity: Arc::new(Mutex::new(Instant::now())),
-            writes_enabled,
+            dq_manager: None,
             dq_queue: Arc::new(Mutex::new(None)),
         }
     }
@@ -110,13 +110,13 @@ impl Session {
     pub fn new_with_id_and_dq(
         id: SessionId,
         connection: DuckDbConnection,
-        writes_enabled: bool,
-        dq_manager: Arc<DucklingQueueManager>,
+        dq_manager: Arc<QueueManager>,
     ) -> Result<Self, ServerError> {
         debug!(session_id = %id, "creating new session with duckling queue support");
 
         // Create and attach queue immediately
-        let sq = SessionQueue::create(id.clone(), dq_manager)
+        let sq = dq_manager
+            .open_session_queue(id.clone())
             .map_err(|e| ServerError::Internal(format!("failed to create session queue: {}", e)))?;
 
         let sql = sq.attach_sql();
@@ -132,7 +132,7 @@ impl Session {
             transaction_id_gen: Arc::new(TransactionIdGenerator::new()),
             statement_handle_gen: Arc::new(StatementHandleGenerator::new()),
             last_activity: Arc::new(Mutex::new(Instant::now())),
-            writes_enabled,
+            dq_manager: Some(dq_manager),
             dq_queue: Arc::new(Mutex::new(Some(sq))),
         })
     }
@@ -181,9 +181,6 @@ impl Session {
             return Ok(result);
         }
 
-        if !self.writes_enabled {
-            return Err(ServerError::WritesDisabled);
-        }
         self.touch();
         self.connection.execute_statement(sql)
     }
@@ -215,13 +212,11 @@ impl Session {
         let sealed_path = self.force_rotate_queue()?;
 
         // Flush only this session's sealed file synchronously
-        let dq_manager = {
-            let queue = self.dq_queue.lock().expect("dq_queue mutex poisoned");
-            queue
-                .as_ref()
-                .map(|sq| sq.manager().clone())
-                .ok_or_else(|| ServerError::Internal("no duckling queue manager".into()))?
-        };
+        let dq_manager = self
+            .dq_manager
+            .as_ref()
+            .ok_or_else(|| ServerError::Internal("no duckling queue manager".into()))?
+            .clone();
 
         // Use session's own connection to flush (it's already in a spawn_blocking context)
         self.connection
@@ -249,9 +244,6 @@ impl Session {
         sql: &str,
         params: &[Value],
     ) -> Result<usize, ServerError> {
-        if !self.writes_enabled {
-            return Err(ServerError::WritesDisabled);
-        }
         self.touch();
         self.connection.execute_statement_with_params(sql, params)
     }
@@ -352,9 +344,6 @@ impl Session {
     /// Begin a new transaction
     #[instrument(skip(self), fields(session_id = %self.id))]
     pub fn begin_transaction(&self) -> Result<TransactionId, ServerError> {
-        if !self.writes_enabled {
-            return Err(ServerError::WritesDisabled);
-        }
         self.touch();
 
         // Execute BEGIN TRANSACTION on the connection
@@ -374,9 +363,6 @@ impl Session {
     /// Commit a transaction
     #[instrument(skip(self), fields(session_id = %self.id, transaction_id = %transaction_id))]
     pub fn commit_transaction(&self, transaction_id: TransactionId) -> Result<(), ServerError> {
-        if !self.writes_enabled {
-            return Err(ServerError::WritesDisabled);
-        }
         self.touch();
 
         // Verify transaction exists
@@ -399,9 +385,6 @@ impl Session {
     /// Rollback a transaction
     #[instrument(skip(self), fields(session_id = %self.id, transaction_id = %transaction_id))]
     pub fn rollback_transaction(&self, transaction_id: TransactionId) -> Result<(), ServerError> {
-        if !self.writes_enabled {
-            return Err(ServerError::WritesDisabled);
-        }
         self.touch();
 
         // Verify transaction exists

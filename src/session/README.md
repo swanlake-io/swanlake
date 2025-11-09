@@ -147,8 +147,6 @@ Updated on every request to prevent premature cleanup.
 max_sessions = 100                  # Maximum concurrent sessions
 session_timeout_seconds = 1800      # 30 minutes
 
-# DuckDB initialization
-ducklake_enable = true
 ducklake_init_sql = """
   ATTACH 's3://my-bucket/data' AS mydata;
   ATTACH 'postgresql://host/db' AS pgdb;
@@ -160,7 +158,6 @@ ducklake_init_sql = """
 ```bash
 export SWANLAKE_MAX_SESSIONS=100
 export SWANLAKE_SESSION_TIMEOUT_SECONDS=1800
-export SWANLAKE_DUCKLAKE_ENABLE=true
 export SWANLAKE_DUCKLAKE_INIT_SQL="ATTACH 's3://bucket/data' AS mydata;"
 ```
 
@@ -168,7 +165,7 @@ export SWANLAKE_DUCKLAKE_INIT_SQL="ATTACH 's3://bucket/data' AS mydata;"
 
 Every new session connection is initialized with:
 
-1. **Extensions** (if `ducklake_enable = true`):
+1. **Extensions**:
    ```sql
    INSTALL ducklake; INSTALL httpfs; INSTALL aws; INSTALL postgres;
    LOAD ducklake; LOAD httpfs; LOAD aws; LOAD postgres;

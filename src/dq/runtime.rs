@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, Semaphore};
 use tracing::{debug, error, info, warn};
 
 use crate::dq::lock::FileLock;
-use crate::dq::DucklingQueueManager;
+use crate::dq::QueueManager;
 use crate::engine::EngineFactory;
 use crate::session::registry::SessionRegistry;
 
@@ -16,18 +16,18 @@ const MIN_FLUSH_TICK: Duration = Duration::from_secs(5);
 const FLUSHED_TABLE_PREFIX: &str = "__dq_flushed_";
 
 /// Background runtime that drives Duckling Queue rotation and flushing.
-pub struct DucklingQueueRuntime {
+pub struct QueueRuntime {
     #[allow(dead_code)]
-    manager: Arc<DucklingQueueManager>,
+    manager: Arc<QueueManager>,
     #[allow(dead_code)]
     factory: Arc<Mutex<EngineFactory>>,
     #[allow(dead_code)]
     registry: Arc<SessionRegistry>,
 }
 
-impl DucklingQueueRuntime {
+impl QueueRuntime {
     pub fn new(
-        manager: Arc<DucklingQueueManager>,
+        manager: Arc<QueueManager>,
         factory: Arc<Mutex<EngineFactory>>,
         registry: Arc<SessionRegistry>,
     ) -> Self {
@@ -48,7 +48,7 @@ impl DucklingQueueRuntime {
 }
 
 async fn rotation_loop(
-    manager: Arc<DucklingQueueManager>,
+    manager: Arc<QueueManager>,
     registry: Arc<SessionRegistry>,
     tx: mpsc::Sender<PathBuf>,
 ) {
@@ -88,7 +88,7 @@ async fn rotation_loop(
     }
 }
 
-async fn sealed_scan_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<PathBuf>) {
+async fn sealed_scan_loop(manager: Arc<QueueManager>, tx: mpsc::Sender<PathBuf>) {
     let mut interval = tokio::time::interval(manager.settings().flush_interval.max(MIN_FLUSH_TICK));
     info!(
         "sealed scan loop interval {} seconds",
@@ -113,7 +113,7 @@ async fn sealed_scan_loop(manager: Arc<DucklingQueueManager>, tx: mpsc::Sender<P
 }
 
 async fn flush_loop(
-    manager: Arc<DucklingQueueManager>,
+    manager: Arc<QueueManager>,
     factory: Arc<Mutex<EngineFactory>>,
     mut rx: mpsc::Receiver<PathBuf>,
 ) {
@@ -155,7 +155,7 @@ async fn flush_loop(
 /// Flush a sealed queue file into the target DuckLake schema.
 /// Returns true if flushed, false if file is busy (locked by another worker).
 pub fn flush_sealed_file(
-    manager: &DucklingQueueManager,
+    manager: &QueueManager,
     conn: &duckdb::Connection,
     path: &Path,
 ) -> Result<bool> {
@@ -286,7 +286,7 @@ fn quote_ident(ident: &str) -> String {
     escaped
 }
 
-async fn cleanup_loop(manager: Arc<DucklingQueueManager>) {
+async fn cleanup_loop(manager: Arc<QueueManager>) {
     let mut interval = tokio::time::interval(Duration::from_secs(3600)); // Run every hour
     loop {
         interval.tick().await;
@@ -303,7 +303,7 @@ async fn cleanup_loop(manager: Arc<DucklingQueueManager>) {
     }
 }
 
-fn cleanup_flushed_files(manager: &DucklingQueueManager) -> Result<()> {
+fn cleanup_flushed_files(manager: &QueueManager) -> Result<()> {
     let flushed_dir = &manager.dirs().flushed;
     let retention_duration = Duration::from_secs(3 * 24 * 3600); // 3 days
     let now = std::time::SystemTime::now();

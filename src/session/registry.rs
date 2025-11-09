@@ -15,7 +15,7 @@ use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
 
 use crate::config::ServerConfig;
-use crate::dq::DucklingQueueManager;
+use crate::dq::QueueManager;
 use crate::engine::EngineFactory;
 use crate::error::ServerError;
 use crate::session::id::SessionId;
@@ -28,12 +28,11 @@ pub struct SessionRegistry {
     factory: Arc<Mutex<EngineFactory>>,
     max_sessions: usize,
     session_timeout: Duration,
-    writes_enabled: bool,
 }
 
 struct RegistryInner {
     sessions: HashMap<SessionId, Arc<Session>>,
-    dq_manager: Option<Arc<DucklingQueueManager>>,
+    dq_manager: Option<Arc<QueueManager>>,
 }
 
 impl SessionRegistry {
@@ -41,7 +40,7 @@ impl SessionRegistry {
     #[instrument(skip(config, dq_manager))]
     pub fn new(
         config: &ServerConfig,
-        dq_manager: Option<Arc<DucklingQueueManager>>,
+        dq_manager: Option<Arc<QueueManager>>,
     ) -> Result<Self, ServerError> {
         // Note: We no longer need a global duckling queue path since each session manages its own
         let factory = Arc::new(Mutex::new(EngineFactory::new(config, "")?));
@@ -62,7 +61,6 @@ impl SessionRegistry {
             factory,
             max_sessions,
             session_timeout,
-            writes_enabled: config.enable_writes,
         })
     }
 
@@ -147,15 +145,10 @@ impl SessionRegistry {
                 Arc::new(Session::new_with_id_and_dq(
                     session_id.clone(),
                     connection,
-                    self.writes_enabled,
                     dq_manager.clone(),
                 )?)
             } else {
-                Arc::new(Session::new_with_id(
-                    session_id.clone(),
-                    connection,
-                    self.writes_enabled,
-                ))
+                Arc::new(Session::new_with_id(session_id.clone(), connection))
             }
         };
 

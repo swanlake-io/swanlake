@@ -28,29 +28,12 @@ cargo run
 ```
 
 ## Configuration Cheatsheet
-All env vars use the `SWANLAKE_` prefix.
-
-| Key | Meaning | Default |
-| --- | --- | --- |
-| `HOST` | gRPC bind address | `0.0.0.0` |
-| `PORT` | gRPC port | `4214` |
-| `POOL_SIZE` | DuckDB connection pool size | `10` |
-| `READ_POOL_SIZE` | Read-only pool size override | `10` |
-| `WRITE_POOL_SIZE` | Write pool size override | `3` |
-| `ENABLE_WRITES` | Permit write operations | `true` |
-| `MAX_SESSIONS` | Concurrent session cap | `100` |
-| `SESSION_TIMEOUT_SECONDS` | Idle timeout | `900` |
-| `DUCKLAKE_ENABLE` | Load DuckLake extension | `true` |
-| `DUCKLAKE_INIT_SQL` | Post-load SQL hook | _(unset)_ |
-| `LOG_FORMAT` | `compact` \| `json` | `compact` |
-| `LOG_ANSI` | Colored logs | `true` |
-| `DUCKLING_QUEUE_ENABLE` | Enable local DuckDB staging/flush layer | `true` |
-| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | `"duckling_queue"` |
-| `DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Time-based rotation threshold | `300` |
-| `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation threshold (bytes) | `100_000_000` |
-| `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | Scan cadence for sealed files | `60` |
-| `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush jobs | `2` |
-| `DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema name for flushing Duckling Queue data | `swanlake` |
+All env vars use the `SWANLAKE_` prefix. See [Configuration.md](Configuration.md) for the up-to-date
+table covering defaults and descriptions. Quick reminders:
+- Host/port/pool sizes influence the Flight endpoint + DuckDB pools.
+- `ENABLE_WRITES`, `MAX_SESSIONS`, and `SESSION_TIMEOUT_SECONDS` gate write workloads and cleanup.
+- `DUCKLAKE_INIT_SQL` runs immediately after DuckDB boots (attach remote storage, etc.).
+- Duckling Queue knobs (`DUCKLING_QUEUE_*`) control staging paths plus rotation/flush behavior.
 
 Precedence: env > CLI `--config` > `config.toml` > `.env`.
 

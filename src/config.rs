@@ -9,27 +9,14 @@ use serde::{Deserialize, Serialize};
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    /// Maximum size of the DuckDB connection pool.
-    pub pool_size: u32,
-    /// Optional size override for the read-only DuckDB connection pool.
-    pub read_pool_size: Option<u32>,
-    /// Optional size override for the write DuckDB connection pool.
-    pub write_pool_size: Option<u32>,
-    /// Whether write operations are permitted.
-    pub enable_writes: bool,
-    /// Whether to install/load the DuckLake extension during startup.
-    pub ducklake_enable: bool,
     /// Optional SQL statement executed during startup for ducklake integration.
     pub ducklake_init_sql: Option<String>,
-
     /// Maximum number of concurrent sessions.
     pub max_sessions: Option<usize>,
     /// Session idle timeout in seconds.
     pub session_timeout_seconds: Option<u64>,
     /// Log format: "compact" or "json".
     pub log_format: String,
-    /// Whether to enable ANSI colors in logs.
-    pub log_ansi: bool,
     /// Persistent directory root for Duckling Queue files.
     pub duckling_queue_root: String,
     /// Time-based rotation threshold in seconds.
@@ -49,16 +36,10 @@ impl Default for ServerConfig {
         Self {
             host: "0.0.0.0".to_string(),
             port: 4214,
-            pool_size: 10,
-            read_pool_size: Some(10),
-            write_pool_size: Some(3),
-            enable_writes: true,
-            ducklake_enable: true,
             ducklake_init_sql: None,
             max_sessions: Some(100),
             session_timeout_seconds: Some(900),
             log_format: "compact".to_string(),
-            log_ansi: true,
             duckling_queue_root: "target/ducklake-tests/duckling_queue".to_string(),
             duckling_queue_rotate_interval_seconds: 300,
             duckling_queue_rotate_size_bytes: 100_000_000,

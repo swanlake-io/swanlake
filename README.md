@@ -1,6 +1,5 @@
 [![codecov](https://codecov.io/gh/swanlake-io/swanlake/graph/badge.svg)](https://codecov.io/gh/swanlake-io/swanlake)
 
-
 # SwanLake
 
 SwanLake is a Rust-based Arrow Flight SQL server backed by DuckDB with optional DuckLake extensions. It delivers per-connection sessions, streaming analytics, and a compact deployment footprint.
@@ -23,38 +22,18 @@ cargo run
 ```
 
 ## Configuration
-Key environment variables (all prefixed with `SWANLAKE_`):
-
-| Variable | Description | Default |
-| --- | --- | --- |
-| `HOST` | Bind address | `0.0.0.0` |
-| `PORT` | gRPC port | `4214` |
-| `POOL_SIZE` | DuckDB connection pool size | `10` |
-| `READ_POOL_SIZE` | Read-only pool size override | `10` |
-| `WRITE_POOL_SIZE` | Write pool size override | `3` |
-| `ENABLE_WRITES` | Permit write operations | `true` |
-| `MAX_SESSIONS` | Concurrent session limit | `100` |
-| `SESSION_TIMEOUT_SECONDS` | Idle session timeout | `900` |
-| `DUCKLAKE_ENABLE` | Auto-load DuckLake extension | `true` |
-| `DUCKLAKE_INIT_SQL` | SQL executed after DuckLake loads | _unset_ |
-| `LOG_FORMAT` | `compact` or `json` | `compact` |
-| `LOG_ANSI` | Enable ANSI colors | `true` |
+All configuration options (env vars + defaults) live in [Configuration.md](Configuration.md).
+Highlights:
+- `SWANLAKE_HOST` / `SWANLAKE_PORT` control the Flight endpoint bind address.
+- `SWANLAKE_ENABLE_WRITES`, `SWANLAKE_MAX_SESSIONS`, and `SWANLAKE_SESSION_TIMEOUT_SECONDS`
+  gate write access and session lifecycle.
+- `SWANLAKE_DUCKLAKE_INIT_SQL` runs custom SQL immediately after DuckDB starts.
+- Duckling Queue settings (root path, rotation/flush thresholds, target schema) are also covered there.
 
 `.env` files are read automatically via `dotenvy`. Command-line flags always override file-based configuration.
 
-### Duckling Queue (optional write buffer)
-
-| Variable | Description | Default |
-| --- | --- | --- |
-| `DUCKLING_QUEUE_ENABLE` | Enable the local DuckDB staging layer | `true` |
-| `DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | `duckling_queue` |
-| `DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Time-based rotation threshold | `300` |
-| `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation threshold | `100_000_000` |
-| `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | Frequency for scanning sealed files | `60` |
-| `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush jobs | `2` |
-| `DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema name for flushing Duckling Queue data | `swanlake` |
-
-With Duckling Queue enabled, every session can create or insert into `duckling_queue.*` tables. Use `PRAGMA duckling_queue.flush;` to force the active file to rotate and flush immediately (useful for tests and CI).
+Every session can create or insert into `duckling_queue.*` tables. Use
+`PRAGMA duckling_queue.flush;` to force the active file to rotate and flush immediately (handy for tests and CI).
 
 ## Testing
 
@@ -66,21 +45,8 @@ With Duckling Queue enabled, every session can create or insert into `duckling_q
 The standalone test runner (`tests/runner`) executes SQL logic tests against a running SwanLake server:
 
 ```bash
-# Start the server
-cargo run
-
-# In another terminal, run SQL tests (runs both ducklake_basic + duckling_queue_basic)
-TEST_DIR=./target/ducklake-tests ./scripts/run_ducklake_tests.sh
-
-# Run a specific script
-TEST_FILE=tests/sql/duckling_queue_basic.test ./scripts/run_ducklake_tests.sh
+bash ./scripts/run-integration-tests.sh
 ```
-
-The test runner uses Arrow 56.x for ADBC compatibility, while the main project uses Arrow 57.x. `duckling_queue_basic.test` exercises the staging -> flush flow end to end via `PRAGMA duckling_queue.flush`.
-
-## Documentation
-- `AGENT.md` offers a guided tour of the architecture for contributors.
-- `docs/session.md` explains session lifecycle, metadata, and protocol handling.
 
 ## License
 

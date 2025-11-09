@@ -8,7 +8,7 @@ use tonic::{Request, Status};
 use tracing::{error, Span};
 use uuid::Uuid;
 
-use crate::dq::DucklingQueueRuntime;
+use crate::dq::QueueRuntime;
 use crate::error::ServerError;
 use crate::session::{registry::SessionRegistry, Session, SessionId};
 
@@ -25,11 +25,19 @@ mod handlers;
 #[derive(Clone)]
 pub struct SwanFlightSqlService {
     registry: Arc<SessionRegistry>,
+    /// Holds the QueueRuntime to keep background queue management tasks (rotation, flushing, cleanup) alive.
+    #[allow(dead_code)]
+    dq_runtime: Option<Arc<QueueRuntime>>,
 }
 
 impl SwanFlightSqlService {
-    pub fn new(registry: Arc<SessionRegistry>, _dq_runtime: Arc<DucklingQueueRuntime>) -> Self {
-        Self { registry }
+    /// Creates a new SwanFlightSqlService, holding the QueueRuntime to ensure background
+    /// queue management tasks (rotation, flushing, cleanup) remain active.
+    pub fn new(registry: Arc<SessionRegistry>, dq_runtime: Option<Arc<QueueRuntime>>) -> Self {
+        Self {
+            registry,
+            dq_runtime,
+        }
     }
 
     /// Extract session ID from tonic Request for session tracking (Phase 2)
@@ -74,11 +82,6 @@ impl SwanFlightSqlService {
             ServerError::Arrow(e) => {
                 error!(error = %e, "arrow conversion error");
                 Status::internal(format!("arrow error: {e}"))
-            }
-
-            ServerError::WritesDisabled => {
-                error!("write operations are disabled by configuration");
-                Status::permission_denied("write operations are disabled by configuration")
             }
             ServerError::TransactionNotFound => {
                 error!("unknown transaction");

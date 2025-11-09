@@ -1,16 +1,18 @@
 //! Duckling Queue module - staging local DuckDB files before flushing to DuckLake.
 //!
 //! This module provides:
-//! - `settings`: configuration and directory management
-//! - `manager`: per-session queue file management
+//! - `config`: configuration and directory management
+//! - `manager`: global queue orchestration
+//! - `session_queue`: per-session queue handles
 //! - `runtime`: background tasks for rotation + flushing
 //! - `lock`: cross-host file locking
 
+pub mod config;
 pub mod lock;
 pub mod manager;
 pub mod runtime;
-pub mod settings;
+pub mod session;
 
-pub use manager::SessionQueue;
-pub use runtime::DucklingQueueRuntime;
-pub use settings::DucklingQueueSettings as DucklingQueueManager;
+pub use manager::QueueManager;
+pub use runtime::QueueRuntime;
+pub use session::QueueSession;

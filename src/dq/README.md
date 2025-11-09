@@ -89,7 +89,7 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
 
 ## Implementation Status
 - [x] **Session-scoped architecture redesign**
-  - [x] Create `SessionQueue` abstraction (`src/dq/session_queue.rs`) for per-session queue file management
+  - [x] Create `QueueSession` abstraction (`src/dq/session.rs`) for per-session queue file management
   - [x] Implement lazy queue creation on first write to `duckling_queue.*` schema
   - [x] Add session-level rotation methods with size/time threshold checks
   - [x] Implement automatic sealing on session cleanup
