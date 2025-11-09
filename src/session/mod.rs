@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use arrow_schema::Schema;
 use duckdb::types::Value;
 use tracing::{debug, instrument};
 
@@ -31,11 +32,44 @@ use crate::session::id::{
     StatementHandle, StatementHandleGenerator, TransactionId, TransactionIdGenerator,
 };
 
-/// Metadata for a prepared statement
+/// Metadata persisted alongside each prepared/ephemeral handle.
+///
+/// This reflects the authoritative view of a statement that can be
+/// executed later (SQL text, schema if known, flags, etc.).
 #[derive(Debug, Clone)]
 pub struct PreparedStatementMeta {
     pub sql: String,
     pub is_query: bool,
+    pub schema: Option<Schema>,
+    pub ephemeral: bool,
+}
+
+/// Builder-style options passed in when *creating* a prepared statement.
+///
+/// These options capture contextual data available up front (e.g. a schema
+/// computed in the handler) without polluting the long-lived metadata struct.
+/// Once the statement is registered, the selected options are copied into
+/// [`PreparedStatementMeta`].
+#[derive(Debug, Default)]
+pub struct PreparedStatementOptions {
+    pub cached_schema: Option<Schema>,
+    pub ephemeral: bool,
+}
+
+impl PreparedStatementOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_cached_schema(mut self, schema: Option<Schema>) -> Self {
+        self.cached_schema = schema;
+        self
+    }
+
+    pub fn ephemeral(mut self) -> Self {
+        self.ephemeral = true;
+        self
+    }
 }
 
 /// State for a prepared statement including pending parameters
@@ -269,11 +303,17 @@ impl Session {
         &self,
         sql: String,
         is_query: bool,
+        options: PreparedStatementOptions,
     ) -> Result<StatementHandle, ServerError> {
         self.touch();
 
         let handle = self.statement_handle_gen.next();
-        let meta = PreparedStatementMeta { sql, is_query };
+        let meta = PreparedStatementMeta {
+            sql,
+            is_query,
+            schema: options.cached_schema,
+            ephemeral: options.ephemeral,
+        };
 
         let mut prepared = self
             .prepared_statements
@@ -298,6 +338,22 @@ impl Session {
             .get(&handle)
             .map(|state| state.meta.clone())
             .ok_or(ServerError::PreparedStatementNotFound)
+    }
+
+    pub fn cache_prepared_statement_schema(
+        &self,
+        handle: StatementHandle,
+        schema: Schema,
+    ) -> Result<(), ServerError> {
+        let mut prepared = self
+            .prepared_statements
+            .lock()
+            .expect("prepared_statements mutex poisoned");
+        let state = prepared
+            .get_mut(&handle)
+            .ok_or(ServerError::PreparedStatementNotFound)?;
+        state.meta.schema = Some(schema);
+        Ok(())
     }
 
     /// Set parameters for a prepared statement

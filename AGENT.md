@@ -6,7 +6,7 @@ Concise reference for language-model agents working on the SwanLake codebase.
 - **Purpose**: Arrow Flight SQL server backed by DuckDB with optional DuckLake extensions.
 - **Runtime**: Rust async service (`tokio`) exposing prepared statements, streaming results, and session-scoped state.
 - **Sessions**: Each gRPC connection owns a DuckDB connection; idle sessions auto-expire (default 30 min).
-- **Performance**: Schema discovery runs `SELECT * FROM ({query}) LIMIT 0`, cutting duplicate execution cost about in half.
+- **Performance**: Schema discovery executes queries as-is, relying on DuckDB's lazy streaming to avoid unnecessary data scanning.
 
 ## Code Map
 - `src/main.rs` — bootstrap: config load, tracing, gRPC server, session janitor.
@@ -41,6 +41,8 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 - **Queries**: `CommandStatementQuery` ➜ `get_flight_info_statement` ➜ `do_get_statement`.
 - **Updates/DDL**: `CommandStatementUpdate` ➜ `do_put_statement_update`.
 - **Prepared flow**: `CreatePreparedStatement` yields handle + schema, followed by `GetFlightInfo`/`DoGet` (queries) or `DoPut` (updates).
+- **Tickets**: all `TicketStatementQuery` payloads are our own protobuf (`TicketStatementPayload`). They carry `{version, kind, statement_handle}` only—the SQL/schema stay server-side. `kind` distinguishes long-lived prepared statements from one-shot "ephemeral" handles created for ad-hoc queries so FlightInfo + DoGet share the same cached schema/query plan.
+- **Ephemeral handles**: `get_flight_info_statement` now registers every SELECT as an ephemeral prepared statement with cached schema. `do_get_statement` executes via the same handle and immediately closes it, ensuring the query runs exactly once.
 - **Detection**: `is_query_statement()` strips comments and inspects the first keyword; SELECT/WITH/SHOW/etc. route to query path, everything else goes to update path.
 - **Metadata**: Responses attach `x-swanlake-total-rows` / `x-swanlake-total-bytes` when available.
 - **Duckling Queue admin command**: `PRAGMA duckling_queue.flush;` bypasses the async worker by rotating the active file and flushing every sealed DB immediately (handy for CI/tests).
@@ -55,6 +57,11 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 - **Add config option**: extend `ServerConfig` in `src/config.rs`, wire defaults + docs (`README.md`, possibly `AGENT.md`).
 - **Extend Flight endpoints**: implement handler in `src/service/…`, add DuckDB helper if required, cover with Go example/Rust test.
 - **Investigate performance**: run with `RUST_LOG=debug`, inspect schema-optimization logs, verify DuckDB calls use `spawn_blocking`.
+
+## Prepared-Statement Internals
+- `PreparedStatementOptions` is a builder used *only at creation time* so handlers can pass ephemeral/cached-schema hints without mutating session state directly.
+- `PreparedStatementMeta` is the long-lived record stored in the session map (SQL text, cached schema, flags). Any runtime change (e.g., caching a schema later) updates this struct via helper methods such as `cache_prepared_statement_schema`.
+- Ephemeral statements set the option flag and are auto-closed inside `execute_prepared_query_handle` after a DoGet finishes.
 
 ## Further Reading
 - `README.md` — project overview, highlights, license.

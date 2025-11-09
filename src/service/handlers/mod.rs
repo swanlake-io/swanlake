@@ -17,6 +17,7 @@ use super::SwanFlightSqlService;
 mod prepared;
 mod sql_info;
 mod statement;
+mod ticket;
 mod transaction;
 
 #[tonic::async_trait]

@@ -1,0 +1,66 @@
+# Dependabot configuration for SwanLake
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Monitor Cargo dependencies (Rust)
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "rust"
+    groups:
+      # Group all Rust dependency updates together
+      rust-dependencies:
+        patterns:
+          - "*"
+
+  # Monitor GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  # Monitor Docker dependencies
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # Monitor Go modules (for examples)
+  - package-ecosystem: "gomod"
+    directory: "/examples/go-adbc"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "go"
+    groups:
+      go-patch-updates:
+        update-types:
+          - "patch"
+
+  - package-ecosystem: "gomod"
+    directory: "/examples/go-sqlx"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "go"
+    groups:
+      go-patch-updates:
+        update-types:
+          - "patch"
