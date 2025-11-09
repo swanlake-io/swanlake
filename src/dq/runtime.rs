@@ -270,59 +270,13 @@ async fn cleanup_loop(manager: Arc<QueueManager>) {
         interval.tick().await;
         if let Err(err) = tokio::task::spawn_blocking({
             let manager = manager.clone();
-            move || cleanup_flushed_files(&manager)
+            move || manager.cleanup_flushed_files()
         })
         .await
-        .map_err(|join_err| anyhow!(join_err))
-        .and_then(|res| res)
         {
             warn!(error = %err, "duckling queue cleanup failed");
         }
     }
-}
-
-fn cleanup_flushed_files(manager: &QueueManager) -> Result<()> {
-    let flushed_dir = &manager.dirs().flushed;
-    let retention_duration = Duration::from_secs(3 * 24 * 3600); // 3 days
-    let now = std::time::SystemTime::now();
-
-    for entry in std::fs::read_dir(flushed_dir)
-        .with_context(|| format!("failed to read flushed queue directory {:?}", flushed_dir))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        let metadata = match entry.metadata() {
-            Ok(meta) => meta,
-            Err(err) => {
-                warn!(error = %err, file = %path.display(), "failed to get metadata for flushed file");
-                continue;
-            }
-        };
-
-        let modified = match metadata.modified() {
-            Ok(time) => time,
-            Err(err) => {
-                warn!(error = %err, file = %path.display(), "failed to get modified time for flushed file");
-                continue;
-            }
-        };
-
-        if let Ok(age) = now.duration_since(modified) {
-            if age > retention_duration {
-                if let Err(err) = std::fs::remove_file(&path) {
-                    warn!(error = %err, file = %path.display(), "failed to remove old flushed file");
-                } else {
-                    info!(file = %path.display(), "removed old flushed file");
-                }
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn detach_if_attached(conn: &duckdb::Connection, alias: &str) -> Result<()> {

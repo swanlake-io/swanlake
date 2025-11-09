@@ -185,23 +185,4 @@ impl SessionRegistry {
         let inner = self.inner.read().expect("registry lock poisoned");
         inner.sessions.keys().cloned().collect()
     }
-
-    #[allow(dead_code)]
-    pub fn remove_session(&self, session_id: &SessionId) {
-        let mut inner = self.inner.write().expect("registry lock poisoned");
-        if let Some(session) = inner.sessions.remove(session_id) {
-            // Seal queue file before removing session
-            if let Err(e) = session.cleanup_queue() {
-                warn!(session_id = %session_id, error = %e, "failed to cleanup session queue");
-            }
-            info!(session_id = %session_id, "session removed");
-        }
-    }
-
-    /// Get total session count
-    #[allow(dead_code)]
-    pub fn session_count(&self) -> usize {
-        let inner = self.inner.read().expect("registry lock poisoned");
-        inner.sessions.len()
-    }
 }

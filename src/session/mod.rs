@@ -199,7 +199,13 @@ impl Session {
         } else if normalized == "pragma duckling_queue.cleanup"
             || normalized == "call duckling_queue_cleanup()"
         {
-            // Cleanup is handled by background worker, just acknowledge
+            let dq_manager = self
+                .dq_manager
+                .as_ref()
+                .ok_or_else(|| ServerError::Internal("no duckling queue manager".into()))?;
+            dq_manager.cleanup_flushed_files().map_err(|e| {
+                ServerError::Internal(format!("failed to cleanup flushed files: {}", e))
+            })?;
             Ok(Some(0))
         } else {
             Ok(None)
