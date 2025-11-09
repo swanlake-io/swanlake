@@ -23,7 +23,12 @@ impl Settings {
         let root = PathBuf::from(&config.duckling_queue_root);
         let rotate_interval = Duration::from_secs(config.duckling_queue_rotate_interval_seconds);
         let lock_ttl = if rotate_interval > Duration::ZERO {
-            3 * rotate_interval
+            let base = rotate_interval
+                .checked_mul(3)
+                .unwrap_or(Duration::from_secs(u64::MAX));
+            let min_ttl = Duration::from_secs(300); // 5 minutes minimum
+            let max_ttl = Duration::from_secs(1800); // 30 minutes maximum
+            base.max(min_ttl).min(max_ttl)
         } else {
             Duration::from_secs(900) // 15 minutes as fallback
         };

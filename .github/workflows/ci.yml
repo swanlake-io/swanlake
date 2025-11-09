@@ -59,6 +59,10 @@ jobs:
 
       - name: Run integration tests
         run: bash scripts/run-integration-tests.sh
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGUSER: postgres
 
       - name: Collect coverage
         run: |

@@ -5,10 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use tracing::warn;
 
 use crate::config::ServerConfig;
 use crate::dq::config::{QueueContext, QueueDirectories, Settings};
-use crate::dq::lock::FileLock;
+use crate::dq::lock::{read_lock_session_id, FileLock};
 use crate::dq::session::QueueSession;
 use crate::session::SessionId;
 
@@ -72,7 +73,14 @@ fn sweep_orphaned_active_files(
     let db_files = list_db_files_in_dir(&dirs.active)?;
 
     for path in db_files {
-        let is_orphaned = if let Some(session_id) = parse_session_id_from_path(&path) {
+        let lock_owner = match read_lock_session_id(&path) {
+            Ok(owner) => owner,
+            Err(err) => {
+                warn!(error = %err, file = %path.display(), "failed to read duckling queue lock metadata");
+                None
+            }
+        };
+        let is_orphaned = if let Some(session_id) = lock_owner {
             !active_session_ids
                 .iter()
                 .any(|id| id.as_ref() == session_id)
@@ -84,7 +92,7 @@ fn sweep_orphaned_active_files(
             continue;
         }
 
-        if let Some(_lock) = FileLock::try_acquire(&path, ttl)? {
+        if let Some(_lock) = FileLock::try_acquire(&path, ttl, None)? {
             let sealed_path = dirs.sealed.join(
                 path.file_name()
                     .ok_or_else(|| anyhow::anyhow!("orphaned file has no filename"))?,
@@ -111,12 +119,4 @@ fn list_db_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(files)
-}
-
-fn parse_session_id_from_path(path: &Path) -> Option<String> {
-    let filename = path.file_stem()?.to_str()?;
-    let without_prefix = filename.strip_prefix("duckling_queue_")?;
-    let last_underscore = without_prefix.rfind('_')?;
-    let session_id = &without_prefix[..last_underscore];
-    Some(session_id.to_string())
 }

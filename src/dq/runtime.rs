@@ -169,7 +169,7 @@ pub fn flush_sealed_file(
         return Ok(true);
     }
 
-    let Some(lock) = FileLock::try_acquire(path, manager.settings().lock_ttl)? else {
+    let Some(lock) = FileLock::try_acquire(path, manager.settings().lock_ttl, None)? else {
         debug!(file = %path.display(), "duckling queue file already being flushed by another worker");
         return Ok(false);
     };
@@ -195,20 +195,6 @@ pub fn flush_sealed_file(
         let quoted = quote_ident(&table);
         debug!(table = %table, "flushing duckling queue table");
 
-        // Check source row count
-        let source_count: i64 = conn
-            .query_row(
-                &format!("SELECT COUNT(*) FROM duckling_queue.{quoted}"),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        if source_count == 0 {
-            debug!(table = %table, "source table is empty, skipping");
-            continue;
-        }
-        debug!(table = %table, source_count = %source_count, "source table row count");
-
         let sql = format!(
             "CREATE TABLE IF NOT EXISTS {target_schema}.{quoted} AS FROM duckling_queue.{quoted} LIMIT 0;
             INSERT INTO {target_schema}.{quoted} SELECT * FROM duckling_queue.{quoted};"
@@ -220,16 +206,6 @@ pub fn flush_sealed_file(
             })
             .with_context(|| format!("failed to flush table {} from duckling queue", table))?;
 
-        // Check target row count after insert
-        let target_count: i64 = conn
-            .query_row(
-                &format!("SELECT COUNT(*) FROM {target_schema}.{quoted}"),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        debug!(table = %table, target_count = %target_count, "target table row count after insert");
-
         // Mark table as flushed so replays skip it
         let flushed_name = format!("{FLUSHED_TABLE_PREFIX}{table}");
         let quoted_flushed = quote_ident(&flushed_name);
@@ -237,6 +213,8 @@ pub fn flush_sealed_file(
             "ALTER TABLE duckling_queue.{quoted} RENAME TO {quoted_flushed};"
         ))
         .with_context(|| format!("failed to rename flushed duckling queue table {}", table))?;
+
+        debug!(table = %table, "duckling queue table flushed");
     }
 
     detach_if_attached(conn, "duckling_queue").context("failed to detach sealed duckling queue")?;

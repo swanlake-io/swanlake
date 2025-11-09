@@ -33,8 +33,8 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
 
 ## Data Lifecycle
 1. **Boot & initialization:** On startup, SwanLake reads `ducklake_init_sql` and attaches DuckLake (`ATTACH ... AS swanlake`). No global queue file is created. Sessions will create their own queue files lazily.
-2. **Lazy queue creation:** When a client first writes to `duckling_queue.*` schema, the session creates its own queue file: `{root}/active/duckling_queue_{session_id}_{timestamp}.db` and attaches it as `duckling_queue`.
-3. **Client writes:** Clients issue `CREATE TABLE duckling_queue.my_table AS ...` or `INSERT INTO duckling_queue...`. All schema and data live inside the session's queue file.
+2. **Session queue creation:** Each session eagerly provisions and attaches its own queue file when the session starts (future optimization: make this lazy on first `duckling_queue.*` write). Files are named `duckling_queue_{uuid}_{timestamp}.db` under `{root}/active/`.
+3. **Client writes:** With the queue already attached, clients issue `CREATE TABLE duckling_queue.my_table AS ...` or `INSERT INTO duckling_queue...`. All schema and data live inside the session's queue file.
 4. **Rotation triggers:**
    - **Time-based:** Global ticker checks all sessions every `rotate_interval` seconds
    - **Size-based:** Session checks file size via `fs::metadata()` periodically
@@ -48,12 +48,12 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
 ## File & Metadata Layout
 ```
 {DUCKLING_QUEUE_ROOT}/
-  active/duckling_queue_{session_id}_{timestamp}.db
-  sealed/duckling_queue_{session_id}_{timestamp}.db
-  flushed/duckling_queue_{session_id}_{timestamp}.db
+  active/duckling_queue_{uuid}_{timestamp}.db
+  sealed/duckling_queue_{uuid}_{timestamp}.db
+  flushed/duckling_queue_{uuid}_{timestamp}.db
 ```
 - Each session owns exactly one active file at a time
-- Session ID is sanitized for filenames (`:`, `/`, `\`, ` ` replaced with `_`)
+- Session IDs live inside the `.lock` file metadata (filenames are UUID-based)
 - Timestamp is Unix epoch seconds
 - Active file is attached per-session: `ATTACH '{path}' AS duckling_queue;`
 - When rotating, file moves from active/ to sealed/
@@ -71,18 +71,18 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
 | `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation | `100_000_000` |
 | `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the worker scans for sealed files | `60` |
 | `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrency limit | `2` |
-| `DUCKLING_QUEUE_LOCK_TTL_SECONDS` | Lease duration before another host can steal a flush lock | `600` |
+| `DUCKLING_QUEUE_LOCK_TTL_SECONDS` | Lease duration before another host can steal a flush lock (clamped between 5–30 min) | `600` |
 
 `ServerConfig` gets the matching fields, and `EngineFactory::new` uses them to append the queue `ATTACH` statement immediately after the DuckLake attachment logic.
 
 ## Failure & Recovery Considerations
 - **Crash before flush:** Sealed files remain on disk; next server restart's flush worker picks them up
-- **Crash during flush:** Lock lease expires; another host re-acquires lock and replays (inserts are idempotent)
+- **Crash during flush:** Lock lease expires; another host re-acquires the lock and replays with at-least-once semantics (duplicates are possible)
 - **Crash while file is active:** Startup orphan sweep moves all active/ files to sealed/ (no current session owns them)
 - **Session timeout:** Before removing idle session, queue file is automatically sealed
-- **Orphan detection:** Rotation loop periodically sweeps active/ directory, parsing session_id from filenames and sealing files without matching sessions
+- **Orphan detection:** Rotation loop periodically sweeps active/ directory, inspecting lock metadata for session IDs and sealing files without matching sessions
 - **Out-of-disk:** Rotation fails; session continues writing to current file until space available
-- **Multiple flushes:** Flushed tables are renamed with `__dq_flushed_` prefix to prevent duplicate processing
+- **At-least-once inserts:** Flushes rename tables with `__dq_flushed_` once the copy succeeds. A crash between the insert and rename can replay the same batch, so downstream consumers must tolerate duplicate rows.
 
 ## Operational Controls
 - `PRAGMA duckling_queue.flush;` — rotates the current `active` file immediately, flushes every sealed DB synchronously, and ensures the caller can read freshly flushed data without waiting for the async worker.
@@ -90,7 +90,7 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
 ## Implementation Status
 - [x] **Session-scoped architecture redesign**
   - [x] Create `QueueSession` abstraction (`src/dq/session.rs`) for per-session queue file management
-  - [x] Implement lazy queue creation on first write to `duckling_queue.*` schema
+  - [ ] Implement lazy queue creation on first write to `duckling_queue.*` schema (currently eager on session startup for simplicity)
   - [x] Add session-level rotation methods with size/time threshold checks
   - [x] Implement automatic sealing on session cleanup
 - [x] **Session integration**
@@ -103,7 +103,7 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
   - [x] Update `cleanup_idle_sessions()` to seal queue files before removal
 - [x] **Manager simplification**
   - [x] Remove global active file tracking and rotation logic
-  - [x] Add `sweep_orphaned_files()` with session_id parsing from filenames
+  - [x] Add `sweep_orphaned_files()` with lock-file session ownership tracking
   - [x] Keep directory management and configuration
 - [x] **Runtime workers**
   - [x] Update rotation loop to check all sessions + sweep orphans

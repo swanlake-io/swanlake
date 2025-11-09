@@ -30,8 +30,12 @@ impl QueueSession {
     /// Create a new session queue with a fresh active file.
     pub(crate) fn create(session_id: SessionId, context: Arc<QueueContext>) -> Result<Self> {
         let active_file = create_session_queue_file(context.dirs())?;
-        let lock = FileLock::try_acquire(&active_file, context.settings().lock_ttl)?
-            .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for session queue file"))?;
+        let lock = FileLock::try_acquire(
+            &active_file,
+            context.settings().lock_ttl,
+            Some(session_id.as_ref()),
+        )?
+        .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for session queue file"))?;
 
         info!(
             session_id = %session_id,
@@ -55,6 +59,10 @@ impl QueueSession {
 
     /// Check if rotation is needed based on size or time thresholds.
     pub fn should_rotate(&self) -> Result<bool> {
+        self._lock
+            .refresh()
+            .with_context(|| "failed to refresh session queue lock")?;
+
         // Time-based rotation
         let settings = self.context.settings();
         if settings.rotate_interval > Duration::ZERO {
@@ -104,8 +112,12 @@ impl QueueSession {
 
         // Create new active file
         let new_file = create_session_queue_file(self.context.dirs())?;
-        let new_lock = FileLock::try_acquire(&new_file, self.context.settings().lock_ttl)?
-            .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for new session queue file"))?;
+        let new_lock = FileLock::try_acquire(
+            &new_file,
+            self.context.settings().lock_ttl,
+            Some(self.session_id.as_ref()),
+        )?
+        .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for new session queue file"))?;
 
         // Update state
         self.active_file = new_file;
