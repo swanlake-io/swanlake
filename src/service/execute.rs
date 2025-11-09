@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow_flight::flight_service_server::FlightService;
 use duckdb::types::Value;
 use tonic::{metadata::MetadataValue, Response, Status};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::engine::connection::QueryResult;
 use crate::session::id::StatementHandle;
@@ -42,6 +42,16 @@ impl SwanFlightSqlService {
             .take_prepared_statement_parameters(handle)
             .map_err(Self::status_from_error)?
             .unwrap_or_else(Vec::new);
+
+        if meta.ephemeral {
+            if let Err(err) = session.close_prepared_statement(handle) {
+                warn!(
+                    handle = %handle,
+                    %err,
+                    "failed to close ephemeral prepared statement"
+                );
+            }
+        }
 
         let param_count = parameters.len();
         info!(

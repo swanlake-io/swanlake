@@ -13,9 +13,10 @@ use prost::Message;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
 
+use super::ticket::{StatementTicketKind, TicketStatementPayload};
 use crate::service::SwanFlightSqlService;
 use crate::session::id::StatementHandle;
-use crate::session::PreparedStatementMeta;
+use crate::session::{PreparedStatementMeta, PreparedStatementOptions};
 
 fn parse_statement_handle(bytes: &[u8], context: &str) -> Result<StatementHandle, Status> {
     StatementHandle::from_bytes(bytes).ok_or_else(|| {
@@ -38,22 +39,27 @@ pub(crate) async fn do_action_create_prepared_statement(
     tracing::Span::current().record("is_query", is_query);
     let session = service.prepare_request(&request)?;
 
-    let dataset_schema = if is_query {
+    let (cached_schema, dataset_schema) = if is_query {
         let sql_for_schema = sql.clone();
         let session_clone = Arc::clone(&session);
         tokio::task::spawn_blocking(move || {
             let schema = session_clone.schema_for_query(&sql_for_schema)?;
-            SwanFlightSqlService::schema_to_ipc_bytes(&schema)
+            let bytes = SwanFlightSqlService::schema_to_ipc_bytes(&schema)?;
+            Ok::<_, crate::error::ServerError>((Some(schema), bytes))
         })
         .await
         .map_err(SwanFlightSqlService::status_from_join)?
         .map_err(SwanFlightSqlService::status_from_error)?
     } else {
-        Vec::new()
+        (None, Vec::new())
     };
 
     let handle = session
-        .create_prepared_statement(sql, is_query)
+        .create_prepared_statement(
+            sql.clone(),
+            is_query,
+            PreparedStatementOptions::new().with_cached_schema(cached_schema),
+        )
         .map_err(SwanFlightSqlService::status_from_error)?;
 
     info!(
@@ -81,16 +87,16 @@ pub(crate) async fn get_flight_info_prepared_statement(
     )?;
     let session = service.prepare_request(&request)?;
 
-    let PreparedStatementMeta { sql, is_query } = session
+    let meta = session
         .get_prepared_statement_meta(handle)
         .map_err(SwanFlightSqlService::status_from_error)?;
 
-    tracing::Span::current().record("sql", sql.as_str());
+    tracing::Span::current().record("sql", meta.sql.as_str());
 
-    if !is_query {
+    if !meta.is_query {
         error!(
             handle = %handle,
-            sql = %sql,
+            sql = %meta.sql,
             "prepared statement does not return a result set"
         );
         return Err(Status::invalid_argument(
@@ -100,15 +106,25 @@ pub(crate) async fn get_flight_info_prepared_statement(
 
     info!(
         handle = %handle,
-        sql = %sql,
+        sql = %meta.sql,
         "getting flight info for prepared statement"
     );
 
-    let session_clone = Arc::clone(&session);
-    let schema = tokio::task::spawn_blocking(move || session_clone.schema_for_query(&sql))
-        .await
-        .map_err(SwanFlightSqlService::status_from_join)?
-        .map_err(SwanFlightSqlService::status_from_error)?;
+    let schema = if let Some(schema) = &meta.schema {
+        schema.clone()
+    } else {
+        let sql_for_schema = meta.sql.clone();
+        let session_clone = Arc::clone(&session);
+        let schema =
+            tokio::task::spawn_blocking(move || session_clone.schema_for_query(&sql_for_schema))
+                .await
+                .map_err(SwanFlightSqlService::status_from_join)?
+                .map_err(SwanFlightSqlService::status_from_error)?;
+        session
+            .cache_prepared_statement_schema(handle, schema.clone())
+            .map_err(SwanFlightSqlService::status_from_error)?;
+        schema
+    };
 
     debug!(
         handle = %handle,
@@ -116,10 +132,11 @@ pub(crate) async fn get_flight_info_prepared_statement(
         "prepared statement schema retrieved"
     );
 
-    let handle_bytes = query.encode_to_vec();
     let descriptor = request.into_inner();
     let ticket = TicketStatementQuery {
-        statement_handle: handle_bytes.into(),
+        statement_handle: TicketStatementPayload::new(handle, StatementTicketKind::Prepared)
+            .encode_to_vec()
+            .into(),
     };
     let ticket_bytes = ticket.as_any().encode_to_vec();
     let endpoint = FlightEndpoint::new().with_ticket(Ticket::new(ticket_bytes));
@@ -240,9 +257,10 @@ pub(crate) async fn do_put_prepared_statement_update(
     )?;
     let session = service.prepare_request(&request)?;
 
-    let PreparedStatementMeta { sql, is_query } = session
-        .get_prepared_statement_meta(handle)
-        .map_err(SwanFlightSqlService::status_from_error)?;
+    let PreparedStatementMeta { sql, is_query, .. } =
+        session
+            .get_prepared_statement_meta(handle)
+            .map_err(SwanFlightSqlService::status_from_error)?;
 
     tracing::Span::current().record("sql", sql.as_str());
 
