@@ -11,7 +11,7 @@ use crate::dq::manager::SealedQueueFile;
 use crate::dq::DucklingQueueManager;
 use crate::engine::EngineFactory;
 use crate::session::registry::SessionRegistry;
-use crate::session::{Session, SessionId};
+use crate::session::Session;
 
 const MIN_ROTATION_TICK: Duration = Duration::from_secs(5);
 const MIN_FLUSH_TICK: Duration = Duration::from_secs(5);
@@ -72,55 +72,37 @@ impl DucklingQueueRuntime {
     }
 
     /// Force a rotation and flush of all pending queue files on a given connection.
-    fn force_flush_for_session(&self, session: &Arc<Session>) -> Result<()> {
-        let conn = session
-            .raw_connection()
-            .lock()
-            .map_err(|_| anyhow!("session connection lock is poisoned"))?;
-        detach_if_attached(&conn, "duckling_queue")
-            .context("failed to detach duckling_queue before forced flush")?;
+    fn force_flush_for_session(&self, _session: &Arc<Session>) -> Result<()> {
+        // Then sweep for any orphaned active files from other sessions
+        let orphaned = self.manager.sweep_active_dir()?;
 
         let mut pending: Vec<PathBuf> = self.manager.sealed_files()?;
-        let sealed = force_rotate_with_broadcast_internal(
-            &self.manager,
-            &self.registry,
-            Some(session.id()),
-        )?;
+
+        // Add orphaned files to pending list
+        for sealed in orphaned {
+            pending.push(sealed.path);
+        }
+
+        // Now rotate the current active file
+        let sealed = force_rotate_with_broadcast_internal(&self.manager, &self.registry)?;
         pending.push(sealed.path);
-        let flush_result = (|| -> Result<()> {
-            for path in pending {
-                let flushed = safe_flush_file(&self.manager, &conn, &path)?;
-                if !flushed {
-                    bail!(
-                        "duckling queue file {} is currently being flushed by another worker",
-                        path.display()
-                    );
-                }
-            }
-            Ok(())
-        })();
 
-        // Always attempt to re-attach the active duckling_queue file after flush attempts.
-        let reattach = || -> Result<()> {
-            let active_file = self.manager.active_file();
-            let attach_sql = format!(
-                "ATTACH IF NOT EXISTS '{}' AS duckling_queue;",
-                active_file.path.display()
-            );
-            conn.execute_batch(&attach_sql)
-                .context("failed to re-attach active duckling_queue after flush")
-        };
+        let conn = self
+            .factory
+            .create_raw_connection()
+            .context("failed to create connection for duckling queue flush")?;
 
-        match flush_result {
-            Ok(()) => {
-                reattach()?;
-                Ok(())
-            }
-            Err(err) => {
-                let _ = reattach();
-                Err(err)
+        for path in pending {
+            let flushed = safe_flush_file(&self.manager, &conn, &path)?;
+            if !flushed {
+                bail!(
+                    "duckling queue file {} is currently being flushed by another worker",
+                    path.display()
+                );
             }
         }
+
+        Ok(())
     }
 
     /// Force cleanup of flushed queue files.
@@ -266,6 +248,7 @@ fn safe_flush_file(
         })?;
     let target_schema = &manager.settings().target_schema;
     let tables = list_queue_tables(conn)?;
+    debug!(file = %path.display(), tables = ?tables, "duckling queue tables discovered");
     for table in tables {
         let quoted = quote_ident(&table);
         debug!(table = %table, "flushing duckling queue table");
@@ -428,7 +411,7 @@ fn rotate_with_broadcast(
 ) -> Result<Option<SealedQueueFile>> {
     manager.maybe_rotate_with(|new_active| {
         registry
-            .switch_duckling_queue_except(&new_active.path, None)
+            .switch_duckling_queue_except(&new_active.path)
             .context("failed to switch duckling_queue attachment during rotation")
     })
 }
@@ -436,11 +419,10 @@ fn rotate_with_broadcast(
 fn force_rotate_with_broadcast_internal(
     manager: &DucklingQueueManager,
     registry: &SessionRegistry,
-    exclude: Option<&SessionId>,
 ) -> Result<SealedQueueFile> {
     manager.force_rotate_with(|new_active| {
         registry
-            .switch_duckling_queue_except(&new_active.path, exclude)
+            .switch_duckling_queue_except(&new_active.path)
             .context("failed to switch duckling_queue attachment during forced rotation")
     })
 }

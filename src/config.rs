@@ -42,7 +42,6 @@ pub struct ServerConfig {
     pub duckling_queue_flush_interval_seconds: u64,
     /// Maximum number of parallel flush tasks.
     pub duckling_queue_max_parallel_flushes: usize,
-
     /// Target schema name for flushing Duckling Queue data.
     pub duckling_queue_target_schema: String,
 }

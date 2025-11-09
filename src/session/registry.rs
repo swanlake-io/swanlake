@@ -12,6 +12,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use anyhow::Context;
 use tracing::{debug, info, instrument, warn};
 
 use crate::config::ServerConfig;
@@ -157,43 +158,74 @@ impl SessionRegistry {
         Ok(session)
     }
 
-    pub fn switch_duckling_queue_except(
-        &self,
-        new_path: &Path,
-        exclude: Option<&SessionId>,
-    ) -> anyhow::Result<()> {
-        let attach_new = format!(
-            "ATTACH IF NOT EXISTS '{}' AS duckling_queue;",
-            new_path.display()
+    pub fn switch_duckling_queue_except(&self, new_path: &Path) -> anyhow::Result<()> {
+        info!(
+            new_path = %new_path.display(),
+            "switching duckling queue to new path"
         );
 
+        // Step 1: Recreate the base connection with new duckling queue path
+        self.factory
+            .recreate_base_connection(new_path)
+            .context("failed to recreate base connection")?;
+
+        // Step 2: Collect all sessions
         let sessions = {
             let inner = self.inner.read().expect("registry lock poisoned");
             inner
                 .sessions
                 .iter()
-                .filter(|(id, _)| exclude != Some(*id))
                 .map(|(id, session)| (id.clone(), session.clone()))
                 .collect::<Vec<_>>()
         };
 
+        // Step 3: Handle each session selectively
         for (session_id, session) in sessions {
-            let attach_result = {
-                let conn = session
-                    .raw_connection()
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("session connection lock is poisoned"))?;
-                let _ = conn.execute_batch("DETACH duckling_queue;");
-                conn.execute_batch(&attach_new)
-            };
-
-            if let Err(err) = attach_result {
-                warn!(
+            // Check if session has active transactions
+            if session.has_active_transactions() {
+                info!(
                     session_id = %session_id,
-                    error = %err,
-                    "failed to switch duckling_queue attachment; closing session"
+                    "removing session with active transactions during duckling queue rotation"
                 );
                 self.remove_session(&session_id);
+                continue;
+            }
+
+            // Check if session has prepared statements
+            if session.has_prepared_statements() {
+                info!(
+                    session_id = %session_id,
+                    "removing session with prepared statements during duckling queue rotation"
+                );
+                self.remove_session(&session_id);
+                continue;
+            }
+
+            // Session is clean - try to replace connection
+            match self.factory.create_connection() {
+                Ok(new_conn) => {
+                    if let Err(err) = session.replace_connection(new_conn) {
+                        warn!(
+                            session_id = %session_id,
+                            error = %err,
+                            "failed to replace connection; removing session"
+                        );
+                        self.remove_session(&session_id);
+                    } else {
+                        debug!(
+                            session_id = %session_id,
+                            "successfully switched session to new duckling queue file"
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        session_id = %session_id,
+                        error = %err,
+                        "failed to create new connection; removing session"
+                    );
+                    self.remove_session(&session_id);
+                }
             }
         }
 

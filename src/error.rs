@@ -17,4 +17,6 @@ pub enum ServerError {
     MaxSessionsReached,
     #[error("unsupported parameter type: {0}")]
     UnsupportedParameter(String),
+    #[error("internal error: {0}")]
+    Internal(String),
 }

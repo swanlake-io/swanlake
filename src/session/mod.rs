@@ -83,10 +83,6 @@ pub struct Session {
 }
 
 impl Session {
-    /// Return the session identifier.
-    pub fn id(&self) -> &SessionId {
-        &self.id
-    }
     /// Create a new session with a specific ID (for connection-based persistence)
     #[instrument(skip(connection))]
     pub fn new_with_id(id: SessionId, connection: DuckDbConnection, writes_enabled: bool) -> Self {
@@ -329,8 +325,49 @@ impl Session {
         Ok(())
     }
 
-    /// Get raw DuckDB connection for advanced operations
-    pub fn raw_connection(&self) -> &Mutex<duckdb::Connection> {
-        &self.connection.conn
+
+    /// Check if session has active transactions
+    pub fn has_active_transactions(&self) -> bool {
+        let transactions = self
+            .transactions
+            .lock()
+            .expect("transactions mutex poisoned");
+        !transactions.is_empty()
+    }
+
+    /// Check if session has prepared statements
+    pub fn has_prepared_statements(&self) -> bool {
+        let prepared = self
+            .prepared_statements
+            .lock()
+            .expect("prepared_statements mutex poisoned");
+        !prepared.is_empty()
+    }
+
+    /// Replace the session's connection with a new one.
+    /// This is used during duckling queue rotation to switch to a new file.
+    ///
+    /// Warning: This invalidates any active transactions or prepared statements
+    /// on the old connection. Callers should check has_active_transactions() and
+    /// has_prepared_statements() before calling this method.
+    #[instrument(skip(self, new_connection), fields(session_id = %self.id))]
+    pub fn replace_connection(&self, new_connection: DuckDbConnection) -> Result<(), ServerError> {
+        // We can't safely replace the connection field directly since it's not behind a Mutex.
+        // Instead, we replace the underlying raw connection.
+        let new_raw = new_connection
+            .conn
+            .into_inner()
+            .map_err(|_| ServerError::Internal("failed to extract connection from mutex".into()))?;
+
+        let mut conn = self
+            .connection
+            .conn
+            .lock()
+            .map_err(|_| ServerError::Internal("connection mutex poisoned".into()))?;
+
+        *conn = new_raw;
+
+        debug!("connection replaced successfully");
+        Ok(())
     }
 }

@@ -297,7 +297,6 @@ impl DucklingQueueManager {
     where
         F: FnOnce(&QueueFile) -> Result<()>,
     {
-        checkpoint_database(&state.active.path)?;
         let sealed_path =
             self.dirs
                 .sealed
@@ -332,15 +331,4 @@ impl DucklingQueueManager {
 
         Ok(SealedQueueFile { path: sealed_path })
     }
-}
-
-fn checkpoint_database(path: &Path) -> Result<()> {
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid duckling queue path {:?}", path))?
-        .to_string();
-    let conn = Connection::open(&path_str)?;
-    conn.execute_batch("FORCE CHECKPOINT;")
-        .with_context(|| format!("failed to checkpoint duckling queue at {:?}", path))?;
-    Ok(())
 }

@@ -117,6 +117,10 @@ impl SwanFlightSqlService {
                 error!(param = %param, "unsupported parameter type");
                 Status::invalid_argument(format!("unsupported parameter type: {param}"))
             }
+            ServerError::Internal(msg) => {
+                error!(msg = %msg, "internal error");
+                Status::internal(format!("internal error: {msg}"))
+            }
         }
     }
 

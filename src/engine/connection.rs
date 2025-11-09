@@ -60,7 +60,8 @@ impl DuckDbConnection {
                 "SQL contains null bytes".to_string(),
             ));
         }
-        let schema_query = format!("SELECT * FROM ({}) LIMIT 0", sql);
+        let trimmed_sql = sql.trim_end_matches(';');
+        let schema_query = format!("SELECT * FROM ({}) LIMIT 0", trimmed_sql);
 
         let conn = self.conn.lock().expect("connection mutex poisoned");
         let mut stmt = conn.prepare(&schema_query)?;

@@ -29,6 +29,8 @@ use sqllogictest::{AsyncDB, DBOutput, DefaultColumnType, Runner};
 use thiserror::Error;
 use tracing::{info, warn};
 
+mod scenarios;
+
 #[derive(Debug, Error)]
 enum RunnerError {
     #[error(transparent)]
@@ -190,12 +192,26 @@ impl AsyncDB for FlightSqlDb {
     }
 }
 
-struct CliArgs {
+pub struct CliArgs {
     endpoint: String,
     test_files: Vec<PathBuf>,
     labels: Vec<String>,
     vars: HashMap<String, String>,
     test_dir: Option<String>,
+}
+
+impl CliArgs {
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    pub fn test_dir(&self) -> Option<&str> {
+        self.test_dir.as_deref()
+    }
+
+    pub fn test_files(&self) -> &[PathBuf] {
+        &self.test_files
+    }
 }
 
 fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
@@ -330,7 +346,7 @@ async fn run_entrypoint() -> Result<()> {
     let raw_args: Vec<String> = env::args().skip(1).collect();
     let args = parse_args(raw_args)?;
 
-    if args.test_dir.is_none() {
+    if args.test_dir.is_none() && scenarios::requires_test_dir(&args) {
         bail!("--test-dir is required");
     }
 
@@ -338,7 +354,8 @@ async fn run_entrypoint() -> Result<()> {
         "Running SQLLogicTest with {} script(s)",
         args.test_files.len()
     );
-    run_sqllogictest(&args).await
+    run_sqllogictest(&args).await?;
+    scenarios::run_all(&args).await
 }
 
 async fn run_sqllogictest(args: &CliArgs) -> Result<()> {
