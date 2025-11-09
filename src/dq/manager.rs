@@ -4,6 +4,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use tracing::{debug, info};
+use uuid::Uuid;
 
 use crate::dq::lock::FileLock;
 use crate::dq::settings::{DucklingQueueSettings, QueueDirectories};
@@ -34,7 +35,7 @@ impl SessionQueue {
     /// Create a new session queue with a fresh active file.
     /// This is called when a session is created.
     pub fn create(session_id: SessionId, manager: Arc<DucklingQueueSettings>) -> Result<Self> {
-        let active_file = create_session_queue_file(&session_id, manager.dirs())?;
+        let active_file = create_session_queue_file(manager.dirs())?;
         let lock = FileLock::try_acquire(&active_file, manager.settings().lock_ttl)?
             .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for session queue file"))?;
 
@@ -108,7 +109,7 @@ impl SessionQueue {
         let sealed_path = self.seal_current_file()?;
 
         // Create new active file
-        let new_file = create_session_queue_file(&self.session_id, self.manager.dirs())?;
+        let new_file = create_session_queue_file(self.manager.dirs())?;
         let new_lock = FileLock::try_acquire(&new_file, self.manager.settings().lock_ttl)?
             .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for new session queue file"))?;
 
@@ -215,18 +216,14 @@ impl SessionQueue {
 }
 
 /// Create a new session queue file in the active/ directory.
-/// Session ID is a UUID, safe for use in filenames.
-fn create_session_queue_file(session_id: &SessionId, dirs: &QueueDirectories) -> Result<PathBuf> {
+/// File ID is a UUID, safe for use in filenames.
+fn create_session_queue_file(dirs: &QueueDirectories) -> Result<PathBuf> {
     let timestamp_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
 
-    let filename = format!(
-        "duckling_queue_{}_{}.db",
-        session_id.as_ref(),
-        timestamp_nanos
-    );
+    let filename = format!("duckling_queue_{}_{}.db", Uuid::new_v4(), timestamp_nanos);
     let path = dirs.active.join(filename);
 
     // Ensure active directory exists

@@ -59,7 +59,7 @@ impl Default for ServerConfig {
             session_timeout_seconds: Some(900),
             log_format: "compact".to_string(),
             log_ansi: true,
-            duckling_queue_root: "duckling_queue".to_string(),
+            duckling_queue_root: "target/ducklake-tests/duckling_queue".to_string(),
             duckling_queue_rotate_interval_seconds: 300,
             duckling_queue_rotate_size_bytes: 100_000_000,
             duckling_queue_flush_interval_seconds: 60,
