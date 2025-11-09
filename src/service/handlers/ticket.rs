@@ -48,21 +48,42 @@ pub struct TicketStatementPayload {
     /// Raw bytes of the `StatementHandle` (big-endian u64 today).
     #[prost(bytes = "vec", tag = "3")]
     pub statement_handle: Vec<u8>,
+    /// Optional SQL text to fall back to if the handle cannot be resolved.
+    #[prost(string, optional, tag = "4")]
+    pub fallback_sql: Option<String>,
 }
 
 impl TicketStatementPayload {
-    pub const CURRENT_VERSION: u32 = 1;
+    pub const CURRENT_VERSION: u32 = 2;
 
-    pub fn new(handle: StatementHandle, kind: StatementTicketKind) -> Self {
+    pub fn new(kind: StatementTicketKind) -> Self {
         Self {
             version: Self::CURRENT_VERSION,
             kind: kind as i32,
-            statement_handle: handle.to_bytes(),
+            statement_handle: Vec::new(),
+            fallback_sql: None,
         }
     }
 
+    pub fn with_handle(mut self, handle: StatementHandle) -> Self {
+        self.statement_handle = handle.to_bytes();
+        self
+    }
+
+    pub fn with_fallback_sql<S: Into<String>>(mut self, sql: S) -> Self {
+        self.fallback_sql = Some(sql.into());
+        self
+    }
+
     pub fn handle(&self) -> Option<StatementHandle> {
+        if self.statement_handle.is_empty() {
+            return None;
+        }
         StatementHandle::from_bytes(&self.statement_handle)
+    }
+
+    pub fn fallback_sql_str(&self) -> Option<&str> {
+        self.fallback_sql.as_deref()
     }
 
     pub fn ticket_kind(&self) -> Option<StatementTicketKind> {

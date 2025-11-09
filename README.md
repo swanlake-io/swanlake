@@ -19,48 +19,11 @@ SwanLake is an Arrow Flight SQL server backed by DuckDB, enabling fast data anal
 - Rapid ingestion of logs, metrics, and streaming data.
 - High-speed querying using DuckDB and Arrow for analytics.
 
-## Client Libraries and Examples
-
-SwanLake can be accessed using standard Arrow Flight SQL clients or our custom Rust client library.
-
-### Rust Client
-
-The `swanlake-client` library provides an ergonomic API for connecting to SwanLake servers:
-
-```bash
-cd examples/rust-client
-cargo build --release
-```
-
-**Interactive CLI:**
-```bash
-./target/release/swanlake-cli --endpoint grpc://localhost:4214
-```
-
-**Library Usage:**
-```rust
-use swanlake_client::FlightSQLClient;
-
-let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-client.execute_update("CREATE TABLE test (id INT, name VARCHAR)")?;
-let result = client.execute("SELECT * FROM test")?;
-```
-
-See [examples/rust-client/README.md](examples/rust-client/README.md) for full documentation.
-
-### Other Examples
-
-- **Go + ADBC**: [examples/go-adbc/](examples/go-adbc/)
-- **Go + sqlx**: [examples/go-sqlx/](examples/go-sqlx/)
-- **Rust + ADBC**: [examples/rust-adbc/](examples/rust-adbc/)
-
 ## Deployment
 
 SwanLake supports serverless deployment via Docker. Pull the latest image from [GitHub Container Registry](https://github.com/swanlake-io/swanlake/pkgs/container/swanlake).
 
 Customize with environment variables; see [CONFIGURATION.md](CONFIGURATION.md) for details.
-
-
 
 ## License
 

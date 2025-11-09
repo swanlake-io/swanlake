@@ -134,7 +134,8 @@ pub(crate) async fn get_flight_info_prepared_statement(
 
     let descriptor = request.into_inner();
     let ticket = TicketStatementQuery {
-        statement_handle: TicketStatementPayload::new(handle, StatementTicketKind::Prepared)
+        statement_handle: TicketStatementPayload::new(StatementTicketKind::Prepared)
+            .with_handle(handle)
             .encode_to_vec()
             .into(),
     };
