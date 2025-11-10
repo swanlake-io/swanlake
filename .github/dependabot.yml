@@ -27,6 +27,10 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    groups:
+      github-actions-dependencies:
+        patterns:
+          - "*"
 
   # Monitor Docker dependencies
   - package-ecosystem: "docker"
@@ -37,6 +41,10 @@ updates:
     labels:
       - "dependencies"
       - "docker"
+    groups:
+      docker-dependencies:
+        patterns:
+          - "*"
 
   # Monitor Go modules (for examples)
   - package-ecosystem: "gomod"
@@ -48,9 +56,9 @@ updates:
       - "dependencies"
       - "go"
     groups:
-      go-patch-updates:
-        update-types:
-          - "patch"
+      go-dependencies:
+        patterns:
+          - "*"
 
   - package-ecosystem: "gomod"
     directory: "/examples/go-sqlx"
@@ -61,6 +69,6 @@ updates:
       - "dependencies"
       - "go"
     groups:
-      go-patch-updates:
-        update-types:
-          - "patch"
+      go-dependencies:
+        patterns:
+          - "*"
