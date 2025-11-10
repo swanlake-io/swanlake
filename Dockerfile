@@ -22,7 +22,11 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 # Install runtime deps (if needed, e.g., for DuckDB)
-RUN apt update && apt install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install -y --no-install-recommends ca-certificates wget && rm -rf /var/lib/apt/lists/*
+
+# Install grpc-health-probe for health checks
+RUN wget -qO /usr/local/bin/grpc-health-probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.41/grpc_health_probe-linux-amd64 && \
+    chmod +x /usr/local/bin/grpc-health-probe
 
 # Copy DuckDB setup
 COPY --from=builder /app/.duckdb .duckdb

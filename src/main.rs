@@ -5,6 +5,7 @@ use crate::dq::QueueManager;
 use crate::service::SwanFlightSqlService;
 use anyhow::{Context, Result};
 use tonic::transport::Server;
+
 use tracing::info;
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
@@ -59,6 +60,10 @@ async fn main() -> Result<()> {
     // Pass dq_runtime to the service to keep the QueueRuntime alive throughout the server's lifetime.
     let flight_service = SwanFlightSqlService::new(registry, Some(dq_runtime));
 
+    // Set up gRPC health service
+    let (_health_reporter, health_service) = tonic_health::server::health_reporter();
+    _health_reporter.set_serving::<arrow_flight::flight_service_server::FlightServiceServer<SwanFlightSqlService>>().await;
+
     info!(%addr, "starting SwanLake Flight SQL server");
 
     // Set up graceful shutdown
@@ -95,6 +100,7 @@ async fn main() -> Result<()> {
     });
 
     Server::builder()
+        .add_service(health_service)
         .add_service(arrow_flight::flight_service_server::FlightServiceServer::new(flight_service))
         .serve_with_shutdown(addr, async {
             shutdown_rx.await.ok();

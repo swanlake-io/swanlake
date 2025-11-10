@@ -45,6 +45,7 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 - **Ephemeral handles**: `get_flight_info_statement` now registers every SELECT as an ephemeral prepared statement with cached schema. `do_get_statement` executes via the same handle and immediately closes it, ensuring the query runs exactly once.
 - **Detection**: `is_query_statement()` strips comments and inspects the first keyword; SELECT/WITH/SHOW/etc. route to query path, everything else goes to update path.
 - **Metadata**: Responses attach `x-swanlake-total-rows` / `x-swanlake-total-bytes` when available.
+- **Health checks**: gRPC health service available at `grpc.health.v1.Health` endpoint for container orchestration (ECS, Kubernetes).
 - **Duckling Queue admin command**: `PRAGMA duckling_queue.flush;` bypasses the async worker by rotating the active file and flushing every sealed DB immediately (handy for CI/tests).
 
 ## Testing & Tooling

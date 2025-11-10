@@ -29,3 +29,4 @@ tonic = { version = "0.14.2", features = ["transport"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "json"] }
 config = "0.15.5"
+tonic-health = "0.14.2"
