@@ -19,12 +19,8 @@ Concise reference for language-model agents working on the SwanLake codebase.
 
 ## Build & Run
 ```bash
-# optional: pull prebuilt DuckDB libs and export env vars
-scripts/setup_duckdb.sh
-source .duckdb/env.sh
-
 # run the server
-cargo run
+RUST_LOG=info cargo run --bin swanlake
 ```
 
 ## Configuration Cheatsheet

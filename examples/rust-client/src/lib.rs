@@ -76,7 +76,12 @@ impl FlightSQLClient {
             ManagedDriver::load_dynamic_from_filename(&driver_path, None, AdbcVersion::default())?;
         let database =
             driver.new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])?;
-        let conn = database.new_connection()?;
+        let mut conn = database.new_connection()?;
+        // Test the connection by executing a simple query
+        let mut stmt = conn.new_statement()?;
+        stmt.set_sql_query("SELECT 1")?;
+        let _reader = stmt.execute()?;
+        // Discard the result, just to verify connection
         Ok(Self { conn })
     }
 

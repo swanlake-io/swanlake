@@ -7,6 +7,20 @@ SwanLake is an Arrow Flight SQL server backed by DuckDB, enabling fast data anal
 <!--![SwanLake](swanlake.jpeg)-->
 <img src="swanlake.jpeg" width="512" alt="SwanLake">
 
+## Quick Start
+
+First start the SwanLake server:
+
+```bash
+RUST_LOG=info cargo run --bin swanlake
+```
+
+Then run the Rust interactive client example:
+
+```bash
+cargo run --manifest-path examples/rust-client/Cargo.toml
+```
+
 ## Architecture
 
 - **Arrow Flight SQL Server**: High-performance SQL interface over gRPC for efficient querying.

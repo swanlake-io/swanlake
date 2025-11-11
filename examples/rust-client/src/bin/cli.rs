@@ -44,10 +44,10 @@ fn main() -> Result<()> {
         .init();
 
     // Connect to server
-    println!("🦢 Connecting to SwanLake at {}...", args.endpoint);
+    println!("Connecting to SwanLake at {}...", args.endpoint);
     let mut client =
         FlightSQLClient::connect(&args.endpoint).context("Failed to connect to SwanLake server")?;
-    println!("✅ Connected successfully!\n");
+    println!("Connected successfully!\n");
 
     // Execute query or start interactive mode
     if let Some(query) = args.query {
@@ -97,13 +97,13 @@ fn interactive_mode(client: &mut FlightSQLClient, debug: bool) -> Result<()> {
 
                 // Check for exit commands
                 if query.eq_ignore_ascii_case("exit") || query.eq_ignore_ascii_case("quit") {
-                    println!("Goodbye! 👋");
+                    println!("Goodbye!");
                     break;
                 }
 
                 // Execute query
                 if let Err(e) = execute_and_display(client, query) {
-                    eprintln!("❌ Error: {}", e);
+                    eprintln!("Error: {}", e);
                     if debug {
                         eprintln!("Details: {:?}", e);
                     }
@@ -113,7 +113,7 @@ fn interactive_mode(client: &mut FlightSQLClient, debug: bool) -> Result<()> {
             Err(ReadlineError::Interrupted) => {
                 interrupt_count += 1;
                 if interrupt_count >= 2 {
-                    println!("\nGoodbye! 👋");
+                    println!("\nGoodbye!");
                     break;
                 } else {
                     println!("^C (press Ctrl-C again to exit)");
@@ -121,7 +121,7 @@ fn interactive_mode(client: &mut FlightSQLClient, debug: bool) -> Result<()> {
                 }
             }
             Err(ReadlineError::Eof) => {
-                println!("Goodbye! 👋");
+                println!("Goodbye!");
                 break;
             }
             Err(err) => {
@@ -156,7 +156,7 @@ fn execute_and_display(client: &mut FlightSQLClient, query: &str) -> Result<()> 
         }
 
         println!(
-            "📊 {} row{} in {:.3}s",
+            "{} row{} in {:.3}s",
             result.total_rows,
             if result.total_rows == 1 { "" } else { "s" },
             elapsed.as_secs_f64()
@@ -166,16 +166,12 @@ fn execute_and_display(client: &mut FlightSQLClient, query: &str) -> Result<()> 
         let elapsed = start.elapsed();
 
         if let Some(rows) = result.rows_affected {
-            println!(
-                "✓ {} row{} affected",
-                rows,
-                if rows == 1 { "" } else { "s" }
-            );
+            println!("{} row{} affected", rows, if rows == 1 { "" } else { "s" });
         } else {
-            println!("✓ Query executed successfully");
+            println!("Query executed successfully");
         }
 
-        println!("⏱️  {:.3}s", elapsed.as_secs_f64());
+        println!("{:.3}s", elapsed.as_secs_f64());
     }
 
     Ok(())

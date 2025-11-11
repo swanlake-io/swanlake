@@ -40,9 +40,6 @@ jobs:
           path: .duckdb
           key: duckdb-${{ runner.os }}
 
-      - name: Setup DuckDB
-        run: bash scripts/setup_duckdb.sh
-
       - name: Fix formatting
         run: cargo fmt
 
