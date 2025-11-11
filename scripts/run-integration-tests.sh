@@ -3,14 +3,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Setup DuckDB if not already done
-if [[ ! -f "$ROOT_DIR/.duckdb/env.sh" ]]; then
-  bash "$ROOT_DIR/scripts/setup_duckdb.sh"
-fi
-
-# Source the environment
-source "$ROOT_DIR/.duckdb/env.sh"
-
 # Clean old coverage data
 cargo llvm-cov clean --workspace
 

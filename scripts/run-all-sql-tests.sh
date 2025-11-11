@@ -24,15 +24,7 @@ WAIT_SECONDS="${WAIT_SECONDS:-30}"
 TEST_DIR="$ROOT_DIR/target/tmp/all-sql-tests-$(date +%s)"
 TEST_FILTER="${1:-*.test}"
 
-# Setup DuckDB if not already done
-if [[ ! -f "$ROOT_DIR/.duckdb/env.sh" ]]; then
-  bash "$ROOT_DIR/scripts/setup_duckdb.sh"
-fi
 
-# Source the environment
-if [[ -f "$ROOT_DIR/.duckdb/env.sh" ]]; then
-  source "$ROOT_DIR/.duckdb/env.sh"
-fi
 
 # Collect all test files matching the filter
 TEST_FILES=()

@@ -3,18 +3,11 @@ FROM rust:slim AS builder
 
 WORKDIR /app
 
-# Install dependencies for DuckDB setup
-RUN apt-get update && apt-get install -y wget unzip curl && rm -rf /var/lib/apt/lists/*
-
-# Copy scripts and setup DuckDB
-COPY scripts/setup_duckdb.sh scripts/
-RUN bash scripts/setup_duckdb.sh
-
 # Copy source
 COPY . .
 
 # Build the project
-RUN bash -c "source .duckdb/env.sh && cargo build --release"
+RUN cargo build --release
 
 # Runtime stage
 FROM debian:trixie-slim
