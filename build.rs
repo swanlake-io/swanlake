@@ -37,8 +37,11 @@ fn main() {
         let mut archive = ZipArchive::new(file).unwrap();
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).unwrap();
-            let outpath = file.mangled_name();
-            if file.name().ends_with('/') {
+            let outpath = match file.enclosed_name() {
+                Some(path) => path,
+                None => continue,
+            };
+            if file.is_dir() {
                 fs::create_dir_all(&outpath).unwrap();
             } else {
                 if let Some(p) = outpath.parent() {
@@ -64,9 +67,13 @@ fn main() {
         let mut archive = ZipArchive::new(cursor).unwrap();
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).unwrap();
-            if file.name() == "duckdb.h" || file.name() == "duckdb.hpp" {
-                let mut outfile = fs::File::create(file.name()).unwrap();
-                std::io::copy(&mut file, &mut outfile).unwrap();
+            if let Some(enclosed_name) = file.enclosed_name() {
+                if enclosed_name == Path::new("duckdb.h")
+                    || enclosed_name == Path::new("duckdb.hpp")
+                {
+                    let mut outfile = fs::File::create(&enclosed_name).unwrap();
+                    std::io::copy(&mut file, &mut outfile).unwrap();
+                }
             }
         }
     }
