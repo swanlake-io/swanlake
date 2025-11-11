@@ -61,8 +61,8 @@ async fn main() -> Result<()> {
     let flight_service = SwanFlightSqlService::new(registry, Some(dq_runtime));
 
     // Set up gRPC health service
-    let (_health_reporter, health_service) = tonic_health::server::health_reporter();
-    _health_reporter.set_serving::<arrow_flight::flight_service_server::FlightServiceServer<SwanFlightSqlService>>().await;
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter.set_serving::<arrow_flight::flight_service_server::FlightServiceServer<SwanFlightSqlService>>().await;
 
     info!(%addr, "starting SwanLake Flight SQL server");
 
@@ -95,6 +95,9 @@ async fn main() -> Result<()> {
                 info!("received SIGTERM, initiating graceful shutdown");
             }
         }
+
+        // Set health status to NOT_SERVING before shutdown
+        health_reporter.set_not_serving::<arrow_flight::flight_service_server::FlightServiceServer<SwanFlightSqlService>>().await;
 
         let _ = shutdown_tx.send(());
     });
