@@ -16,3 +16,5 @@ tests/runner/target
 
 lcov.info
 .vscode/
+
+.venv/

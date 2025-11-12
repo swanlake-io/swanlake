@@ -66,6 +66,11 @@ cd "$ROOT_DIR/examples/rust-adbc"
 cargo run
 cd -
 
+# Run Python example
+cd "$ROOT_DIR/examples/python-adbc"
+uv run main.py
+cd -
+
 # Send SIGTERM for graceful shutdown
 kill -TERM "$SERVER_PID" >/dev/null 2>&1 || true
 wait "$SERVER_PID" 2>/dev/null || true

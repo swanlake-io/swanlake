@@ -1,0 +1,9 @@
+[project]
+name = "swanlake-python-adbc-example"
+version = "0.1.0"
+description = "Python ADBC example for SwanLake Flight SQL server"
+requires-python = ">=3.9"
+dependencies = [
+    "adbc-driver-flightsql",
+    "pyarrow"
+]
