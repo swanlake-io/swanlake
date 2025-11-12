@@ -29,6 +29,8 @@ pub struct ServerConfig {
     pub duckling_queue_max_parallel_flushes: usize,
     /// Target schema name for flushing Duckling Queue data.
     pub duckling_queue_target_schema: String,
+    /// Automatically create tables if they don't exist when flushing Duckling Queue data.
+    pub duckling_queue_auto_create_tables: bool,
 }
 
 impl Default for ServerConfig {
@@ -47,6 +49,7 @@ impl Default for ServerConfig {
             duckling_queue_max_parallel_flushes: 2,
 
             duckling_queue_target_schema: "swanlake".to_string(),
+            duckling_queue_auto_create_tables: false,
         }
     }
 }

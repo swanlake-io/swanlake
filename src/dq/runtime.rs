@@ -195,10 +195,14 @@ pub fn flush_sealed_file(
         let quoted = quote_ident(&table);
         debug!(table = %table, "flushing duckling queue table");
 
-        let sql = format!(
-            "CREATE TABLE IF NOT EXISTS {target_schema}.{quoted} AS FROM duckling_queue.{quoted} LIMIT 0;
-            INSERT INTO {target_schema}.{quoted} SELECT * FROM duckling_queue.{quoted};"
-        );
+        let sql = if manager.settings().auto_create_tables {
+            format!(
+                "CREATE TABLE IF NOT EXISTS {target_schema}.{quoted} AS FROM duckling_queue.{quoted} LIMIT 0;
+                INSERT INTO {target_schema}.{quoted} SELECT * FROM duckling_queue.{quoted};"
+            )
+        } else {
+            format!("INSERT INTO {target_schema}.{quoted} SELECT * FROM duckling_queue.{quoted};")
+        };
         conn.execute_batch(&sql)
             .map_err(|err| {
                 error!(error = %err, table = %table, path = %path.display(), "failed to insert data");

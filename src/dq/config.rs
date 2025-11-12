@@ -16,6 +16,7 @@ pub struct Settings {
     pub max_parallel_flushes: usize,
     pub lock_ttl: Duration,
     pub target_schema: String,
+    pub auto_create_tables: bool,
 }
 
 impl Settings {
@@ -40,6 +41,7 @@ impl Settings {
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes,
             lock_ttl,
             target_schema: config.duckling_queue_target_schema.clone(),
+            auto_create_tables: config.duckling_queue_auto_create_tables,
         }
     }
 }
