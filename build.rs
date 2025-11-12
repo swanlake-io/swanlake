@@ -1,8 +1,9 @@
-use reqwest::blocking::get;
+use reqwest::blocking::Client;
 use std::env;
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
+use std::time::Duration;
 use zip::ZipArchive;
 
 fn main() {
@@ -11,6 +12,11 @@ fn main() {
     let cache_dir = Path::new(&root_dir).join(".duckdb");
     let install_dir = cache_dir.join(&version);
     let env_file = cache_dir.join("env.sh");
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(600))
+        .build()
+        .unwrap();
 
     let dist = detect_dist().expect("Unsupported platform");
     let zip_name = format!("libduckdb-{}.zip", dist);
@@ -24,23 +30,42 @@ fn main() {
 
     if !Path::new(&zip_name).exists() {
         println!("cargo:warning=Downloading DuckDB {} ({})...", version, dist);
-        let response = get(&download_url).expect("Failed to download DuckDB");
+        let response = client
+            .get(&download_url)
+            .send()
+            .expect("Failed to download DuckDB");
         let bytes = response.bytes().expect("Failed to read response bytes");
         fs::write(&zip_name, bytes).expect("Failed to write zip file");
     } else {
         println!("cargo:warning=Using cached archive {}", zip_name);
     }
 
-    if !Path::new("libduckdb.dylib").exists() && !Path::new("libduckdb.so").exists() {
+    // Check for platform-specific library
+    let lib_name = if cfg!(target_os = "macos") {
+        "libduckdb.dylib"
+    } else {
+        "libduckdb.so"
+    };
+    let lib_exists = Path::new(lib_name).exists();
+    println!(
+        "cargo:debug=Checking for library in {}: {} exists = {}",
+        install_dir.display(),
+        lib_name,
+        lib_exists
+    );
+
+    if !lib_exists {
         println!("cargo:warning=Extracting {}...", zip_name);
         let file = fs::File::open(&zip_name).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
+        println!("cargo:debug=Archive contains {} files", archive.len());
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).unwrap();
             let outpath = match file.enclosed_name() {
                 Some(path) => path,
                 None => continue,
             };
+            println!("cargo:debug=Extracting: {}", outpath.display());
             if file.is_dir() {
                 fs::create_dir_all(&outpath).unwrap();
             } else {
@@ -50,8 +75,27 @@ fn main() {
                     }
                 }
                 let mut outfile = fs::File::create(&outpath).unwrap();
-                std::io::copy(&mut file, &mut outfile).unwrap();
+                let bytes_copied = std::io::copy(&mut file, &mut outfile).unwrap();
+                println!("cargo:debug=  -> wrote {} bytes", bytes_copied);
             }
+        }
+        println!(
+            "cargo:debug=Extraction complete. {} exists = {}",
+            lib_name,
+            Path::new(lib_name).exists()
+        );
+    } else {
+        println!("cargo:warning=Using cached library files");
+    }
+
+    // List directory contents for debugging
+    println!(
+        "cargo:debug=Directory contents of {}:",
+        install_dir.display()
+    );
+    if let Ok(entries) = fs::read_dir(&install_dir) {
+        for entry in entries.flatten() {
+            println!("cargo:debug=  - {}", entry.path().display());
         }
     }
 
@@ -61,7 +105,10 @@ fn main() {
             "https://github.com/duckdb/duckdb/releases/download/v{}/duckdb-{}.zip",
             version, dist
         );
-        let response = get(&headers_url).expect("Failed to download headers");
+        let response = client
+            .get(&headers_url)
+            .send()
+            .expect("Failed to download headers");
         let bytes = response.bytes().unwrap();
         let cursor = Cursor::new(bytes);
         let mut archive = ZipArchive::new(cursor).unwrap();
