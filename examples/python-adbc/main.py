@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """
 Python ADBC example for SwanLake Flight SQL server.
-
-This example demonstrates:
-1. Connecting to SwanLake using ADBC Flight SQL driver
-2. Creating tables and inserting data
-3. Querying data and fetching results as Arrow tables
-4. Using prepared statements with parameter binding
 """
 
 import sys
