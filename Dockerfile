@@ -3,6 +3,12 @@ FROM rust:slim AS builder
 
 WORKDIR /app
 
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy source
 COPY . .
 
@@ -15,11 +21,10 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 # Install runtime deps (if needed, e.g., for DuckDB)
-RUN apt update && apt install -y --no-install-recommends ca-certificates wget && rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Install grpc-health-probe for health checks
-RUN wget -qO /usr/local/bin/grpc-health-probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.41/grpc_health_probe-linux-amd64 && \
-    chmod +x /usr/local/bin/grpc-health-probe
+COPY --from=ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.41 /ko-app/grpc-health-probe /usr/local/bin/grpc_health_probe
 
 # Copy DuckDB setup
 COPY --from=builder /app/.duckdb .duckdb
