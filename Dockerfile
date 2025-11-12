@@ -24,7 +24,7 @@ WORKDIR /app
 RUN apt update && apt install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Install grpc-health-probe for health checks
-COPY --from=ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.41 /ko-app/grpc-health-probe /usr/local/bin/grpc_health_probe
+COPY --from=ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.41 /ko-app/grpc-health-probe /usr/local/bin/grpc-health-probe
 
 # Copy DuckDB setup
 COPY --from=builder /app/.duckdb .duckdb

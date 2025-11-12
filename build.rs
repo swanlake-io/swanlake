@@ -76,11 +76,11 @@ fn main() {
                 }
                 let mut outfile = fs::File::create(&outpath).unwrap();
                 let bytes_copied = std::io::copy(&mut file, &mut outfile).unwrap();
-                println!("cargo:warning=  -> wrote {} bytes", bytes_copied);
+                println!("cargo:debug=  -> wrote {} bytes", bytes_copied);
             }
         }
         println!(
-            "cargo:warning=Extraction complete. {} exists = {}",
+            "cargo:debug=Extraction complete. {} exists = {}",
             lib_name,
             Path::new(lib_name).exists()
         );
