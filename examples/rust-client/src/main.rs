@@ -7,6 +7,7 @@ use comfy_table::{
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, CellAlignment, Color,
     ContentArrangement, Table,
 };
+use flight_sql_client::arrow::array_value_to_string;
 use flight_sql_client::FlightSQLClient;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
@@ -233,7 +234,7 @@ fn display_results(batches: &[RecordBatch]) -> Result<()> {
             let mut row_cells = Vec::new();
             for col_idx in 0..batch.num_columns() {
                 let column = batch.column(col_idx);
-                let value = format_cell_value(column.as_ref(), row_idx);
+                let value = format_cell_value(column.as_ref(), row_idx)?;
                 row_cells.push(Cell::new(value));
             }
             table.add_row(row_cells);
@@ -244,72 +245,6 @@ fn display_results(batches: &[RecordBatch]) -> Result<()> {
     Ok(())
 }
 
-fn format_cell_value(column: &dyn Array, row_idx: usize) -> String {
-    if column.is_null(row_idx) {
-        return "NULL".to_string();
-    }
-
-    use arrow_array::*;
-
-    match column.data_type() {
-        arrow_schema::DataType::Utf8 => column
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .map(|arr| arr.value(row_idx).to_string())
-            .unwrap_or_else(|| "?".to_string()),
-        arrow_schema::DataType::Int32 => column
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .map(|arr| arr.value(row_idx).to_string())
-            .unwrap_or_else(|| "?".to_string()),
-        arrow_schema::DataType::Int64 => column
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .map(|arr| arr.value(row_idx).to_string())
-            .unwrap_or_else(|| "?".to_string()),
-        arrow_schema::DataType::Float32 => column
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .map(|arr| arr.value(row_idx).to_string())
-            .unwrap_or_else(|| "?".to_string()),
-        arrow_schema::DataType::Float64 => column
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .map(|arr| arr.value(row_idx).to_string())
-            .unwrap_or_else(|| "?".to_string()),
-        arrow_schema::DataType::Boolean => column
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .map(|arr| arr.value(row_idx).to_string())
-            .unwrap_or_else(|| "?".to_string()),
-        arrow_schema::DataType::Date32 => column
-            .as_any()
-            .downcast_ref::<Date32Array>()
-            .map(|arr| arr.value(row_idx).to_string())
-            .unwrap_or_else(|| "?".to_string()),
-        arrow_schema::DataType::Timestamp(_, _) => column
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .map(|arr| arr.value(row_idx).to_string())
-            .or_else(|| {
-                column
-                    .as_any()
-                    .downcast_ref::<TimestampMicrosecondArray>()
-                    .map(|arr| arr.value(row_idx).to_string())
-            })
-            .or_else(|| {
-                column
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondArray>()
-                    .map(|arr| arr.value(row_idx).to_string())
-            })
-            .or_else(|| {
-                column
-                    .as_any()
-                    .downcast_ref::<TimestampSecondArray>()
-                    .map(|arr| arr.value(row_idx).to_string())
-            })
-            .unwrap_or_else(|| "?".to_string()),
-        _ => format!("{:?}", column.slice(row_idx, 1)),
-    }
+fn format_cell_value(column: &dyn Array, row_idx: usize) -> Result<String> {
+    array_value_to_string(column, row_idx)
 }

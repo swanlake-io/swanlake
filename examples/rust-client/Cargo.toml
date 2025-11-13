@@ -3,10 +3,6 @@ name = "swanlake-client"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "swanlake-cli"
-path = "src/bin/cli.rs"
-
 [dependencies]
 anyhow = "1.0"
 arrow-array = "56"

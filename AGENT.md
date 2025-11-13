@@ -46,9 +46,7 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 
 ## Testing & Tooling
 - `./scripts/run-integration-tests.sh` — end-to-end (builds server, runs Go client tests).
-- `cargo test` — Rust unit/integration suite.
 - `examples/go-adbc/main.go` — quick manual smoke test (`SWANLAKE_PORT=50051 go run main.go`).
-- Logs to watch: `"SwanLake Flight SQL server listening..."`, `"session created"`, `"Cleaned up X idle sessions"`.
 
 ## Common Agent Tasks
 - **Add config option**: extend `ServerConfig` in `src/config.rs`, wire defaults + docs (`README.md`, possibly `AGENT.md`).
