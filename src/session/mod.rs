@@ -504,7 +504,13 @@ impl Session {
                     .downcast_ref::<arrow_array::StringArray>()
                 {
                     (0..column.len())
-                        .filter_map(|i| column.value(i).to_string().into())
+                        .filter_map(|i| {
+                            if column.is_null(i) {
+                                None
+                            } else {
+                                Some(column.value(i).to_string())
+                            }
+                        })
                         .collect::<Vec<String>>()
                 } else {
                     Vec::new()
