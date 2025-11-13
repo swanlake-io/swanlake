@@ -16,7 +16,8 @@ pub fn requires_test_dir(args: &CliArgs) -> bool {
 
 pub async fn run_all(args: &CliArgs) -> Result<()> {
     duckling_queue_rotation::run_duckling_queue_rotation(args).await?;
-    parameter_types::run_parameter_types(args).await
+    parameter_types::run_parameter_types(args).await?;
+    Ok(())
 }
 
 pub struct SqlClient {
@@ -91,4 +92,4 @@ impl SqlClient {
     }
 }
 
-pub use flight_sql_client::arrow::{value_as_i64, value_as_string};
+pub use flight_sql_client::arrow::value_as_i64;

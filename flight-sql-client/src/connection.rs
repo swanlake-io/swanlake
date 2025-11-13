@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use adbc_core::{
     options::{AdbcVersion, OptionDatabase, OptionValue},
@@ -12,6 +14,53 @@ use anyhow::{Context, Result};
 pub struct FlightSqlConnectionBuilder {
     endpoint: String,
     driver_path: PathBuf,
+}
+
+struct CachedDriver {
+    driver: Mutex<ManagedDriver>,
+}
+
+impl CachedDriver {
+    fn new(driver: ManagedDriver) -> Self {
+        Self {
+            driver: Mutex::new(driver),
+        }
+    }
+
+    fn new_connection(&self, endpoint: &str) -> Result<ManagedConnection> {
+        let mut driver = self
+            .driver
+            .lock()
+            .expect("Flight SQL driver mutex poisoned");
+        let database = driver
+            .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])
+            .with_context(|| "failed to create database handle")?;
+        drop(driver);
+        let connection = database
+            .new_connection()
+            .with_context(|| "failed to create Flight SQL connection")?;
+        Ok(connection)
+    }
+}
+
+static DRIVER_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<CachedDriver>>>> = OnceLock::new();
+
+fn get_cached_driver(path: &Path) -> Result<Arc<CachedDriver>> {
+    let cache = DRIVER_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache
+        .lock()
+        .expect("Flight SQL driver cache mutex poisoned");
+    let cache_key = path.to_path_buf();
+
+    if let Some(entry) = guard.get(&cache_key) {
+        return Ok(entry.clone());
+    }
+
+    let driver = ManagedDriver::load_dynamic_from_filename(path, None, AdbcVersion::default())
+        .with_context(|| format!("failed to load Flight SQL driver from {}", path.display()))?;
+    let entry = Arc::new(CachedDriver::new(driver));
+    guard.insert(cache_key, entry.clone());
+    Ok(entry)
 }
 
 impl FlightSqlConnectionBuilder {
@@ -31,27 +80,8 @@ impl FlightSqlConnectionBuilder {
 
     /// Establish the connection synchronously.
     pub fn connect(&self) -> Result<ManagedConnection> {
-        let mut driver = ManagedDriver::load_dynamic_from_filename(
-            &self.driver_path,
-            None,
-            AdbcVersion::default(),
-        )
-        .with_context(|| {
-            format!(
-                "failed to load Flight SQL driver from {}",
-                self.driver_path.display()
-            )
-        })?;
-
-        let database = driver
-            .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(
-                self.endpoint.as_str(),
-            ))])
-            .with_context(|| "failed to create database handle")?;
-        let connection = database
-            .new_connection()
-            .with_context(|| "failed to create Flight SQL connection")?;
-        Ok(connection)
+        let driver = get_cached_driver(&self.driver_path)?;
+        driver.new_connection(self.endpoint.as_str())
     }
 }
 

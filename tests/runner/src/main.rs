@@ -331,7 +331,8 @@ async fn run_entrypoint() -> Result<()> {
         args.test_files.len()
     );
     run_sqllogictest(&args).await?;
-    scenarios::run_all(&args).await
+    scenarios::run_all(&args).await?;
+    Ok(())
 }
 
 async fn run_sqllogictest(args: &CliArgs) -> Result<()> {
