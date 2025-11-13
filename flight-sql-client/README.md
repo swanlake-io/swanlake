@@ -39,7 +39,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `FlightSQLClient`: Main client for executing queries and updates.
 - `QueryResult`: Holds query results with record batches.
 - `UpdateResult`: Holds update results with affected rows.
-- `FlightSqlConnectionBuilder`: Builder for custom connections.
 
 See the [SwanLake repository](https://github.com/swanlake-io/swanlake) for more examples and server setup.
 

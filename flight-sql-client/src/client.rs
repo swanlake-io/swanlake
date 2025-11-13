@@ -1,12 +1,60 @@
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::arrow::value_as_i64;
-use crate::connection;
-use adbc_core::{error::Status as AdbcStatus, Connection, Statement};
-use adbc_driver_manager::ManagedConnection;
-use anyhow::{anyhow, Result};
+use adbc_core::{
+    error::Status as AdbcStatus,
+    options::{AdbcVersion, OptionDatabase, OptionValue},
+    Connection, Database, Driver, Statement,
+};
+use adbc_driver_flightsql::DRIVER_PATH;
+use adbc_driver_manager::{ManagedConnection, ManagedDriver};
+use anyhow::{anyhow, Context, Result};
 use arrow_array::{RecordBatch, RecordBatchReader, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+
+struct CachedDriver {
+    driver: Mutex<ManagedDriver>,
+}
+
+impl CachedDriver {
+    fn new(driver: ManagedDriver) -> Self {
+        Self {
+            driver: Mutex::new(driver),
+        }
+    }
+
+    fn new_connection(&self, endpoint: &str) -> Result<ManagedConnection> {
+        let mut driver = self
+            .driver
+            .lock()
+            .expect("Flight SQL driver mutex poisoned");
+        let database = driver
+            .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])
+            .with_context(|| "failed to create database handle")?;
+        drop(driver);
+        let connection = database
+            .new_connection()
+            .with_context(|| "failed to create Flight SQL connection")?;
+        Ok(connection)
+    }
+}
+
+static DRIVER_CACHE: OnceLock<Arc<CachedDriver>> = OnceLock::new();
+
+fn get_cached_driver() -> Arc<CachedDriver> {
+    DRIVER_CACHE
+        .get_or_init(|| {
+            let driver = ManagedDriver::load_dynamic_from_filename(
+                &PathBuf::from(DRIVER_PATH),
+                None,
+                AdbcVersion::default(),
+            )
+            .expect("failed to load Flight SQL driver");
+            Arc::new(CachedDriver::new(driver))
+        })
+        .clone()
+}
 
 /// A Flight SQL client for connecting to SwanLake servers.
 ///
@@ -117,7 +165,8 @@ impl FlightSQLClient {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn connect(endpoint: &str) -> Result<Self> {
-        let mut conn = connection::connect(endpoint)?;
+        let driver = get_cached_driver();
+        let mut conn = driver.new_connection(endpoint)?;
         // Test the connection by executing a simple query.
         let mut stmt = conn.new_statement()?;
         stmt.set_sql_query("SELECT 1")?;

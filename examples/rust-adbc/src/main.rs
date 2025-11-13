@@ -1,11 +1,15 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use adbc_core::{Connection, Statement};
-use adbc_driver_manager::ManagedConnection;
-use anyhow::{anyhow, Result};
+use adbc_core::{
+    options::{AdbcVersion, OptionDatabase, OptionValue},
+    Connection, Database, Driver, Statement,
+};
+use adbc_driver_flightsql::DRIVER_PATH;
+use adbc_driver_manager::{ManagedConnection, ManagedDriver};
+use anyhow::{anyhow, Context, Result};
 use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use flight_sql_client::FlightSqlConnectionBuilder;
 use tracing::info;
 
 #[derive(Debug)]
@@ -26,7 +30,21 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt().compact().init();
 
     let endpoint = "grpc://localhost:4214";
-    let mut conn = FlightSqlConnectionBuilder::new(endpoint).connect()?;
+    let driver_path = PathBuf::from(DRIVER_PATH);
+    let mut driver =
+        ManagedDriver::load_dynamic_from_filename(&driver_path, None, AdbcVersion::default())
+            .with_context(|| {
+                format!(
+                    "failed to load Flight SQL driver from {}",
+                    driver_path.display()
+                )
+            })?;
+    let database = driver
+        .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])
+        .with_context(|| "failed to create database handle")?;
+    let mut conn = database
+        .new_connection()
+        .with_context(|| "failed to create Flight SQL connection")?;
     info!("Connected to SwanLake successfully!");
 
     // Exec schema

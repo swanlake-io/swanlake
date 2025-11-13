@@ -17,7 +17,6 @@
 
 pub mod arrow;
 pub mod client;
-pub mod connection;
 
 /// A Flight SQL client for connecting to SwanLake servers.
 ///
@@ -38,13 +37,3 @@ pub use client::StatementResult;
 ///
 /// See [`UpdateResult`] for details.
 pub use client::UpdateResult;
-
-/// Convenience helper to open a Flight SQL connection with default settings.
-///
-/// See [`connect`] for details.
-pub use connection::connect;
-
-/// Configurable builder for establishing Flight SQL connections.
-///
-/// See [`FlightSqlConnectionBuilder`] for details.
-pub use connection::FlightSqlConnectionBuilder;

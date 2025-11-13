@@ -25,6 +25,8 @@ bash "$ROOT_DIR/scripts/run-all-sql-tests.sh"
 "$CARGO_TARGET_DIR/debug/swanlake" &
 SERVER_PID=$!
 
+trap "kill -9 $SERVER_PID 2>/dev/null || true" EXIT
+
 # Wait for server to be ready
 ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"
