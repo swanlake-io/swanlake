@@ -25,7 +25,7 @@ bash "$ROOT_DIR/scripts/run-all-sql-tests.sh"
 "$CARGO_TARGET_DIR/debug/swanlake" &
 SERVER_PID=$!
 
-trap "kill -9 $SERVER_PID 2>/dev/null || true" EXIT
+trap "kill -TERM $SERVER_PID 2>/dev/null || true; sleep 5; kill -9 $SERVER_PID 2>/dev/null || true" EXIT
 
 # Wait for server to be ready
 ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
@@ -72,10 +72,6 @@ cd -
 cd "$ROOT_DIR/examples/python-adbc"
 uv run main.py
 cd -
-
-# Send SIGTERM for graceful shutdown
-kill -TERM "$SERVER_PID" >/dev/null 2>&1 || true
-wait "$SERVER_PID" 2>/dev/null || true
 
 # Give a moment for profraw files to be fully written
 sleep 2

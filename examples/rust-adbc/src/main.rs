@@ -1,15 +1,7 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use adbc_core::{
-    options::{AdbcVersion, OptionDatabase, OptionValue},
-    Connection, Database, Driver, Statement,
-};
-use adbc_driver_flightsql::DRIVER_PATH;
-use adbc_driver_manager::{ManagedConnection, ManagedDriver};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
+use flight_sql_client::FlightSQLClient;
 use tracing::info;
 
 #[derive(Debug)]
@@ -30,25 +22,11 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt().compact().init();
 
     let endpoint = "grpc://localhost:4214";
-    let driver_path = PathBuf::from(DRIVER_PATH);
-    let mut driver =
-        ManagedDriver::load_dynamic_from_filename(&driver_path, None, AdbcVersion::default())
-            .with_context(|| {
-                format!(
-                    "failed to load Flight SQL driver from {}",
-                    driver_path.display()
-                )
-            })?;
-    let database = driver
-        .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])
-        .with_context(|| "failed to create database handle")?;
-    let mut conn = database
-        .new_connection()
-        .with_context(|| "failed to create Flight SQL connection")?;
+    let mut client = FlightSQLClient::connect(endpoint)?;
     info!("Connected to SwanLake successfully!");
 
     // Exec schema
-    execute_statement(&mut conn, SCHEMA)?;
+    execute_statement(&mut client, SCHEMA)?;
 
     // Batch inserts with param binding (using prepared statements and Bind)
     let people_to_insert = vec![
@@ -68,7 +46,7 @@ fn main() -> Result<()> {
             email: "jane.citzen@example.com".to_string(),
         },
     ];
-    insert_people(&mut conn, people_to_insert)?;
+    insert_people(&mut client, people_to_insert)?;
 
     let places_to_insert = vec![
         Place {
@@ -87,11 +65,11 @@ fn main() -> Result<()> {
             telcode: 65i32,
         },
     ];
-    insert_places(&mut conn, places_to_insert)?;
+    insert_places(&mut client, places_to_insert)?;
 
     // Select all people
     let people = select_people(
-        &mut conn,
+        &mut client,
         "SELECT * FROM person ORDER BY first_name ASC",
         vec![],
     )?;
@@ -104,7 +82,7 @@ fn main() -> Result<()> {
 
     // Select single person (simulate QueryRow)
     let single_person = select_people(
-        &mut conn,
+        &mut client,
         "SELECT * FROM person WHERE first_name = ?",
         vec!["Jason".to_string()],
     )?;
@@ -114,7 +92,7 @@ fn main() -> Result<()> {
     }
 
     // Select places
-    let places = select_places(&mut conn, "SELECT * FROM place ORDER BY telcode ASC")?;
+    let places = select_places(&mut client, "SELECT * FROM place ORDER BY telcode ASC")?;
     if places.len() >= 3 {
         println!("{:?}", places[0]);
         println!("{:?}", places[1]);
@@ -123,7 +101,7 @@ fn main() -> Result<()> {
 
     // Iterate places
     println!("\n=== Iterating Through Rows ===");
-    iterate_places(&mut conn)?;
+    iterate_places(&mut client)?;
 
     // Additional batch insert
     let additional_people = vec![
@@ -163,7 +141,7 @@ fn main() -> Result<()> {
             email: "nlaumape2@ab.co.nz".to_string(),
         },
     ];
-    insert_people(&mut conn, additional_people)?;
+    insert_people(&mut client, additional_people)?;
 
     println!("\n✅ All operations completed successfully!");
 
@@ -183,27 +161,21 @@ CREATE TABLE IF NOT EXISTS place (
     telcode INTEGER
 )"#;
 
-fn execute_statement(conn: &mut ManagedConnection, sql: &str) -> Result<()> {
-    let mut stmt = conn.new_statement()?;
-    stmt.set_sql_query(sql)?;
-    stmt.execute_update()?;
+fn execute_statement(client: &mut FlightSQLClient, sql: &str) -> Result<()> {
+    client.execute_update(sql)?;
     Ok(())
 }
 
-fn insert_people(conn: &mut ManagedConnection, people: Vec<Person>) -> Result<()> {
+fn insert_people(client: &mut FlightSQLClient, people: Vec<Person>) -> Result<()> {
     if people.is_empty() {
         return Ok(());
     }
-    let mut stmt = conn.new_statement()?;
-    stmt.set_sql_query("INSERT INTO person (first_name, last_name, email) VALUES (?, ?, ?)")?;
-    stmt.prepare()?;
-
     // Create Arrow record for binding multiple rows
     let first_names: Vec<&str> = people.iter().map(|p| p.first_name.as_str()).collect();
     let last_names: Vec<&str> = people.iter().map(|p| p.last_name.as_str()).collect();
     let emails: Vec<&str> = people.iter().map(|p| p.email.as_str()).collect();
 
-    let schema = Arc::new(Schema::new(vec![
+    let schema = std::sync::Arc::new(Schema::new(vec![
         Field::new("first_name", DataType::Utf8, false),
         Field::new("last_name", DataType::Utf8, false),
         Field::new("email", DataType::Utf8, false),
@@ -211,31 +183,27 @@ fn insert_people(conn: &mut ManagedConnection, people: Vec<Person>) -> Result<()
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from(first_names)),
-            Arc::new(StringArray::from(last_names)),
-            Arc::new(StringArray::from(emails)),
+            std::sync::Arc::new(StringArray::from(first_names)),
+            std::sync::Arc::new(StringArray::from(last_names)),
+            std::sync::Arc::new(StringArray::from(emails)),
         ],
     )?;
-    stmt.bind(batch)?;
-    stmt.execute_update()?;
+    client.execute_batch_update(
+        "INSERT INTO person (first_name, last_name, email) VALUES (?, ?, ?)",
+        batch,
+    )?;
     Ok(())
 }
 
-fn insert_places(conn: &mut ManagedConnection, places: Vec<Place>) -> Result<()> {
+fn insert_places(client: &mut FlightSQLClient, places: Vec<Place>) -> Result<()> {
     if places.is_empty() {
         return Ok(());
     }
-    let mut stmt = conn.new_statement()?;
-    // Always include city column as nullable
-    let sql = "INSERT INTO place (country, city, telcode) VALUES (?, ?, ?)";
-    stmt.set_sql_query(sql)?;
-    stmt.prepare()?;
-
     let countries: Vec<&str> = places.iter().map(|p| p.country.as_str()).collect();
     let cities: Vec<Option<&str>> = places.iter().map(|p| p.city.as_deref()).collect();
     let telcodes: Vec<i32> = places.iter().map(|p| p.telcode).collect();
 
-    let schema = Arc::new(Schema::new(vec![
+    let schema = std::sync::Arc::new(Schema::new(vec![
         Field::new("country", DataType::Utf8, false),
         Field::new("city", DataType::Utf8, true),
         Field::new("telcode", DataType::Int32, false),
@@ -243,41 +211,30 @@ fn insert_places(conn: &mut ManagedConnection, places: Vec<Place>) -> Result<()>
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from(countries)),
-            Arc::new(StringArray::from(cities)),
-            Arc::new(Int32Array::from(telcodes)),
+            std::sync::Arc::new(StringArray::from(countries)),
+            std::sync::Arc::new(StringArray::from(cities)),
+            std::sync::Arc::new(Int32Array::from(telcodes)),
         ],
     )?;
-    stmt.bind(batch)?;
-    stmt.execute_update()?;
+    client.execute_batch_update(
+        "INSERT INTO place (country, city, telcode) VALUES (?, ?, ?)",
+        batch,
+    )?;
     Ok(())
 }
 
 fn select_people(
-    conn: &mut ManagedConnection,
+    client: &mut FlightSQLClient,
     sql: &str,
     params: Vec<String>,
 ) -> Result<Vec<Person>> {
-    let mut stmt = conn.new_statement()?;
-    stmt.set_sql_query(sql)?;
-    stmt.prepare()?;
-
-    if !params.is_empty() {
-        let schema = Arc::new(Schema::new(
-            params
-                .iter()
-                .enumerate()
-                .map(|(i, _)| Field::new(format!("param{}", i), DataType::Utf8, false))
-                .collect::<Vec<Field>>(),
-        ));
-        let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(params))])?;
-        stmt.bind(batch)?;
-    }
-
-    let reader = stmt.execute()?;
+    let result = if params.is_empty() {
+        client.execute(sql)?
+    } else {
+        client.execute_with_params(sql, params)?
+    };
     let mut people = Vec::new();
-    for batch in reader {
-        let batch = batch?;
+    for batch in &result.batches {
         let first_names = batch
             .column(0)
             .as_any()
@@ -304,13 +261,10 @@ fn select_people(
     Ok(people)
 }
 
-fn select_places(conn: &mut ManagedConnection, sql: &str) -> Result<Vec<Place>> {
-    let mut stmt = conn.new_statement()?;
-    stmt.set_sql_query(sql)?;
-    let reader = stmt.execute()?;
+fn select_places(client: &mut FlightSQLClient, sql: &str) -> Result<Vec<Place>> {
+    let result = client.execute(sql)?;
     let mut places = Vec::new();
-    for batch in reader {
-        let batch = batch?;
+    for batch in &result.batches {
         let countries = batch
             .column(0)
             .as_any()
@@ -341,12 +295,9 @@ fn select_places(conn: &mut ManagedConnection, sql: &str) -> Result<Vec<Place>> 
     Ok(places)
 }
 
-fn iterate_places(conn: &mut ManagedConnection) -> Result<()> {
-    let mut stmt = conn.new_statement()?;
-    stmt.set_sql_query("SELECT * FROM place")?;
-    let reader = stmt.execute()?;
-    for batch in reader {
-        let batch = batch?;
+fn iterate_places(client: &mut FlightSQLClient) -> Result<()> {
+    let result = client.execute("SELECT * FROM place")?;
+    for batch in &result.batches {
         let countries = batch
             .column(0)
             .as_any()

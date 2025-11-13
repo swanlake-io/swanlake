@@ -18,6 +18,6 @@ jobs:
         uses: katyo/publish-crates@v2
         with:
           path: "./flight-sql-client"
-          args: --no-verify --allow-dirty --all-features
+          args: --allow-dirty --all-features
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           ignore-unpublished-changes: true

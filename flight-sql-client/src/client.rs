@@ -40,20 +40,21 @@ impl CachedDriver {
     }
 }
 
-static DRIVER_CACHE: OnceLock<Arc<CachedDriver>> = OnceLock::new();
+static DRIVER_CACHE: OnceLock<Result<Arc<CachedDriver>>> = OnceLock::new();
 
-fn get_cached_driver() -> Arc<CachedDriver> {
-    DRIVER_CACHE
-        .get_or_init(|| {
-            let driver = ManagedDriver::load_dynamic_from_filename(
-                &PathBuf::from(DRIVER_PATH),
-                None,
-                AdbcVersion::default(),
-            )
-            .expect("failed to load Flight SQL driver");
-            Arc::new(CachedDriver::new(driver))
-        })
-        .clone()
+fn get_cached_driver() -> Result<Arc<CachedDriver>> {
+    match DRIVER_CACHE.get_or_init(|| {
+        ManagedDriver::load_dynamic_from_filename(
+            &PathBuf::from(DRIVER_PATH),
+            None,
+            AdbcVersion::default(),
+        )
+        .with_context(|| "failed to load Flight SQL driver")
+        .map(|driver| Arc::new(CachedDriver::new(driver)))
+    }) {
+        Ok(driver) => Ok(driver.clone()),
+        Err(e) => Err(anyhow!("failed to load Flight SQL driver: {}", e)),
+    }
 }
 
 /// A Flight SQL client for connecting to SwanLake servers.
@@ -165,7 +166,7 @@ impl FlightSQLClient {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn connect(endpoint: &str) -> Result<Self> {
-        let driver = get_cached_driver();
+        let driver = get_cached_driver()?;
         let mut conn = driver.new_connection(endpoint)?;
         // Test the connection by executing a simple query.
         let mut stmt = conn.new_statement()?;
