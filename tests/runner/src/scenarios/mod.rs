@@ -4,11 +4,13 @@ use flight_sql_client::FlightSQLClient;
 
 use crate::CliArgs;
 
+pub mod duckling_queue_auto_load;
 pub mod duckling_queue_rotation;
 pub mod parameter_types;
 
 pub async fn run_all(args: &CliArgs) -> Result<()> {
     duckling_queue_rotation::run_duckling_queue_rotation(args).await?;
+    duckling_queue_auto_load::run_duckling_queue_auto_load(args).await?;
     parameter_types::run_parameter_types(args).await?;
     Ok(())
 }
