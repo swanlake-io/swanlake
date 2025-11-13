@@ -12,6 +12,7 @@ examples/rust-adbc/target
 examples/rust-client/target
 examples/rust-client/Cargo.lock
 examples/rust-adbc/Cargo.lock
+tests/runner/Cargo.lock
 tests/runner/target
 
 lcov.info
