@@ -4,7 +4,8 @@ use anyhow::{anyhow, Result};
 use arrow_array::{
     ArrayRef, Date32Array, Date64Array, Int32Array, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, RecordBatch, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
@@ -30,7 +31,11 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
             time64_ns_col TIME,
             interval_ym_col INTERVAL,
             interval_dt_col INTERVAL,
-            interval_mdn_col INTERVAL
+            interval_mdn_col INTERVAL,
+            timestamp_sec_col TIMESTAMP,
+            timestamp_ms_col TIMESTAMP,
+            timestamp_us_col TIMESTAMP,
+            timestamp_ns_col TIMESTAMP
         )
         "#,
     )?;
@@ -41,7 +46,7 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     // Insert row via prepared statement to exercise Arrow->DuckDB conversions
     let params = build_parameter_batch()?;
     client.exec_prepared(
-        "INSERT INTO parameter_types_test VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO parameter_types_test VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params,
     )?;
 
@@ -68,6 +73,10 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
         "interval_ym_col",
         "interval_dt_col",
         "interval_mdn_col",
+        "timestamp_sec_col",
+        "timestamp_ms_col",
+        "timestamp_us_col",
+        "timestamp_ns_col",
     ];
 
     for col in columns {
@@ -89,7 +98,12 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
 fn build_parameter_batch() -> Result<RecordBatch> {
     let epoch_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let base_date = NaiveDate::from_ymd_opt(2023, 12, 25).unwrap();
-    let base_time = NaiveTime::from_hms_opt(10, 20, 30).unwrap();
+    let base_time = NaiveTime::from_hms_nano_opt(10, 20, 30, 123456789).unwrap();
+    let base_datetime = NaiveDateTime::new(base_date, base_time);
+    let timestamp_sec = base_datetime.and_utc().timestamp();
+    let timestamp_ms = base_datetime.and_utc().timestamp_millis();
+    let timestamp_us = base_datetime.and_utc().timestamp_micros();
+    let timestamp_ns = base_datetime.and_utc().timestamp_nanos_opt().unwrap() as i64;
 
     let date32_value = base_date.signed_duration_since(epoch_date).num_days() as i32;
     let date64_value = NaiveDateTime::new(base_date, NaiveTime::from_hms_opt(0, 0, 0).unwrap())
@@ -139,6 +153,26 @@ fn build_parameter_batch() -> Result<RecordBatch> {
             DataType::Interval(IntervalUnit::MonthDayNano),
             false,
         ),
+        Field::new(
+            "timestamp_sec_col",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        ),
+        Field::new(
+            "timestamp_ms_col",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        ),
+        Field::new(
+            "timestamp_us_col",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
+        Field::new(
+            "timestamp_ns_col",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
     ]));
 
     let arrays: Vec<ArrayRef> = vec![
@@ -157,6 +191,10 @@ fn build_parameter_batch() -> Result<RecordBatch> {
         Arc::new(IntervalMonthDayNanoArray::from(vec![
             IntervalMonthDayNano::new(5, 6, 7_000_000_000),
         ])),
+        Arc::new(TimestampSecondArray::from(vec![timestamp_sec])),
+        Arc::new(TimestampMillisecondArray::from(vec![timestamp_ms])),
+        Arc::new(TimestampMicrosecondArray::from(vec![timestamp_us])),
+        Arc::new(TimestampNanosecondArray::from(vec![timestamp_ns])),
     ];
 
     Ok(RecordBatch::try_new(schema, arrays)?)

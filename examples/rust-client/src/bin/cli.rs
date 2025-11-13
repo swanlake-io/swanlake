@@ -7,10 +7,10 @@ use comfy_table::{
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, CellAlignment, Color,
     ContentArrangement, Table,
 };
+use flight_sql_client::FlightSQLClient;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::time::Instant;
-use flight_sql_client::FlightSQLClient;
 
 /// SwanLake CLI - Interactive SQL client
 #[derive(Parser, Debug)]
@@ -200,7 +200,6 @@ fn is_query_statement(sql: &str) -> bool {
         || normalized.starts_with("DESCRIBE")
         || normalized.starts_with("DESC")
         || normalized.starts_with("EXPLAIN")
-        || normalized.starts_with("PRAGMA")
 }
 
 fn display_results(batches: &[RecordBatch]) -> Result<()> {
