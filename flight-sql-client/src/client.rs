@@ -28,7 +28,7 @@ impl CachedDriver {
         let mut driver = self
             .driver
             .lock()
-            .expect("Flight SQL driver mutex poisoned");
+            .map_err(|e| anyhow!("Flight SQL driver mutex poisoned: {}", e))?;
         let database = driver
             .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])
             .with_context(|| "failed to create database handle")?;
