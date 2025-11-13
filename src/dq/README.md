@@ -33,12 +33,12 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
 
 ## Data Lifecycle
 1. **Boot & initialization:** On startup, SwanLake reads `ducklake_init_sql` and attaches DuckLake (`ATTACH ... AS swanlake`). No global queue file is created. Sessions will create their own queue files lazily.
-2. **Session queue creation:** Each session eagerly provisions and attaches its own queue file when the session starts (future optimization: make this lazy on first `duckling_queue.*` write). Files are named `duckling_queue_{uuid}_{timestamp}.db` under `{root}/active/`.
-3. **Client writes:** With the queue already attached, clients issue `CREATE TABLE duckling_queue.my_table AS ...` or `INSERT INTO duckling_queue...`. All schema and data live inside the session's queue file.
+2. **Session queue creation:** Each session creates and attaches its queue file lazily on first access to `duckling_queue.*` schema, improving session creation performance. Files are named `duckling_queue_{uuid}_{timestamp}.db` under `{root}/active/`.
+3. **Client writes:** When clients first reference `duckling_queue` (e.g., `CREATE TABLE duckling_queue.my_table AS ...`), the queue file is initialized and attached automatically. All schema and data live inside the session's queue file.
 4. **Rotation triggers:**
    - **Time-based:** Global ticker checks all sessions every `rotate_interval` seconds
    - **Size-based:** Session checks file size via `fs::metadata()` periodically
-   - **Session cleanup:** Before removing idle session, its queue file is automatically sealed
+   - **Session cleanup:** Before removing idle session, its queue file is automatically sealed (if it was ever created)
    - **Force flush:** Client executes `PRAGMA duckling_queue.flush;`
 5. **Rotation process:** Session detaches current queue, moves file from active/ to sealed/, creates new active file, and re-attaches.
 6. **Orphan sweep:** Background worker periodically scans active/ directory and seals files not owned by any current session (from crashed sessions or server restarts).
@@ -90,7 +90,7 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
 ## Implementation Status
 - [x] **Session-scoped architecture redesign**
   - [x] Create `QueueSession` abstraction (`src/dq/session.rs`) for per-session queue file management
-  - [ ] Implement lazy queue creation on first write to `duckling_queue.*` schema (currently eager on session startup for simplicity)
+  - [x] Implement lazy queue creation on first write to `duckling_queue.*` schema (improves session creation performance)
   - [x] Add session-level rotation methods with size/time threshold checks
   - [x] Implement automatic sealing on session cleanup
 - [x] **Session integration**

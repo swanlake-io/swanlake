@@ -139,25 +139,16 @@ impl Session {
     }
 
     /// Create a new session with duckling queue support.
-    /// The queue is attached immediately on session creation.
+    /// The queue file is created lazily on first access to improve session creation performance.
     #[instrument(skip(connection, dq_manager))]
     pub fn new_with_id_and_dq(
         id: SessionId,
         connection: DuckDbConnection,
         dq_manager: Arc<QueueManager>,
     ) -> Result<Self, ServerError> {
-        debug!(session_id = %id, "creating new session with duckling queue support");
+        debug!(session_id = %id, "creating new session with duckling queue support (lazy initialization)");
 
-        // Create and attach queue immediately
-        let sq = dq_manager
-            .open_session_queue(id.clone())
-            .map_err(|e| ServerError::Internal(format!("failed to create session queue: {}", e)))?;
-
-        let sql = sq.attach_sql();
-        connection
-            .execute_batch(&sql)
-            .map_err(|e| ServerError::Internal(format!("failed to attach session queue: {}", e)))?;
-
+        // Defer queue creation until first access
         Ok(Self {
             id,
             connection,
@@ -167,7 +158,7 @@ impl Session {
             statement_handle_gen: Arc::new(StatementHandleGenerator::new()),
             last_activity: Arc::new(Mutex::new(Instant::now())),
             dq_manager: Some(dq_manager),
-            dq_queue: Arc::new(Mutex::new(Some(sq))),
+            dq_queue: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -189,10 +180,53 @@ impl Session {
         *last = Instant::now();
     }
 
+    /// Ensure the duckling queue is initialized if needed.
+    /// This is called lazily when SQL references the duckling_queue schema.
+    fn ensure_queue_initialized(&self) -> Result<(), ServerError> {
+        let mut queue = self.dq_queue.lock().expect("dq_queue mutex poisoned");
+        
+        // Already initialized
+        if queue.is_some() {
+            return Ok(());
+        }
+
+        // No queue manager, nothing to initialize
+        let Some(ref dq_manager) = self.dq_manager else {
+            return Ok(());
+        };
+
+        debug!(session_id = %self.id, "lazy initializing duckling queue");
+
+        // Create and attach queue
+        let sq = dq_manager
+            .open_session_queue(self.id.clone())
+            .map_err(|e| ServerError::Internal(format!("failed to create session queue: {}", e)))?;
+
+        let sql = sq.attach_sql();
+        self.connection
+            .execute_batch(&sql)
+            .map_err(|e| ServerError::Internal(format!("failed to attach session queue: {}", e)))?;
+
+        *queue = Some(sq);
+        debug!(session_id = %self.id, "duckling queue initialized");
+        Ok(())
+    }
+
+    /// Check if SQL references the duckling_queue schema
+    fn sql_references_queue(sql: &str) -> bool {
+        let normalized = sql.to_ascii_lowercase();
+        normalized.contains("duckling_queue.")
+            || normalized.contains("duckling_queue_flush")
+            || normalized.contains("duckling_queue_cleanup")
+    }
+
     /// Execute a SELECT query
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn execute_query(&self, sql: &str) -> Result<QueryResult, ServerError> {
         self.touch();
+        if Self::sql_references_queue(sql) {
+            self.ensure_queue_initialized()?;
+        }
         self.connection.execute_query(sql)
     }
 
@@ -204,6 +238,9 @@ impl Session {
         params: &[Value],
     ) -> Result<QueryResult, ServerError> {
         self.touch();
+        if Self::sql_references_queue(sql) {
+            self.ensure_queue_initialized()?;
+        }
         self.connection.execute_query_with_params(sql, params)
     }
 
@@ -216,6 +253,9 @@ impl Session {
         }
 
         self.touch();
+        if Self::sql_references_queue(sql) {
+            self.ensure_queue_initialized()?;
+        }
         self.connection.execute_statement(sql)
     }
 
@@ -228,11 +268,13 @@ impl Session {
         if normalized == "pragma duckling_queue.flush"
             || normalized == "call duckling_queue_flush()"
         {
+            self.ensure_queue_initialized()?;
             self.force_flush_own_queue()?;
             Ok(Some(0))
         } else if normalized == "pragma duckling_queue.cleanup"
             || normalized == "call duckling_queue_cleanup()"
         {
+            // Cleanup doesn't require queue initialization as it operates on sealed/flushed files
             let dq_manager = self
                 .dq_manager
                 .as_ref()
@@ -285,6 +327,9 @@ impl Session {
         params: &[Value],
     ) -> Result<usize, ServerError> {
         self.touch();
+        if Self::sql_references_queue(sql) {
+            self.ensure_queue_initialized()?;
+        }
         self.connection.execute_statement_with_params(sql, params)
     }
 
@@ -292,6 +337,9 @@ impl Session {
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn schema_for_query(&self, sql: &str) -> Result<arrow_schema::Schema, ServerError> {
         self.touch();
+        if Self::sql_references_queue(sql) {
+            self.ensure_queue_initialized()?;
+        }
         self.connection.schema_for_query(sql)
     }
 
