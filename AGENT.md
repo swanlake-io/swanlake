@@ -45,7 +45,7 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 - **Duckling Queue admin command**: `PRAGMA duckling_queue.flush;` bypasses the async worker by rotating the active file and flushing every sealed DB immediately (handy for CI/tests).
 
 ## Testing & Tooling
-- `./scripts/run-integration-tets.sh` — end-to-end (builds server, runs Go client tests).
+- `./scripts/run-integration-tests.sh` — end-to-end (builds server, runs Go client tests).
 - `cargo test` — Rust unit/integration suite.
 - `examples/go-adbc/main.go` — quick manual smoke test (`SWANLAKE_PORT=50051 go run main.go`).
 - Logs to watch: `"SwanLake Flight SQL server listening..."`, `"session created"`, `"Cleaned up X idle sessions"`.

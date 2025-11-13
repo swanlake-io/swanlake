@@ -13,6 +13,7 @@ use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use duckdb::types::{TimeUnit as DuckTimeUnit, Value};
 use futures::{StreamExt, TryStreamExt};
+use std::any::type_name;
 use tonic::{Request, Status};
 
 use crate::error::ServerError;
@@ -64,18 +65,29 @@ impl SwanFlightSqlService {
     fn push_column_values(array: &ArrayRef, rows: &mut [Vec<Value>]) -> Result<(), ServerError> {
         macro_rules! push_values {
             ($array:expr, $rows:expr, $arr_type:ty, $variant:path) => {{
-                let values = $array
-                    .as_any()
-                    .downcast_ref::<$arr_type>()
-                    .expect(concat!(stringify!($arr_type), " array downcast"));
+                let values = Self::downcast_array::<$arr_type>($array)?;
                 Self::push_array_values(values, $rows, |arr, idx| $variant(arr.value(idx)));
             }};
             ($array:expr, $rows:expr, $arr_type:ty, $variant:path, $conv:ident) => {{
-                let values = $array
-                    .as_any()
-                    .downcast_ref::<$arr_type>()
-                    .expect(concat!(stringify!($arr_type), " array downcast"));
+                let values = Self::downcast_array::<$arr_type>($array)?;
                 Self::push_array_values(values, $rows, |arr, idx| $variant(arr.value(idx).$conv()));
+            }};
+        }
+        macro_rules! push_timestamp_values {
+            ($array:expr, $rows:expr, $arr_type:ty, $duck_unit:expr) => {{
+                let values = Self::downcast_array::<$arr_type>($array)?;
+                Self::push_array_values(values, $rows, |arr, idx| {
+                    Value::Timestamp($duck_unit, arr.value(idx))
+                });
+            }};
+        }
+        macro_rules! push_interval_values {
+            ($array:expr, $rows:expr, $arr_type:ty, $binding:ident, $make_value:expr) => {{
+                let values = Self::downcast_array::<$arr_type>($array)?;
+                Self::push_array_values(values, $rows, |arr, idx| {
+                    let $binding = arr.value(idx);
+                    $make_value
+                });
             }};
         }
 
@@ -105,36 +117,25 @@ impl SwanFlightSqlService {
                 push_values!(array, rows, LargeBinaryArray, Value::Blob, to_vec)
             }
             DataType::Date32 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<Date32Array>()
-                    .expect("Date32Array downcast");
+                let values = Self::downcast_array::<Date32Array>(array)?;
                 Self::push_array_values(values, rows, |arr, idx| Value::Date32(arr.value(idx)));
             }
             DataType::Date64 => {
-                let values = array
-                    .as_any()
-                    .downcast_ref::<Date64Array>()
-                    .expect("Date64Array downcast");
-                Self::push_array_values(values, rows, |arr, idx| {
-                    Value::Date32((arr.value(idx) / 86400000) as i32)
-                });
+                let values = Self::downcast_array::<Date64Array>(array)?;
+                Self::push_array_values_result(values, rows, |arr, idx| {
+                    let days = Self::date64_to_date32(arr.value(idx))?;
+                    Ok(Value::Date32(days))
+                })?;
             }
             DataType::Time32(unit) => match unit {
                 TimeUnit::Second => {
-                    let values = array
-                        .as_any()
-                        .downcast_ref::<Time32SecondArray>()
-                        .expect("Time32SecondArray downcast");
+                    let values = Self::downcast_array::<Time32SecondArray>(array)?;
                     Self::push_array_values(values, rows, |arr, idx| {
                         Value::Time64(DuckTimeUnit::Microsecond, arr.value(idx) as i64 * 1_000_000)
                     });
                 }
                 TimeUnit::Millisecond => {
-                    let values = array
-                        .as_any()
-                        .downcast_ref::<Time32MillisecondArray>()
-                        .expect("Time32MillisecondArray downcast");
+                    let values = Self::downcast_array::<Time32MillisecondArray>(array)?;
                     Self::push_array_values(values, rows, |arr, idx| {
                         Value::Time64(DuckTimeUnit::Microsecond, arr.value(idx) as i64 * 1_000)
                     });
@@ -159,19 +160,13 @@ impl SwanFlightSqlService {
                 };
                 match unit {
                     TimeUnit::Microsecond => {
-                        let values = array
-                            .as_any()
-                            .downcast_ref::<Time64MicrosecondArray>()
-                            .expect("Time64MicrosecondArray downcast");
+                        let values = Self::downcast_array::<Time64MicrosecondArray>(array)?;
                         Self::push_array_values(values, rows, |arr, idx| {
                             Value::Time64(duck_unit, arr.value(idx))
                         });
                     }
                     TimeUnit::Nanosecond => {
-                        let values = array
-                            .as_any()
-                            .downcast_ref::<Time64NanosecondArray>()
-                            .expect("Time64NanosecondArray downcast");
+                        let values = Self::downcast_array::<Time64NanosecondArray>(array)?;
                         Self::push_array_values(values, rows, |arr, idx| {
                             Value::Time64(duck_unit, arr.value(idx))
                         });
@@ -180,45 +175,39 @@ impl SwanFlightSqlService {
                 }
             }
             DataType::Interval(unit) => match unit {
-                IntervalUnit::YearMonth => {
-                    let values = array
-                        .as_any()
-                        .downcast_ref::<IntervalYearMonthArray>()
-                        .expect("IntervalYearMonthArray downcast");
-                    Self::push_array_values(values, rows, |arr, idx| Value::Interval {
-                        months: arr.value(idx),
+                IntervalUnit::YearMonth => push_interval_values!(
+                    array,
+                    rows,
+                    IntervalYearMonthArray,
+                    months,
+                    Value::Interval {
+                        months,
                         days: 0,
                         nanos: 0,
-                    });
-                }
-                IntervalUnit::DayTime => {
-                    let values = array
-                        .as_any()
-                        .downcast_ref::<IntervalDayTimeArray>()
-                        .expect("IntervalDayTimeArray downcast");
-                    Self::push_array_values(values, rows, |arr, idx| {
-                        let dt = arr.value(idx);
-                        Value::Interval {
-                            months: 0,
-                            days: dt.days,
-                            nanos: dt.milliseconds as i64 * 1_000_000,
-                        }
-                    });
-                }
-                IntervalUnit::MonthDayNano => {
-                    let values = array
-                        .as_any()
-                        .downcast_ref::<IntervalMonthDayNanoArray>()
-                        .expect("IntervalMonthDayNanoArray downcast");
-                    Self::push_array_values(values, rows, |arr, idx| {
-                        let mdn = arr.value(idx);
-                        Value::Interval {
-                            months: mdn.months,
-                            days: mdn.days,
-                            nanos: mdn.nanoseconds,
-                        }
-                    });
-                }
+                    }
+                ),
+                IntervalUnit::DayTime => push_interval_values!(
+                    array,
+                    rows,
+                    IntervalDayTimeArray,
+                    dt,
+                    Value::Interval {
+                        months: 0,
+                        days: dt.days,
+                        nanos: i64::from(dt.milliseconds) * 1_000_000,
+                    }
+                ),
+                IntervalUnit::MonthDayNano => push_interval_values!(
+                    array,
+                    rows,
+                    IntervalMonthDayNanoArray,
+                    mdn,
+                    Value::Interval {
+                        months: mdn.months,
+                        days: mdn.days,
+                        nanos: mdn.nanoseconds,
+                    }
+                ),
             },
             DataType::Timestamp(unit, _tz) => {
                 let duck_unit = match unit {
@@ -229,40 +218,16 @@ impl SwanFlightSqlService {
                 };
                 match unit {
                     TimeUnit::Second => {
-                        let values = array
-                            .as_any()
-                            .downcast_ref::<TimestampSecondArray>()
-                            .expect("TimestampSecondArray downcast");
-                        Self::push_array_values(values, rows, |arr, idx| {
-                            Value::Timestamp(duck_unit, arr.value(idx))
-                        });
+                        push_timestamp_values!(array, rows, TimestampSecondArray, duck_unit)
                     }
                     TimeUnit::Millisecond => {
-                        let values = array
-                            .as_any()
-                            .downcast_ref::<TimestampMillisecondArray>()
-                            .expect("TimestampMillisecondArray downcast");
-                        Self::push_array_values(values, rows, |arr, idx| {
-                            Value::Timestamp(duck_unit, arr.value(idx))
-                        });
+                        push_timestamp_values!(array, rows, TimestampMillisecondArray, duck_unit)
                     }
                     TimeUnit::Microsecond => {
-                        let values = array
-                            .as_any()
-                            .downcast_ref::<TimestampMicrosecondArray>()
-                            .expect("TimestampMicrosecondArray downcast");
-                        Self::push_array_values(values, rows, |arr, idx| {
-                            Value::Timestamp(duck_unit, arr.value(idx))
-                        });
+                        push_timestamp_values!(array, rows, TimestampMicrosecondArray, duck_unit)
                     }
                     TimeUnit::Nanosecond => {
-                        let values = array
-                            .as_any()
-                            .downcast_ref::<TimestampNanosecondArray>()
-                            .expect("TimestampNanosecondArray downcast");
-                        Self::push_array_values(values, rows, |arr, idx| {
-                            Value::Timestamp(duck_unit, arr.value(idx))
-                        });
+                        push_timestamp_values!(array, rows, TimestampNanosecondArray, duck_unit)
                     }
                 }
             }
@@ -284,6 +249,47 @@ impl SwanFlightSqlService {
                 row.push(value_fn(array, row_idx));
             }
         }
+    }
+
+    fn push_array_values_result<T, F>(
+        array: &T,
+        rows: &mut [Vec<Value>],
+        mut value_fn: F,
+    ) -> Result<(), ServerError>
+    where
+        T: Array,
+        F: FnMut(&T, usize) -> Result<Value, ServerError>,
+    {
+        for (row_idx, row) in rows.iter_mut().enumerate() {
+            if array.is_null(row_idx) {
+                row.push(Value::Null);
+            } else {
+                row.push(value_fn(array, row_idx)?);
+            }
+        }
+        Ok(())
+    }
+
+    fn downcast_array<T: 'static>(array: &ArrayRef) -> Result<&T, ServerError> {
+        array.as_any().downcast_ref::<T>().ok_or_else(|| {
+            ServerError::Internal(format!(
+                "expected {} but found {}",
+                type_name::<T>(),
+                array.data_type()
+            ))
+        })
+    }
+
+    fn date64_to_date32(value: i64) -> Result<i32, ServerError> {
+        const MILLIS_PER_DAY: i64 = 86_400_000;
+        // Arrow Date64 stores UTC milliseconds since epoch. Convert via Euclidean division so
+        // negative timestamps round toward -inf instead of zero.
+        let days = value.div_euclid(MILLIS_PER_DAY);
+        i32::try_from(days).map_err(|_| {
+            ServerError::UnsupportedParameter(format!(
+                "Date64 value {value} is out of range for Date32"
+            ))
+        })
     }
 
     pub(crate) fn schema_to_ipc_bytes(

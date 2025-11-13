@@ -252,10 +252,6 @@ fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
         }
     }
 
-    // if test_files.is_empty() {
-    //     bail!("no test files provided");
-    // }
-
     Ok(CliArgs {
         endpoint,
         test_files,
