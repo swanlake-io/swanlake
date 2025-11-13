@@ -1,0 +1,28 @@
+# name: tests/sql/timestamp.test
+# description: test timestamp columns with default and inserted values
+# group: [sql]
+
+statement ok
+DROP TABLE IF EXISTS test_timestamps;
+
+statement ok
+CREATE TABLE test_timestamps (
+    ts TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    ingest_ts TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+statement ok
+INSERT INTO test_timestamps (ingest_ts) VALUES ('2025-01-01T00:00:00Z');
+
+query I
+SELECT ingest_ts = '2025-01-01T00:00:00Z' FROM test_timestamps
+----
+true
+
+query I
+SELECT ts >= '2025-01-01T00:00:00Z' FROM test_timestamps
+----
+true
+
+statement ok
+DROP TABLE test_timestamps;

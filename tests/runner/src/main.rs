@@ -220,7 +220,7 @@ fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
     let mut labels = Vec::new();
     let mut vars = HashMap::new();
     let mut test_files = Vec::new();
-    let mut test_dir: Option<String> = None;
+    let mut test_dir: Option<String> = Some("target/ducklake-tests".to_string());
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -252,9 +252,9 @@ fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
         }
     }
 
-    if test_files.is_empty() {
-        bail!("no test files provided");
-    }
+    // if test_files.is_empty() {
+    //     bail!("no test files provided");
+    // }
 
     Ok(CliArgs {
         endpoint,
