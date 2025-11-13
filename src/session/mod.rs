@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use arrow_array::Array;
 use arrow_schema::Schema;
 use duckdb::types::Value;
 use tracing::{debug, instrument};
@@ -157,6 +158,16 @@ impl Session {
         connection
             .execute_batch(&sql)
             .map_err(|e| ServerError::Internal(format!("failed to attach session queue: {}", e)))?;
+
+        // Auto-load table schemas from target schema into duckling_queue
+        let target_schema = dq_manager.settings().target_schema.clone();
+        if let Err(e) = Self::copy_table_schemas_to_queue(&connection, &target_schema) {
+            debug!(
+                session_id = %id,
+                error = %e,
+                "failed to auto-load table schemas from target schema (this is not fatal)"
+            );
+        }
 
         Ok(Self {
             id,
@@ -468,6 +479,63 @@ impl Session {
 
     // === Duckling Queue ===
 
+    /// Copy table schemas from target schema to duckling_queue.
+    /// This allows users to insert data without recreating tables for each connection.
+    fn copy_table_schemas_to_queue(
+        connection: &DuckDbConnection,
+        target_schema: &str,
+    ) -> Result<(), ServerError> {
+        // Query all tables in the target schema
+        let query = format!(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_catalog = '{}' AND table_schema = 'main' \
+             AND table_type = 'BASE TABLE'",
+            target_schema
+        );
+
+        let result = connection.execute_query(&query)?;
+        let table_names: Vec<String> = result
+            .batches
+            .iter()
+            .flat_map(|batch| {
+                if let Some(column) = batch.column(0).as_any().downcast_ref::<arrow_array::StringArray>() {
+                    (0..column.len())
+                        .filter_map(|i| column.value(i).to_string().into())
+                        .collect::<Vec<String>>()
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
+
+        // For each table, create it in duckling_queue with the same schema
+        for table_name in table_names {
+            // Skip internal tables
+            if table_name.starts_with("__") {
+                continue;
+            }
+
+            let quoted_table = quote_identifier(&table_name);
+            let create_sql = format!(
+                "CREATE TABLE IF NOT EXISTS duckling_queue.{} AS \
+                 SELECT * FROM {}.{} LIMIT 0;",
+                quoted_table, target_schema, quoted_table
+            );
+
+            if let Err(e) = connection.execute_batch(&create_sql) {
+                debug!(
+                    table = %table_name,
+                    error = %e,
+                    "failed to copy table schema to duckling_queue"
+                );
+            } else {
+                debug!(table = %table_name, "copied table schema to duckling_queue");
+            }
+        }
+
+        Ok(())
+    }
+
     /// Check if rotation is needed and rotate if necessary.
     pub fn maybe_rotate_queue(&self) -> Result<(), ServerError> {
         let mut queue = self.dq_queue.lock().expect("dq_queue mutex poisoned");
@@ -523,3 +591,18 @@ impl Session {
         self.id.clone()
     }
 }
+
+/// Helper function to quote SQL identifiers to handle special characters.
+fn quote_identifier(ident: &str) -> String {
+    let mut escaped = String::with_capacity(ident.len() + 2);
+    escaped.push('"');
+    for c in ident.chars() {
+        if c == '"' {
+            escaped.push('"');
+        }
+        escaped.push(c);
+    }
+    escaped.push('"');
+    escaped
+}
+
