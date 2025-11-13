@@ -498,7 +498,11 @@ impl Session {
             .batches
             .iter()
             .flat_map(|batch| {
-                if let Some(column) = batch.column(0).as_any().downcast_ref::<arrow_array::StringArray>() {
+                if let Some(column) = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow_array::StringArray>()
+                {
                     (0..column.len())
                         .filter_map(|i| column.value(i).to_string().into())
                         .collect::<Vec<String>>()
@@ -605,4 +609,3 @@ fn quote_identifier(ident: &str) -> String {
     escaped.push('"');
     escaped
 }
-
