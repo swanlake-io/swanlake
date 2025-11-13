@@ -14,7 +14,7 @@ arrow-schema = "56"
 async-trait = "0.1.83"
 adbc_core = "0.20.0"
 adbc_driver_manager = "0.20.0"
-adbc_driver_flightsql = { package = "adbc-driver-flightsql", git = "https://github.com/swanlake-io/adbc-driver-flightsql" }
+adbc-driver-flightsql = "0.1.0"
 chrono = "0.4"
 sqllogictest = "0.28.4"
 thiserror = "2.0.6"
