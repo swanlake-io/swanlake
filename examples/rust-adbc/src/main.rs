@@ -1,14 +1,11 @@
 use std::sync::Arc;
 
-use adbc_core::{
-    options::{AdbcVersion, OptionDatabase, OptionValue},
-    Connection, Database, Driver, Statement,
-};
-use adbc_driver_flightsql::DRIVER_PATH;
-use adbc_driver_manager::{ManagedConnection, ManagedDriver};
+use adbc_core::{Connection, Statement};
+use adbc_driver_manager::ManagedConnection;
 use anyhow::{anyhow, Result};
 use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
+use flight_sql_client::FlightSqlConnectionBuilder;
 use tracing::info;
 
 #[derive(Debug)]
@@ -29,7 +26,7 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt().compact().init();
 
     let endpoint = "grpc://localhost:4214";
-    let mut conn = connect(endpoint)?;
+    let mut conn = FlightSqlConnectionBuilder::new(endpoint).connect()?;
     info!("Connected to SwanLake successfully!");
 
     // Exec schema
@@ -167,16 +164,6 @@ CREATE TABLE IF NOT EXISTS place (
     city VARCHAR NULL,
     telcode INTEGER
 )"#;
-
-fn connect(endpoint: &str) -> Result<ManagedConnection> {
-    let driver_path = std::path::PathBuf::from(DRIVER_PATH);
-    let mut driver =
-        ManagedDriver::load_dynamic_from_filename(&driver_path, None, AdbcVersion::default())?;
-    let database =
-        driver.new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])?;
-    let connection = database.new_connection()?;
-    Ok(connection)
-}
 
 fn execute_statement(conn: &mut ManagedConnection, sql: &str) -> Result<()> {
     let mut stmt = conn.new_statement()?;

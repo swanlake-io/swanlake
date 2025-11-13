@@ -4,16 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::{Arc, Once};
 
-use adbc_core::{
-    error::Status as AdbcStatus,
-    options::{AdbcVersion, OptionDatabase, OptionValue},
-    Connection,
-    Database,
-    Driver,
-    Statement, // It's required for trait bounds
-};
-use adbc_driver_flightsql::DRIVER_PATH;
-use adbc_driver_manager::{ManagedConnection, ManagedDriver};
+use adbc_core::{error::Status as AdbcStatus, Connection, Statement};
+use adbc_driver_manager::ManagedConnection;
 use anyhow::{anyhow, bail, Context, Result};
 #[allow(unused_imports)]
 use arrow_array::{
@@ -25,6 +17,7 @@ use arrow_array::{
 
 use arrow_schema::DataType;
 use async_trait::async_trait;
+use flight_sql_client::{arrow::array_value_to_string, FlightSqlConnectionBuilder};
 use sqllogictest::{AsyncDB, DBOutput, DefaultColumnType, Runner};
 use thiserror::Error;
 use tracing::{info, warn};
@@ -46,23 +39,10 @@ struct FlightSqlDb {
 impl FlightSqlDb {
     async fn connect(endpoint: &str, substitutions: Arc<HashMap<String, String>>) -> Result<Self> {
         let uri = endpoint.trim().to_string();
-        info!("Loading Flight SQL driver and connecting to {uri}");
-        let driver_path = PathBuf::from(DRIVER_PATH);
-        let mut driver =
-            ManagedDriver::load_dynamic_from_filename(&driver_path, None, AdbcVersion::default())
-                .map_err(|err| {
-                anyhow!(
-                    "failed to load Flight SQL driver from {}: {err}",
-                    driver_path.display()
-                )
-            })?;
-
-        let database = driver
-            .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(uri.as_str()))])
-            .map_err(|err| anyhow!("failed to create database handle: {err}"))?;
-        let connection = database
-            .new_connection()
-            .map_err(|err| anyhow!("failed to create connection: {err}"))?;
+        info!("Connecting to Flight SQL endpoint {uri}");
+        let connection = FlightSqlConnectionBuilder::new(&uri)
+            .connect()
+            .with_context(|| format!("failed to establish connection to {uri}"))?;
         info!("Flight SQL connection established to {uri}");
 
         Ok(Self {
@@ -401,106 +381,6 @@ async fn run_sqllogictest(args: &CliArgs) -> Result<()> {
     info!("All SQLLogicTest scripts completed");
 
     Ok(())
-}
-
-fn array_value_to_string(column: &dyn Array, row_idx: usize) -> Result<String> {
-    use arrow_array::*;
-    use arrow_schema::DataType;
-
-    if column.is_null(row_idx) {
-        return Ok("NULL".to_string());
-    }
-
-    match column.data_type() {
-        DataType::Boolean => {
-            let arr = column.as_any().downcast_ref::<BooleanArray>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::Int8 => {
-            let arr = column.as_any().downcast_ref::<Int8Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::Int16 => {
-            let arr = column.as_any().downcast_ref::<Int16Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::Int32 => {
-            let arr = column.as_any().downcast_ref::<Int32Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::Int64 => {
-            let arr = column.as_any().downcast_ref::<Int64Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::UInt8 => {
-            let arr = column.as_any().downcast_ref::<UInt8Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::UInt16 => {
-            let arr = column.as_any().downcast_ref::<UInt16Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::UInt32 => {
-            let arr = column.as_any().downcast_ref::<UInt32Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::UInt64 => {
-            let arr = column.as_any().downcast_ref::<UInt64Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::Float32 => {
-            let arr = column.as_any().downcast_ref::<Float32Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::Float64 => {
-            let arr = column.as_any().downcast_ref::<Float64Array>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::Utf8 => {
-            let arr = column.as_any().downcast_ref::<StringArray>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::LargeUtf8 => {
-            let arr = column.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        DataType::Binary => {
-            let arr = column.as_any().downcast_ref::<BinaryArray>().unwrap();
-            Ok(format!("{:?}", arr.value(row_idx)))
-        }
-        DataType::LargeBinary => {
-            let arr = column.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
-            Ok(format!("{:?}", arr.value(row_idx)))
-        }
-        DataType::Date32 => {
-            let arr = column.as_any().downcast_ref::<Date32Array>().unwrap();
-            let days = arr.value(row_idx);
-            // Date32 is days since Unix epoch (1970-01-01)
-            let date = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                .unwrap()
-                .checked_add_signed(chrono::TimeDelta::days(days as i64))
-                .unwrap();
-            Ok(date.format("%Y-%m-%d").to_string())
-        }
-        DataType::Date64 => {
-            let arr = column.as_any().downcast_ref::<Date64Array>().unwrap();
-            let millis = arr.value(row_idx);
-            // Date64 is milliseconds since Unix epoch
-            let secs = millis / 1000;
-            let date = chrono::DateTime::from_timestamp(secs, 0)
-                .unwrap()
-                .date_naive();
-            Ok(date.format("%Y-%m-%d").to_string())
-        }
-        DataType::Timestamp(_, _) => {
-            let arr = column
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap();
-            Ok(arr.value(row_idx).to_string())
-        }
-        _ => Ok(format!("{:?}", column)),
-    }
 }
 
 fn init_logging() {

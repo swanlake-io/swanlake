@@ -1,13 +1,13 @@
 # SwanLake Rust Client
 
-A Rust library and CLI tool for connecting to SwanLake Flight SQL servers.
+A sample CLI tool for connecting to SwanLake Flight SQL servers, built on top of the reusable `flight-sql-client` crate placed in the repository root.
 
 ## Overview
 
 This package provides:
 
-1. **`swanlake_client` library** - A reusable Rust library with `FlightSQLClient` for programmatic access
-2. **`swanlake-cli` binary** - An interactive SQL client for querying SwanLake servers
+1. **`flight-sql-client` crate** *(at the repository root)* - Shared Flight SQL client utilities
+2. **`swanlake-cli` binary** - An interactive SQL client demonstrating the shared crate
 
 ## Installation
 
@@ -22,17 +22,17 @@ The CLI binary will be available at `target/release/swanlake-cli`.
 
 ## Library Usage
 
-Add to your `Cargo.toml`:
+To use the shared client primitives directly, depend on the root-level crate:
 
 ```toml
 [dependencies]
-swanlake_client = { path = "path/to/examples/rust-client" }
+flight-sql-client = { path = "../../flight-sql-client" }
 ```
 
 ### Basic Example
 
 ```rust
-use swanlake_client::FlightSQLClient;
+use flight_sql_client::FlightSQLClient;
 use anyhow::Result;
 
 fn main() -> Result<()> {

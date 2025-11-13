@@ -19,6 +19,7 @@ use tonic::{Request, Status};
 use crate::error::ServerError;
 
 use super::SwanFlightSqlService;
+use chrono::{DateTime, Utc};
 
 impl SwanFlightSqlService {
     pub(crate) async fn collect_parameter_sets(
@@ -118,13 +119,15 @@ impl SwanFlightSqlService {
             }
             DataType::Date32 => {
                 let values = Self::downcast_array::<Date32Array>(array)?;
-                Self::push_array_values(values, rows, |arr, idx| Value::Date32(arr.value(idx)));
+                Self::push_array_values_result(values, rows, |arr, idx| {
+                    let millis = arr.value(idx) as i64 * 86_400_000;
+                    Ok(Value::Text(Self::format_date(millis)?))
+                })?;
             }
             DataType::Date64 => {
                 let values = Self::downcast_array::<Date64Array>(array)?;
                 Self::push_array_values_result(values, rows, |arr, idx| {
-                    let days = Self::date64_to_date32(arr.value(idx))?;
-                    Ok(Value::Date32(days))
+                    Ok(Value::Text(Self::format_date(arr.value(idx))?))
                 })?;
             }
             DataType::Time32(unit) => match unit {
@@ -280,16 +283,11 @@ impl SwanFlightSqlService {
         })
     }
 
-    fn date64_to_date32(value: i64) -> Result<i32, ServerError> {
-        const MILLIS_PER_DAY: i64 = 86_400_000;
-        // Arrow Date64 stores UTC milliseconds since epoch. Convert via Euclidean division so
-        // negative timestamps round toward -inf instead of zero.
-        let days = value.div_euclid(MILLIS_PER_DAY);
-        i32::try_from(days).map_err(|_| {
-            ServerError::UnsupportedParameter(format!(
-                "Date64 value {value} is out of range for Date32"
-            ))
-        })
+    fn format_date(millis: i64) -> Result<String, ServerError> {
+        let datetime = DateTime::<Utc>::from_timestamp_millis(millis).ok_or_else(|| {
+            ServerError::UnsupportedParameter(format!("Invalid date millis {millis}"))
+        })?;
+        Ok(datetime.naive_utc().date().format("%Y-%m-%d").to_string())
     }
 
     pub(crate) fn schema_to_ipc_bytes(

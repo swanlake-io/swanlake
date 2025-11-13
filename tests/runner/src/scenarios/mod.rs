@@ -1,16 +1,8 @@
-use std::path::PathBuf;
-
-use adbc_core::options::{AdbcVersion, OptionDatabase, OptionValue};
-use adbc_core::Connection;
-use adbc_core::Database;
-use adbc_core::Driver;
-use adbc_core::Statement;
-use adbc_driver_flightsql::DRIVER_PATH;
-use adbc_driver_manager::{ManagedConnection, ManagedDriver};
+use adbc_core::{Connection, Statement};
+use adbc_driver_manager::ManagedConnection;
 use anyhow::{anyhow, bail, Context, Result};
-use arrow_array::{
-    Array, Int16Array, Int32Array, Int64Array, RecordBatch, UInt16Array, UInt32Array, UInt64Array,
-};
+use arrow_array::RecordBatch;
+use flight_sql_client::FlightSqlConnectionBuilder;
 use tracing::info;
 
 use crate::CliArgs;
@@ -33,22 +25,9 @@ pub struct SqlClient {
 
 impl SqlClient {
     async fn connect(endpoint: &str) -> Result<Self> {
-        let driver_path = PathBuf::from(DRIVER_PATH);
-        let mut driver =
-            ManagedDriver::load_dynamic_from_filename(&driver_path, None, AdbcVersion::default())
-                .with_context(|| {
-                format!(
-                    "failed to load Flight SQL driver from {}",
-                    driver_path.display()
-                )
-            })?;
-
-        let database = driver
-            .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])
-            .map_err(|err| anyhow!("failed to create database handle: {err}"))?;
-        let connection = database
-            .new_connection()
-            .map_err(|err| anyhow!("failed to create connection: {err}"))?;
+        let connection = FlightSqlConnectionBuilder::new(endpoint)
+            .connect()
+            .with_context(|| format!("failed to connect to {endpoint}"))?;
 
         Ok(Self { connection })
     }
@@ -136,45 +115,4 @@ impl SqlClient {
     }
 }
 
-pub fn value_as_i64(column: &dyn Array, idx: usize) -> Result<i64> {
-    if column.is_null(idx) {
-        bail!("value is NULL");
-    }
-    if let Some(array) = column.as_any().downcast_ref::<Int64Array>() {
-        return Ok(array.value(idx));
-    }
-    if let Some(array) = column.as_any().downcast_ref::<Int32Array>() {
-        return Ok(array.value(idx) as i64);
-    }
-    if let Some(array) = column.as_any().downcast_ref::<Int16Array>() {
-        return Ok(array.value(idx) as i64);
-    }
-    if let Some(array) = column.as_any().downcast_ref::<UInt64Array>() {
-        return Ok(array.value(idx) as i64);
-    }
-    if let Some(array) = column.as_any().downcast_ref::<UInt32Array>() {
-        return Ok(array.value(idx) as i64);
-    }
-    if let Some(array) = column.as_any().downcast_ref::<UInt16Array>() {
-        return Ok(array.value(idx) as i64);
-    }
-
-    Err(anyhow!(
-        "unsupported column type {} for integer projection",
-        column.data_type()
-    ))
-}
-
-pub fn value_as_string(column: &dyn Array, idx: usize) -> Result<String> {
-    use arrow_array::StringArray;
-    if column.is_null(idx) {
-        bail!("value is NULL");
-    }
-    if let Some(array) = column.as_any().downcast_ref::<StringArray>() {
-        return Ok(array.value(idx).to_string());
-    }
-    Err(anyhow!(
-        "unsupported column type {} for string projection",
-        column.data_type()
-    ))
-}
+pub use flight_sql_client::arrow::{value_as_i64, value_as_string};

@@ -10,6 +10,8 @@ examples/go-adbc/go-adbc
 examples/go-sqlx/go-sqlx
 examples/rust-adbc/target
 examples/rust-client/target
+flight-sql-client/target
+flight-sql-client/Cargo.lock
 examples/rust-client/Cargo.lock
 examples/rust-adbc/Cargo.lock
 tests/runner/Cargo.lock

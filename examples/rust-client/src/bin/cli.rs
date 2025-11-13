@@ -10,7 +10,7 @@ use comfy_table::{
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::time::Instant;
-use swanlake_client::FlightSQLClient;
+use flight_sql_client::FlightSQLClient;
 
 /// SwanLake CLI - Interactive SQL client
 #[derive(Parser, Debug)]
