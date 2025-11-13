@@ -1,13 +1,29 @@
 use anyhow::{anyhow, bail, Result};
 use arrow_array::{
     Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
-    StringArray, TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, StringArray,
+    TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::DataType;
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 
 /// Convert an Arrow value to a printable string.
+///
+/// Supports various Arrow data types, formatting them appropriately.
+/// Returns "NULL" for null values.
+///
+/// # Example
+///
+/// ```rust
+/// use arrow_array::{Array, Int64Array};
+/// use flight_sql_client::arrow::array_value_to_string;
+/// use std::sync::Arc;
+///
+/// let arr = Arc::new(Int64Array::from(vec![1, 2])) as Arc<dyn Array>;
+/// let str_val = array_value_to_string(&*arr, 0)?;
+/// assert_eq!(str_val, "1");
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn array_value_to_string(column: &dyn Array, row_idx: usize) -> Result<String> {
     if column.is_null(row_idx) {
         return Ok("NULL".to_string());
@@ -104,6 +120,22 @@ pub fn array_value_to_string(column: &dyn Array, row_idx: usize) -> Result<Strin
 }
 
 /// Interpret a scalar Arrow value as i64.
+///
+/// Supports integer types (signed and unsigned, various widths).
+/// Fails if the value is null or of an unsupported type.
+///
+/// # Example
+///
+/// ```rust
+/// use arrow_array::{Array, Int64Array};
+/// use flight_sql_client::arrow::value_as_i64;
+/// use std::sync::Arc;
+///
+/// let arr = Arc::new(Int64Array::from(vec![42])) as Arc<dyn Array>;
+/// let val = value_as_i64(&*arr, 0)?;
+/// assert_eq!(val, 42);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn value_as_i64(column: &dyn Array, idx: usize) -> Result<i64> {
     if column.is_null(idx) {
         bail!("value is NULL");
@@ -134,6 +166,22 @@ pub fn value_as_i64(column: &dyn Array, idx: usize) -> Result<i64> {
 }
 
 /// Interpret a scalar Arrow value as string.
+///
+/// Supports UTF-8 string types.
+/// Fails if the value is null or of an unsupported type.
+///
+/// # Example
+///
+/// ```rust
+/// use arrow_array::{Array, StringArray};
+/// use flight_sql_client::arrow::value_as_string;
+/// use std::sync::Arc;
+///
+/// let arr = Arc::new(StringArray::from(vec!["hello"])) as Arc<dyn Array>;
+/// let val = value_as_string(&*arr, 0)?;
+/// assert_eq!(val, "hello");
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn value_as_string(column: &dyn Array, idx: usize) -> Result<String> {
     if column.is_null(idx) {
         bail!("value is NULL");

@@ -15,52 +15,44 @@ use crate::CliArgs;
 
 pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     let endpoint = args.endpoint();
-    let mut client = SqlClient::connect(endpoint).await?;
+    let mut client = SqlClient::connect(endpoint)?;
 
     // Create test table with various supported types
-    client
-        .exec(
-            r#"
-            CREATE TABLE IF NOT EXISTS parameter_types_test (
-                id INTEGER,
-                date32_col DATE,
-                date64_col DATE,
-                time32_sec_col TIME,
-                time32_ms_col TIME,
-                time64_us_col TIME,
-                time64_ns_col TIME,
-                interval_ym_col INTERVAL,
-                interval_dt_col INTERVAL,
-                interval_mdn_col INTERVAL
-            )
-            "#,
+    client.exec(
+        r#"
+        CREATE TABLE IF NOT EXISTS parameter_types_test (
+            id INTEGER,
+            date32_col DATE,
+            date64_col DATE,
+            time32_sec_col TIME,
+            time32_ms_col TIME,
+            time64_us_col TIME,
+            time64_ns_col TIME,
+            interval_ym_col INTERVAL,
+            interval_dt_col INTERVAL,
+            interval_mdn_col INTERVAL
         )
-        .await?;
+        "#,
+    )?;
 
     // Clear table
-    client.exec("DELETE FROM parameter_types_test").await?;
+    client.exec("DELETE FROM parameter_types_test")?;
 
     // Insert row via prepared statement to exercise Arrow->DuckDB conversions
     let params = build_parameter_batch()?;
-    client
-        .exec_prepared(
-            "INSERT INTO parameter_types_test VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params,
-        )
-        .await?;
+    client.exec_prepared(
+        "INSERT INTO parameter_types_test VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params,
+    )?;
 
     // Verify insertion
-    let count = client
-        .query_single_i64("SELECT COUNT(*) FROM parameter_types_test")
-        .await?;
+    let count = client.query_single_i64("SELECT COUNT(*) FROM parameter_types_test")?;
     if count != 1 {
         return Err(anyhow!("Expected 1 row, got {}", count));
     }
 
     // Query back and verify values (basic check for non-null)
-    let id = client
-        .query_single_i64("SELECT id FROM parameter_types_test")
-        .await?;
+    let id = client.query_single_i64("SELECT id FROM parameter_types_test")?;
     if id != 1 {
         return Err(anyhow!("Expected id 1, got {}", id));
     }
@@ -79,19 +71,17 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     ];
 
     for col in columns {
-        let col_count = client
-            .query_single_i64(&format!(
-                "SELECT COUNT({}) FROM parameter_types_test WHERE {} IS NOT NULL",
-                col, col
-            ))
-            .await?;
+        let col_count = client.query_single_i64(&format!(
+            "SELECT COUNT({}) FROM parameter_types_test WHERE {} IS NOT NULL",
+            col, col
+        ))?;
         if col_count != 1 {
             return Err(anyhow!("{} column not inserted correctly", col));
         }
     }
 
     // Clean up
-    client.exec("DROP TABLE parameter_types_test").await?;
+    client.exec("DROP TABLE parameter_types_test")?;
 
     Ok(())
 }

@@ -2,6 +2,11 @@
 name = "flight-sql-client"
 version = "0.1.0"
 edition = "2021"
+description = "A Rust client library for Arrow Flight SQL servers"
+license = "MIT"
+repository = "https://github.com/swanlake-io/swanlake"
+keywords = ["flight-sql", "arrow", "adbc", "database", "client"]
+categories = ["database", "api-bindings"]
 
 [dependencies]
 adbc_core = "0.20.0"

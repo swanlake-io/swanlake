@@ -3,10 +3,48 @@
 //! This crate wraps the dynamic Flight SQL driver loading logic so that
 //! consumers do not need to duplicate the boilerplate required to obtain
 //! `ManagedConnection` instances or to work with Arrow record batches.
+//!
+//! ## Example
+//!
+//! ```rust,ignore
+//! use flight_sql_client::FlightSQLClient;
+//!
+//! let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
+//! let result = client.execute("SELECT 1")?;
+//! println!("Rows: {}", result.total_rows);
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 
 pub mod arrow;
 pub mod client;
 pub mod connection;
 
-pub use client::{FlightSQLClient, QueryResult, UpdateResult};
-pub use connection::{connect, FlightSqlConnectionBuilder};
+/// A Flight SQL client for connecting to SwanLake servers.
+///
+/// See [`FlightSQLClient`] for details.
+pub use client::FlightSQLClient;
+
+/// Result of executing a query.
+///
+/// See [`QueryResult`] for details.
+pub use client::QueryResult;
+
+/// Result when executing an arbitrary SQL statement.
+///
+/// See [`StatementResult`] for details.
+pub use client::StatementResult;
+
+/// Result of executing an update/DDL statement.
+///
+/// See [`UpdateResult`] for details.
+pub use client::UpdateResult;
+
+/// Convenience helper to open a Flight SQL connection with default settings.
+///
+/// See [`connect`] for details.
+pub use connection::connect;
+
+/// Configurable builder for establishing Flight SQL connections.
+///
+/// See [`FlightSqlConnectionBuilder`] for details.
+pub use connection::FlightSqlConnectionBuilder;

@@ -65,6 +65,14 @@ fn get_cached_driver(path: &Path) -> Result<Arc<CachedDriver>> {
 
 impl FlightSqlConnectionBuilder {
     /// Create a new builder for the given endpoint.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flight_sql_client::FlightSqlConnectionBuilder;
+    ///
+    /// let builder = FlightSqlConnectionBuilder::new("grpc://localhost:4214");
+    /// ```
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self {
             endpoint: endpoint.into(),
@@ -73,12 +81,31 @@ impl FlightSqlConnectionBuilder {
     }
 
     /// Override the driver lookup path if needed.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flight_sql_client::FlightSqlConnectionBuilder;
+    /// use std::path::Path;
+    ///
+    /// let builder = FlightSqlConnectionBuilder::new("grpc://localhost:4214")
+    ///     .with_driver_path("/custom/path/to/driver");
+    /// ```
     pub fn with_driver_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.driver_path = path.into();
         self
     }
 
     /// Establish the connection synchronously.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flight_sql_client::FlightSqlConnectionBuilder;
+    ///
+    /// let conn = FlightSqlConnectionBuilder::new("grpc://localhost:4214").connect()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn connect(&self) -> Result<ManagedConnection> {
         let driver = get_cached_driver(&self.driver_path)?;
         driver.new_connection(self.endpoint.as_str())
@@ -86,6 +113,15 @@ impl FlightSqlConnectionBuilder {
 }
 
 /// Convenience helper to open a Flight SQL connection with default settings.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flight_sql_client::connect;
+///
+/// let conn = connect("grpc://localhost:4214")?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn connect(endpoint: &str) -> Result<ManagedConnection> {
     FlightSqlConnectionBuilder::new(endpoint).connect()
 }
