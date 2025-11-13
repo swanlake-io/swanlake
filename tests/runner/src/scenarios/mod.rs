@@ -32,7 +32,6 @@ impl SqlClient {
         Ok(Self { connection })
     }
 
-    #[allow(dead_code)]
     pub async fn exec_prepared(&mut self, sql: &str, params: RecordBatch) -> Result<()> {
         info!("scenario exec prepared: {sql}");
         let mut statement = self
@@ -89,29 +88,6 @@ impl SqlClient {
         }
         let column = batch.column(0);
         Ok(value_as_i64(column.as_ref(), 0)?)
-    }
-
-    #[allow(dead_code)]
-    pub async fn query_single_string(&mut self, sql: &str) -> Result<String> {
-        info!("scenario query: {sql}");
-        let mut statement = self
-            .connection
-            .new_statement()
-            .map_err(|err| anyhow!("failed to create statement: {err}"))?;
-        statement
-            .set_sql_query(sql)
-            .map_err(|err| anyhow!("failed to set SQL query: {err}"))?;
-        let mut reader = statement
-            .execute()
-            .map_err(|err| anyhow!("failed to execute query: {err}"))?;
-        let Some(batch) = reader.next().transpose()? else {
-            bail!("query returned no rows");
-        };
-        if batch.num_rows() == 0 || batch.num_columns() == 0 {
-            bail!("query returned empty result");
-        }
-        let column = batch.column(0);
-        Ok(value_as_string(column.as_ref(), 0)?)
     }
 }
 
