@@ -43,7 +43,7 @@ impl SessionRegistry {
         dq_manager: Option<Arc<QueueManager>>,
     ) -> Result<Self, ServerError> {
         // Note: We no longer need a global duckling queue path since each session manages its own
-        let factory = Arc::new(Mutex::new(EngineFactory::new(config, "")?));
+        let factory = Arc::new(Mutex::new(EngineFactory::new(config)?));
         let max_sessions = config.max_sessions.unwrap_or(100);
         let session_timeout = Duration::from_secs(config.session_timeout_seconds.unwrap_or(1800)); // 30min default
 

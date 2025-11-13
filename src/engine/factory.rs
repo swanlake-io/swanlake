@@ -19,7 +19,7 @@ pub struct EngineFactory {
 impl EngineFactory {
     /// Create a new factory from configuration
     #[instrument(skip(config))]
-    pub fn new(config: &ServerConfig, _duckling_queue_path: &str) -> Result<Self, ServerError> {
+    pub fn new(config: &ServerConfig) -> Result<Self, ServerError> {
         let mut init_statements = Vec::new();
         init_statements.push(
             "INSTALL ducklake; INSTALL httpfs; INSTALL aws; INSTALL postgres; \
