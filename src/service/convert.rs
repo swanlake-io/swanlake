@@ -19,7 +19,7 @@ use tonic::{Request, Status};
 use crate::error::ServerError;
 
 use super::SwanFlightSqlService;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveTime, Utc};
 
 impl SwanFlightSqlService {
     pub(crate) async fn collect_parameter_sets(
@@ -133,15 +133,17 @@ impl SwanFlightSqlService {
             DataType::Time32(unit) => match unit {
                 TimeUnit::Second => {
                     let values = Self::downcast_array::<Time32SecondArray>(array)?;
-                    Self::push_array_values(values, rows, |arr, idx| {
-                        Value::Time64(DuckTimeUnit::Microsecond, arr.value(idx) as i64 * 1_000_000)
-                    });
+                    Self::push_array_values_result(values, rows, |arr, idx| {
+                        let micros = arr.value(idx) as i64 * 1_000_000;
+                        Ok(Value::Text(Self::format_time_micro(micros)?))
+                    })?;
                 }
                 TimeUnit::Millisecond => {
                     let values = Self::downcast_array::<Time32MillisecondArray>(array)?;
-                    Self::push_array_values(values, rows, |arr, idx| {
-                        Value::Time64(DuckTimeUnit::Microsecond, arr.value(idx) as i64 * 1_000)
-                    });
+                    Self::push_array_values_result(values, rows, |arr, idx| {
+                        let micros = arr.value(idx) as i64 * 1_000;
+                        Ok(Value::Text(Self::format_time_micro(micros)?))
+                    })?;
                 }
                 _ => {
                     return Err(ServerError::UnsupportedParameter(format!(
@@ -150,33 +152,26 @@ impl SwanFlightSqlService {
                     )))
                 }
             },
-            DataType::Time64(unit) => {
-                let duck_unit = match unit {
-                    TimeUnit::Microsecond => DuckTimeUnit::Microsecond,
-                    TimeUnit::Nanosecond => DuckTimeUnit::Nanosecond,
-                    _ => {
-                        return Err(ServerError::UnsupportedParameter(format!(
-                            "Time64 with unit {:?}",
-                            unit
-                        )))
-                    }
-                };
-                match unit {
-                    TimeUnit::Microsecond => {
-                        let values = Self::downcast_array::<Time64MicrosecondArray>(array)?;
-                        Self::push_array_values(values, rows, |arr, idx| {
-                            Value::Time64(duck_unit, arr.value(idx))
-                        });
-                    }
-                    TimeUnit::Nanosecond => {
-                        let values = Self::downcast_array::<Time64NanosecondArray>(array)?;
-                        Self::push_array_values(values, rows, |arr, idx| {
-                            Value::Time64(duck_unit, arr.value(idx))
-                        });
-                    }
-                    _ => unreachable!(),
+            DataType::Time64(unit) => match unit {
+                TimeUnit::Microsecond => {
+                    let values = Self::downcast_array::<Time64MicrosecondArray>(array)?;
+                    Self::push_array_values_result(values, rows, |arr, idx| {
+                        Ok(Value::Text(Self::format_time_micro(arr.value(idx))?))
+                    })?;
                 }
-            }
+                TimeUnit::Nanosecond => {
+                    let values = Self::downcast_array::<Time64NanosecondArray>(array)?;
+                    Self::push_array_values_result(values, rows, |arr, idx| {
+                        Ok(Value::Text(Self::format_time_nano(arr.value(idx))?))
+                    })?;
+                }
+                _ => {
+                    return Err(ServerError::UnsupportedParameter(format!(
+                        "Time64 with unit {:?}",
+                        unit
+                    )))
+                }
+            },
             DataType::Interval(unit) => match unit {
                 IntervalUnit::YearMonth => push_interval_values!(
                     array,
@@ -288,6 +283,26 @@ impl SwanFlightSqlService {
             ServerError::UnsupportedParameter(format!("Invalid date millis {millis}"))
         })?;
         Ok(datetime.naive_utc().date().format("%Y-%m-%d").to_string())
+    }
+
+    fn format_time_micro(micros: i64) -> Result<String, ServerError> {
+        let seconds = (micros / 1_000_000) as u32;
+        let nanos = ((micros % 1_000_000) * 1000) as u32;
+        let time =
+            NaiveTime::from_num_seconds_from_midnight_opt(seconds, nanos).ok_or_else(|| {
+                ServerError::UnsupportedParameter(format!("Invalid time micros {micros}"))
+            })?;
+        Ok(time.format("%H:%M:%S%.6f").to_string())
+    }
+
+    fn format_time_nano(nanos: i64) -> Result<String, ServerError> {
+        let seconds = (nanos / 1_000_000_000) as u32;
+        let nanos_rem = (nanos % 1_000_000_000) as u32;
+        let time =
+            NaiveTime::from_num_seconds_from_midnight_opt(seconds, nanos_rem).ok_or_else(|| {
+                ServerError::UnsupportedParameter(format!("Invalid time nanos {nanos}"))
+            })?;
+        Ok(time.format("%H:%M:%S%.9f").to_string())
     }
 
     pub(crate) fn schema_to_ipc_bytes(
