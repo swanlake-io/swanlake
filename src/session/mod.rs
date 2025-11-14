@@ -17,14 +17,13 @@ pub use id::SessionId;
 // - A dedicated DuckDB connection (persistent state)
 // - Transaction state
 // - Prepared statements
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use arrow_array::Array;
 use arrow_schema::Schema;
 use duckdb::types::Value;
-use tracing::{debug, instrument};
+use tracing::{debug, error, info, instrument};
 
 use crate::dq::{QueueManager, QueueSession};
 use crate::engine::{DuckDbConnection, QueryResult};
@@ -118,6 +117,7 @@ pub struct Session {
     // Duckling Queue support
     dq_manager: Option<Arc<QueueManager>>,
     dq_queue: Arc<Mutex<Option<QueueSession>>>,
+    dq_tables_ready: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Session {
@@ -136,6 +136,7 @@ impl Session {
             last_activity: Arc::new(Mutex::new(Instant::now())),
             dq_manager: None,
             dq_queue: Arc::new(Mutex::new(None)),
+            dq_tables_ready: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -159,16 +160,6 @@ impl Session {
             .execute_batch(&sql)
             .map_err(|e| ServerError::Internal(format!("failed to attach session queue: {}", e)))?;
 
-        // Auto-load table schemas from target schema into duckling_queue
-        let target_schema = dq_manager.settings().target_schema.clone();
-        if let Err(e) = Self::copy_table_schemas_to_queue(&connection, &target_schema) {
-            debug!(
-                session_id = %id,
-                error = %e,
-                "failed to auto-load table schemas from target schema (this is not fatal)"
-            );
-        }
-
         Ok(Self {
             id,
             connection,
@@ -179,6 +170,7 @@ impl Session {
             last_activity: Arc::new(Mutex::new(Instant::now())),
             dq_manager: Some(dq_manager),
             dq_queue: Arc::new(Mutex::new(Some(sq))),
+            dq_tables_ready: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -227,7 +219,14 @@ impl Session {
         }
 
         self.touch();
-        self.connection.execute_statement(sql)
+        match self.connection.execute_statement(sql) {
+            Ok(result) => Ok(result),
+            // TODO: logic here is very tricky, needs better design
+            // maybe introduce a sql parser layer to identify DQ table usage
+            Err(err) => self.maybe_create_queue_table_and_retry(sql, err, || {
+                self.connection.execute_statement(sql)
+            }),
+        }
     }
 
     /// Try to handle duckling queue administrative commands.
@@ -296,7 +295,12 @@ impl Session {
         params: &[Value],
     ) -> Result<usize, ServerError> {
         self.touch();
-        self.connection.execute_statement_with_params(sql, params)
+        match self.connection.execute_statement_with_params(sql, params) {
+            Ok(result) => Ok(result),
+            Err(err) => self.maybe_create_queue_table_and_retry(sql, err, || {
+                self.connection.execute_statement_with_params(sql, params)
+            }),
+        }
     }
 
     /// Get schema for a query
@@ -479,73 +483,6 @@ impl Session {
 
     // === Duckling Queue ===
 
-    /// Copy table schemas from target schema to duckling_queue.
-    /// This allows users to insert data without recreating tables for each connection.
-    fn copy_table_schemas_to_queue(
-        connection: &DuckDbConnection,
-        target_schema: &str,
-    ) -> Result<(), ServerError> {
-        // Query all tables in the target schema
-        let query = format!(
-            "SELECT table_name FROM information_schema.tables \
-             WHERE table_catalog = '{}' AND table_schema = 'main' \
-             AND table_type = 'BASE TABLE'",
-            target_schema
-        );
-
-        let result = connection.execute_query(&query)?;
-        let table_names: Vec<String> = result
-            .batches
-            .iter()
-            .flat_map(|batch| {
-                if let Some(column) = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<arrow_array::StringArray>()
-                {
-                    (0..column.len())
-                        .filter_map(|i| {
-                            if column.is_null(i) {
-                                None
-                            } else {
-                                Some(column.value(i).to_string())
-                            }
-                        })
-                        .collect::<Vec<String>>()
-                } else {
-                    Vec::new()
-                }
-            })
-            .collect();
-
-        // For each table, create it in duckling_queue with the same schema
-        for table_name in table_names {
-            // Skip internal tables
-            if table_name.starts_with("__") {
-                continue;
-            }
-
-            let quoted_table = quote_identifier(&table_name);
-            let create_sql = format!(
-                "CREATE TABLE IF NOT EXISTS duckling_queue.{} AS \
-                 SELECT * FROM {}.{} LIMIT 0;",
-                quoted_table, target_schema, quoted_table
-            );
-
-            if let Err(e) = connection.execute_batch(&create_sql) {
-                debug!(
-                    table = %table_name,
-                    error = %e,
-                    "failed to copy table schema to duckling_queue"
-                );
-            } else {
-                debug!(table = %table_name, "copied table schema to duckling_queue");
-            }
-        }
-
-        Ok(())
-    }
-
     /// Check if rotation is needed and rotate if necessary.
     pub fn maybe_rotate_queue(&self) -> Result<(), ServerError> {
         let mut queue = self.dq_queue.lock().expect("dq_queue mutex poisoned");
@@ -596,22 +533,145 @@ impl Session {
         Ok(())
     }
 
+    fn maybe_create_queue_table_and_retry<T, F>(
+        &self,
+        sql: &str,
+        err: ServerError,
+        retry: F,
+    ) -> Result<T, ServerError>
+    where
+        F: FnOnce() -> Result<T, ServerError>,
+    {
+        if self.dq_manager.is_none() {
+            error!("dq_manager is none");
+            return Err(err);
+        }
+
+        let Some(table) = Self::extract_missing_queue_table(sql, &err) else {
+            error!("error is not missing duckling_queue table");
+            return Err(err);
+        };
+
+        self.ensure_queue_table(&table)?;
+        info!(
+            table = %table,
+            "duckling_queue table auto-created after missing table error"
+        );
+
+        retry()
+    }
+
+    fn ensure_queue_table(&self, table: &str) -> Result<(), ServerError> {
+        let normalized = table.to_ascii_lowercase();
+        {
+            let ready = self
+                .dq_tables_ready
+                .lock()
+                .expect("dq_tables_ready mutex poisoned");
+            if ready.contains(&normalized) {
+                return Ok(());
+            }
+        }
+
+        let dq_manager = self
+            .dq_manager
+            .as_ref()
+            .ok_or_else(|| ServerError::Internal("no duckling queue manager".into()))?;
+        let target_schema = dq_manager.settings().target_schema.clone();
+
+        let quoted_table = quote_identifier(table);
+        let quoted_target_schema = quote_identifier(&target_schema);
+
+        let create_sql = format!(
+            "CREATE TABLE IF NOT EXISTS duckling_queue.{dq_table} AS \
+             SELECT * FROM {target_schema}.{dq_table} LIMIT 0;",
+            dq_table = quoted_table,
+            target_schema = quoted_target_schema,
+        );
+
+        debug!(table = %table, "ensuring duckling_queue table exists");
+        self.connection.execute_batch(&create_sql)?;
+
+        let mut ready = self
+            .dq_tables_ready
+            .lock()
+            .expect("dq_tables_ready mutex poisoned");
+        ready.insert(normalized);
+        Ok(())
+    }
+
+    fn extract_missing_queue_table(sql: &str, err: &ServerError) -> Option<String> {
+        let ServerError::DuckDb(inner) = err else {
+            info!("error is duckdb inner {}, not missing queue table", err);
+            return None;
+        };
+        let message = inner.to_string();
+        let lower = message.to_ascii_lowercase();
+        if !sql.to_ascii_lowercase().contains("duckling_queue.")
+            && !lower.contains("duckling_queue.")
+        {
+            info!("sql {} and msg {} don't have duckling_queue.", sql, message);
+            return None;
+        }
+        if !(lower.contains("does not exist")
+            || lower.contains("not found")
+            || lower.contains("no such table"))
+        {
+            info!("error message {} is not missing table error", message);
+            return None;
+        }
+
+        let table = extract_table_from_error_message(&message);
+        info!("extract table {:?} from message {}", table, message);
+        table
+    }
+
     /// Get session ID (for use by registry).
     pub fn id(&self) -> SessionId {
         self.id.clone()
     }
 }
 
-/// Helper function to quote SQL identifiers to handle special characters.
-fn quote_identifier(ident: &str) -> String {
-    let mut escaped = String::with_capacity(ident.len() + 2);
-    escaped.push('"');
-    for c in ident.chars() {
-        if c == '"' {
-            escaped.push('"');
-        }
-        escaped.push(c);
+fn extract_table_from_error_message(message: &str) -> Option<String> {
+    let needle = "Table with name ";
+    let idx = message.find(needle)?;
+    let mut start = idx + needle.len();
+    let bytes = message.as_bytes();
+
+    while start < bytes.len() && (bytes[start] == b'"' || bytes[start] == b'\'') {
+        start += 1;
     }
-    escaped.push('"');
-    escaped
+
+    if start >= bytes.len() {
+        return None;
+    }
+
+    let mut end = start;
+    while end < bytes.len() {
+        let b = bytes[end];
+        if b == b'_' || b.is_ascii_alphanumeric() {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+
+    if end == start {
+        return None;
+    }
+
+    Some(message[start..end].to_string())
+}
+
+fn quote_identifier(ident: &str) -> String {
+    let mut quoted = String::with_capacity(ident.len() + 2);
+    quoted.push('"');
+    for ch in ident.chars() {
+        if ch == '"' {
+            quoted.push('"');
+        }
+        quoted.push(ch);
+    }
+    quoted.push('"');
+    quoted
 }
