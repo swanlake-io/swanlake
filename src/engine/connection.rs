@@ -209,4 +209,39 @@ impl DuckDbConnection {
         let conn = self.conn.lock().expect("connection mutex poisoned");
         f(&conn)
     }
+
+    /// Insert data using DuckDB's appender API with a RecordBatch.
+    ///
+    /// This method is optimized for bulk inserts as it avoids converting
+    /// RecordBatch to individual parameter values, reducing memory copies.
+    ///
+    /// # Arguments
+    ///
+    /// * `table_name` - The name of the table to insert into
+    /// * `batch` - The RecordBatch containing data to insert
+    ///
+    /// # Returns
+    ///
+    /// The number of rows inserted
+    #[instrument(skip(self, batch), fields(table_name = %table_name, rows = batch.num_rows()))]
+    pub fn insert_with_appender(
+        &self,
+        table_name: &str,
+        batch: RecordBatch,
+    ) -> Result<usize, ServerError> {
+        let row_count = batch.num_rows();
+        
+        let conn = self.conn.lock().expect("connection mutex poisoned");
+        let mut appender = conn.appender(table_name)?;
+        appender.append_record_batch(batch)?;
+        appender.flush()?;
+        
+        debug!(
+            rows = row_count,
+            table = %table_name,
+            "inserted data using appender"
+        );
+        
+        Ok(row_count)
+    }
 }

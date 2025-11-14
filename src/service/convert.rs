@@ -21,6 +21,27 @@ use crate::error::ServerError;
 use super::SwanFlightSqlService;
 
 impl SwanFlightSqlService {
+    /// Collect RecordBatches directly from the stream without conversion.
+    ///
+    /// This is used for optimized INSERT operations where we can pass
+    /// RecordBatch directly to the DuckDB appender API.
+    pub(crate) async fn collect_record_batches(
+        request: Request<PeekableFlightDataStream>,
+    ) -> Result<Vec<RecordBatch>, Status> {
+        let stream = request.into_inner();
+        let mapped =
+            stream.map_err(|status| arrow_flight::error::FlightError::Tonic(Box::new(status)));
+        let mut record_stream = FlightRecordBatchStream::new_from_flight_data(mapped);
+
+        let mut batches = Vec::new();
+        while let Some(batch) = record_stream.next().await {
+            let batch = batch.map_err(Self::status_from_flight_error)?;
+            batches.push(batch);
+        }
+
+        Ok(batches)
+    }
+
     pub(crate) async fn collect_parameter_sets(
         request: Request<PeekableFlightDataStream>,
     ) -> Result<Vec<Vec<Value>>, Status> {

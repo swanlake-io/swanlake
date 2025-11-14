@@ -15,6 +15,7 @@ mod engine;
 mod error;
 mod service;
 mod session;
+mod sql_parser;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -310,6 +310,27 @@ impl Session {
         self.connection.schema_for_query(sql)
     }
 
+    /// Insert data using appender API with RecordBatch.
+    ///
+    /// This is an optimized path for INSERT statements that avoids
+    /// converting RecordBatch to individual parameter values.
+    #[instrument(skip(self, batch), fields(session_id = %self.id, table_name = %table_name, rows = batch.num_rows()))]
+    pub fn insert_with_appender(
+        &self,
+        table_name: &str,
+        batch: arrow_array::RecordBatch,
+    ) -> Result<usize, ServerError> {
+        self.touch();
+        match self.connection.insert_with_appender(table_name, batch.clone()) {
+            Ok(result) => Ok(result),
+            Err(err) => self.maybe_create_queue_table_and_retry(
+                &format!("INSERT INTO {}", table_name),
+                err,
+                || self.connection.insert_with_appender(table_name, batch.clone()),
+            ),
+        }
+    }
+
     // === Prepared Statements ===
 
     /// Create a prepared statement and return its handle

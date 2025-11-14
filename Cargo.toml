@@ -17,7 +17,8 @@ arrow-flight = { version = "57", features = ["flight-sql"] }
 arrow-ipc = "57"
 arrow-schema = "57"
 dotenvy = "0.15.7"
-duckdb = { git = "https://github.com/swanlake-io/duckdb-rs", branch = "wfj/cargo-version", default-features = false }
+duckdb = { git = "https://github.com/swanlake-io/duckdb-rs", branch = "wfj/cargo-version", default-features = false, features = ["appender-arrow"] }
+sqlparser = "0.59.0"
 futures = "0.3.31"
 prost = "0.14.1"
 serde = { version = "1.0.217", features = ["derive"] }

@@ -276,6 +276,47 @@ pub(crate) async fn do_put_prepared_statement_update(
         ));
     }
 
+    // Check if this is an INSERT statement that can use the appender optimization
+    if let Some(table_name) = crate::sql_parser::extract_insert_table_name(&sql) {
+        info!(
+            handle = %handle,
+            sql = %sql,
+            table_name = %table_name,
+            "using appender optimization for INSERT"
+        );
+
+        let batches = SwanFlightSqlService::collect_record_batches(request).await?;
+        let batch_count = batches.len();
+
+        let session_clone = Arc::clone(&session);
+
+        let affected_rows = tokio::task::spawn_blocking(move || {
+            let mut total_rows = 0usize;
+            for batch in batches {
+                let rows = session_clone
+                    .insert_with_appender(&table_name, batch)
+                    .map_err(|e| {
+                        error!(%e, "appender insert failed");
+                        e
+                    })?;
+                total_rows += rows;
+            }
+            Ok::<_, crate::error::ServerError>(total_rows as i64)
+        })
+        .await
+        .map_err(SwanFlightSqlService::status_from_join)?
+        .map_err(SwanFlightSqlService::status_from_error)?;
+
+        info!(
+            handle = %handle,
+            affected_rows,
+            batch_count,
+            "appender insert complete"
+        );
+        return Ok(affected_rows);
+    }
+
+    // Fall back to parameter-based execution for non-INSERT statements
     let parameter_sets = SwanFlightSqlService::collect_parameter_sets(request).await?;
 
     let parameter_set_count = parameter_sets.len();
