@@ -42,6 +42,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Create non-root user and switch to it
 RUN groupadd -r swanlake -g 4214 && useradd -r -u 4214 -g swanlake swanlake && \
     chown -R swanlake:swanlake /app
+ENV HOME=/app
 USER swanlake
 
 # Expose port
