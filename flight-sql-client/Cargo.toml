@@ -1,6 +1,6 @@
 [package]
 name = "flight-sql-client"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A Rust client library for Arrow Flight SQL servers"
 license = "MIT"
@@ -9,9 +9,9 @@ keywords = ["flight-sql", "arrow", "adbc", "database", "client"]
 categories = ["database", "api-bindings"]
 
 [dependencies]
-adbc_core = "0.20.0"
-adbc_driver_manager = "0.20.0"
-adbc-driver-flightsql = "0.1.0"
+adbc_core = "0.20"
+adbc_driver_manager = "0.20"
+adbc-driver-flightsql = "0.1"
 anyhow = "1.0"
 arrow-array = "56"
 arrow-schema = "56"
