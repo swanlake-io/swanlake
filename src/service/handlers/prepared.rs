@@ -36,11 +36,15 @@ pub(crate) async fn do_action_create_prepared_statement(
 ) -> Result<ActionCreatePreparedStatementResult, Status> {
     let sql = query.query;
     
-    // Use SQL parser to determine if this is a query
-    let parsed = crate::sql_parser::ParsedStatement::parse(&sql).ok_or_else(|| {
-        Status::invalid_argument(format!("failed to parse SQL statement: {}", sql))
-    })?;
-    let is_query = parsed.is_query();
+    // Try to parse SQL to determine if this is a query, but don't fail if it can't be parsed
+    // (e.g., multi-statement SQL or vendor-specific syntax)
+    let is_query = if let Some(parsed) = crate::sql_parser::ParsedStatement::parse(&sql) {
+        parsed.is_query()
+    } else {
+        // Fallback: treat multi-statement or unparseable SQL as non-query (safer default)
+        // User will get appropriate error when trying to execute if this is wrong
+        false
+    };
     
     tracing::Span::current().record("is_query", is_query);
     let session = service.prepare_request(&request)?;

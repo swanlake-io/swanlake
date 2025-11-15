@@ -130,6 +130,7 @@ async fn flush_loop(
             let flush_result = tokio::task::spawn_blocking(move || {
                 let conn = factory_clone.lock().unwrap().create_connection()?;
                 conn.with_inner(|inner| flush_sealed_file(&manager_clone, inner, &path))
+                    .map_err(|e| anyhow!(e))?
             })
             .await
             .map_err(|join_err| anyhow!(join_err))
