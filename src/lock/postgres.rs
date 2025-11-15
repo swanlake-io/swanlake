@@ -5,37 +5,50 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use duckdb::Connection;
 use tokio::sync::Mutex;
+use tokio_postgres::{Client, NoTls};
 use tracing::{debug, warn};
 
 use super::DistributedLock;
 
-/// PostgreSQL-based distributed lock using advisory locks via DuckDB's postgres extension.
+/// PostgreSQL-based distributed lock using advisory locks.
 ///
 /// This lock uses PostgreSQL advisory locks to coordinate access across multiple hosts.
 /// The lock is identified by a 64-bit integer derived from hashing the target path.
-/// Uses DuckDB's postgres extension to connect, avoiding additional dependencies.
+/// Uses tokio-postgres for lightweight connection management.
 pub struct PostgresLock {
-    conn: Arc<Mutex<Connection>>,
+    client: Arc<Mutex<Client>>,
     lock_key: i64,
     target_path: PathBuf,
     owner: Option<String>,
 }
 
 impl PostgresLock {
-    /// Create a new PostgreSQL lock connection using DuckDB's postgres extension.
-    fn connect() -> Result<Arc<Mutex<Connection>>> {
-        let conn = Connection::open_in_memory()?;
-        
-        // Install and load postgres extension
-        conn.execute_batch("INSTALL postgres; LOAD postgres;")?;
-        
-        // Attach to PostgreSQL using environment variables
-        // DuckDB's postgres extension reads from standard PG* environment variables
-        conn.execute_batch("ATTACH '' AS lock_db (TYPE postgres);")?;
-        
-        Ok(Arc::new(Mutex::new(conn)))
+    /// Create a new PostgreSQL client connection.
+    /// Uses standard PG* environment variables for connection parameters.
+    async fn connect() -> Result<Arc<Mutex<Client>>> {
+        // Build connection string from environment variables
+        let host = std::env::var("PGHOST").unwrap_or_else(|_| "localhost".to_string());
+        let port = std::env::var("PGPORT").unwrap_or_else(|_| "5432".to_string());
+        let user = std::env::var("PGUSER").unwrap_or_else(|_| "postgres".to_string());
+        let dbname = std::env::var("PGDATABASE").unwrap_or_else(|_| "postgres".to_string());
+        let password = std::env::var("PGPASSWORD").ok();
+
+        let mut config = format!("host={} port={} user={} dbname={}", host, port, user, dbname);
+        if let Some(pwd) = password {
+            config.push_str(&format!(" password={}", pwd));
+        }
+
+        let (client, connection) = tokio_postgres::connect(&config, NoTls).await?;
+
+        // Spawn connection handler
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                warn!(error = %e, "PostgreSQL connection error");
+            }
+        });
+
+        Ok(Arc::new(Mutex::new(client)))
     }
 
     /// Convert a path to a lock key by hashing it to a 64-bit integer.
@@ -52,7 +65,7 @@ impl DistributedLock for PostgresLock {
         _ttl: Duration,
         owner: Option<&str>,
     ) -> Result<Option<Self>> {
-        let conn = Self::connect()?;
+        let client = Self::connect().await?;
         let lock_key = Self::path_to_lock_key(target);
 
         debug!(
@@ -63,10 +76,11 @@ impl DistributedLock for PostgresLock {
 
         // Try to acquire the advisory lock (non-blocking)
         let locked = {
-            let conn = conn.lock().await;
-            let mut stmt = conn.prepare("SELECT pg_try_advisory_lock(?)")?;
-            let locked: bool = stmt.query_row([lock_key], |row| row.get(0))?;
-            locked
+            let client = client.lock().await;
+            let row = client
+                .query_one("SELECT pg_try_advisory_lock($1)", &[&lock_key])
+                .await?;
+            row.get::<_, bool>(0)
         };
 
         if locked {
@@ -76,7 +90,7 @@ impl DistributedLock for PostgresLock {
                 "acquired PostgreSQL advisory lock"
             );
             Ok(Some(Self {
-                conn,
+                client,
                 lock_key,
                 target_path: target.to_path_buf(),
                 owner: owner.map(|s| s.to_string()),
@@ -94,22 +108,25 @@ impl DistributedLock for PostgresLock {
     async fn refresh(&self) -> Result<()> {
         // PostgreSQL advisory locks are session-based and don't expire,
         // so this is a no-op. We just verify the connection is still alive.
-        let conn = self.conn.lock().await;
-        conn.execute("SELECT 1", [])?;
+        let client = self.client.lock().await;
+        client.query_one("SELECT 1", &[]).await?;
         Ok(())
     }
 }
 
 impl Drop for PostgresLock {
     fn drop(&mut self) {
-        let conn = self.conn.clone();
+        let client = self.client.clone();
         let lock_key = self.lock_key;
         let target_path = self.target_path.clone();
 
         // Spawn a task to release the lock asynchronously
         tokio::spawn(async move {
-            let conn = conn.lock().await;
-            if let Err(err) = conn.execute("SELECT pg_advisory_unlock(?)", [lock_key]) {
+            let client = client.lock().await;
+            if let Err(err) = client
+                .execute("SELECT pg_advisory_unlock($1)", &[&lock_key])
+                .await
+            {
                 warn!(
                     error = %err,
                     lock_key = lock_key,

@@ -4,14 +4,14 @@ Provides PostgreSQL-based distributed locking for coordinating access across mul
 
 ## Overview
 
-Replaces file-based locks with PostgreSQL advisory locks that work across multiple hosts sharing a PostgreSQL database. Uses DuckDB's postgres extension to connect, avoiding additional dependencies.
+Replaces file-based locks with PostgreSQL advisory locks that work across multiple hosts sharing a PostgreSQL database. Uses `tokio-postgres` for lightweight connection management.
 
 ## Features
 
 - **Distributed coordination** across multiple hosts via PostgreSQL
 - **Automatic cleanup** on session termination or crash
 - **Session-based locks** using `pg_try_advisory_lock()` / `pg_advisory_unlock()`
-- **Zero additional dependencies** - uses DuckDB's built-in postgres extension
+- **Lightweight connections** via `tokio-postgres` (each lock creates its own connection)
 
 ## Configuration
 
@@ -42,7 +42,8 @@ if let Some(lock) = PostgresLock::try_acquire(&path, ttl, owner).await? {
 - Resource paths are hashed to 64-bit lock keys
 - Locks are held for the database session lifetime
 - PostgreSQL automatically releases locks if the session crashes
-- Each lock creates a fresh DuckDB connection that attaches to PostgreSQL
+- Each lock creates a fresh tokio-postgres connection for lightweight operation
+- Connection is maintained only while lock is held
 
 ## Lock Key Generation
 
