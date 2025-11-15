@@ -37,7 +37,7 @@ pub(crate) async fn do_action_create_prepared_statement(
     let sql = query.query;
     let is_query = SwanFlightSqlService::is_query_statement(&sql);
     tracing::Span::current().record("is_query", is_query);
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     let (cached_schema, dataset_schema) = if is_query {
         let sql_for_schema = sql.clone();
@@ -85,7 +85,7 @@ pub(crate) async fn get_flight_info_prepared_statement(
         query.prepared_statement_handle.as_ref(),
         "get_flight_info_prepared_statement",
     )?;
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     let meta = session
         .get_prepared_statement_meta(handle)
@@ -161,7 +161,7 @@ pub(crate) async fn do_get_prepared_statement(
         query.prepared_statement_handle.as_ref(),
         "do_get_prepared_statement",
     )?;
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     let meta = session
         .get_prepared_statement_meta(handle)
@@ -194,7 +194,7 @@ pub(crate) async fn do_put_prepared_statement_query(
         query.prepared_statement_handle.as_ref(),
         "do_put_prepared_statement_query",
     )?;
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     let meta = session
         .get_prepared_statement_meta(handle)
@@ -238,7 +238,7 @@ pub(crate) async fn do_action_close_prepared_statement(
         query.prepared_statement_handle.as_ref(),
         "do_action_close_prepared_statement",
     )?;
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     session
         .close_prepared_statement(handle)
@@ -256,7 +256,7 @@ pub(crate) async fn do_put_prepared_statement_update(
         query.prepared_statement_handle.as_ref(),
         "do_put_prepared_statement_update",
     )?;
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     let PreparedStatementMeta { sql, is_query, .. } =
         session

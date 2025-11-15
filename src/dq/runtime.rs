@@ -72,18 +72,7 @@ async fn rotation_loop(
 
         // 2. Sweep orphaned active files
         let active_ids = registry.get_all_session_ids();
-        // Spawn sweep in blocking task since it's now async but we need it to be sync
-        let orphaned_result = tokio::task::spawn_blocking({
-            let manager = manager.clone();
-            let active_ids = active_ids.clone();
-            move || {
-                tokio::runtime::Handle::current().block_on(async {
-                    manager.sweep_orphaned_files(&active_ids).await
-                })
-            }
-        }).await;
-
-        if let Ok(Ok(orphaned)) = orphaned_result {
+        if let Ok(orphaned) = manager.sweep_orphaned_files(&active_ids).await {
             if !orphaned.is_empty() {
                 info!(
                     "found {} orphaned duckling queue files to flush",
@@ -138,19 +127,27 @@ async fn flush_loop(
         let factory_clone = factory.clone();
         let path_for_log = path.clone();
         tokio::spawn(async move {
-            let flush_result = {
-                let conn = factory_clone.lock().unwrap().create_connection();
-                match conn {
-                    Ok(conn) => {
-                        conn.with_inner(|inner| {
-                            // We need to run flush_sealed_file in an async context
-                            tokio::runtime::Handle::current().block_on(async {
-                                flush_sealed_file(&manager_clone, inner, &path).await
+            // Acquire lock first (async operation)
+            let lock_result = PostgresLock::try_acquire(&path, manager_clone.settings().lock_ttl, None).await;
+            
+            let flush_result = match lock_result {
+                Ok(Some(_lock)) => {
+                    // Lock acquired, now do the flush with sync DuckDB operations
+                    let conn = factory_clone.lock().unwrap().create_connection();
+                    match conn {
+                        Ok(conn) => {
+                            conn.with_inner(|inner| {
+                                flush_sealed_file_sync(&manager_clone, inner, &path)
                             })
-                        })
+                        }
+                        Err(e) => Err(e.into())
                     }
-                    Err(e) => Err(e.into())
                 }
+                Ok(None) => {
+                    // Lock not acquired - file busy
+                    Ok(false)
+                }
+                Err(e) => Err(e)
             };
 
             match flush_result {
@@ -170,9 +167,10 @@ async fn flush_loop(
     }
 }
 
-/// Flush a sealed queue file into the target DuckLake schema.
+/// Flush a sealed queue file into the target DuckLake schema (synchronous version).
 /// Returns true if flushed, false if file is busy (locked by another worker).
-pub async fn flush_sealed_file(
+/// Note: Lock must be acquired before calling this function.
+pub fn flush_sealed_file_sync(
     manager: &QueueManager,
     conn: &duckdb::Connection,
     path: &Path,
@@ -187,10 +185,6 @@ pub async fn flush_sealed_file(
         return Ok(true);
     }
 
-    let Some(lock) = PostgresLock::try_acquire(path, manager.settings().lock_ttl, None).await? else {
-        debug!(file = %path.display(), "duckling queue file already being flushed by another worker");
-        return Ok(false);
-    };
     info!(file = %path.display(), "start flush duckling queue file");
 
     detach_if_attached(conn, "duckling_queue")
@@ -249,13 +243,33 @@ pub async fn flush_sealed_file(
     std::fs::rename(path, &flushed_path).with_context(|| {
         format!(
             "failed to move flushed queue file {:?} to {:?}",
-            path, flushed_path
+            path.display(),
+            flushed_path.display()
         )
     })?;
 
-    info!(file = %path.display(), flushed = %flushed_path.display(), "duckling queue file flushed and moved");
-    drop(lock);
+    info!(
+        flushed_path = %flushed_path.display(),
+        "duckling queue file flushed successfully"
+    );
     Ok(true)
+}
+
+/// Flush a sealed queue file into the target DuckLake schema (async wrapper).
+/// Returns true if flushed, false if file is busy (locked by another worker).
+pub async fn flush_sealed_file(
+    manager: &QueueManager,
+    conn: &duckdb::Connection,
+    path: &Path,
+) -> Result<bool> {
+    // Acquire lock first
+    let Some(_lock) = PostgresLock::try_acquire(path, manager.settings().lock_ttl, None).await? else {
+        debug!(file = %path.display(), "duckling queue file already being flushed by another worker");
+        return Ok(false);
+    };
+    
+    // Now do the sync flush
+    flush_sealed_file_sync(manager, conn, path)
 }
 
 fn list_queue_tables(conn: &duckdb::Connection) -> Result<Vec<String>> {

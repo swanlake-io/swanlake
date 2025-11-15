@@ -12,7 +12,7 @@ pub(crate) async fn do_action_begin_transaction(
     _query: ActionBeginTransactionRequest,
     request: Request<arrow_flight::Action>,
 ) -> Result<ActionBeginTransactionResult, Status> {
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     let session_clone = session.clone();
     let transaction_id = tokio::task::spawn_blocking(move || session_clone.begin_transaction())
@@ -32,7 +32,7 @@ pub(crate) async fn do_action_end_transaction(
     query: ActionEndTransactionRequest,
     request: Request<arrow_flight::Action>,
 ) -> Result<(), Status> {
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     let transaction_id = match TransactionId::from_bytes(&query.transaction_id) {
         Some(id) => id,

@@ -20,7 +20,7 @@ pub(crate) async fn get_flight_info_sql_info(
     query: CommandGetSqlInfo,
     request: Request<FlightDescriptor>,
 ) -> Result<Response<FlightInfo>, Status> {
-    service.prepare_request(&request)?;
+    service.prepare_request(&request).await?;
 
     let mut builder = SqlInfoDataBuilder::new();
     builder.append(
@@ -59,7 +59,7 @@ pub(crate) async fn do_get_sql_info(
     query: CommandGetSqlInfo,
     request: Request<Ticket>,
 ) -> Result<Response<<SwanFlightSqlService as FlightService>::DoGetStream>, Status> {
-    service.prepare_request(&request)?;
+    service.prepare_request(&request).await?;
 
     let mut builder = SqlInfoDataBuilder::new();
     builder.append(

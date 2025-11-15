@@ -28,6 +28,7 @@ use tracing::{debug, error, info, instrument};
 
 use crate::dq::{QueueManager, QueueSession};
 use crate::engine::{DuckDbConnection, QueryResult};
+use crate::lock::DistributedLock;
 use crate::error::ServerError;
 use crate::session::id::{
     StatementHandle, StatementHandleGenerator, TransactionId, TransactionIdGenerator,
@@ -270,12 +271,15 @@ impl Session {
             .clone();
 
         // Use session's own connection to flush
+        // Acquire lock first (this is safe here because execute_statement is called from spawn_blocking)
+        let _lock = tokio::runtime::Handle::current().block_on(async {
+            crate::lock::PostgresLock::try_acquire(&sealed_path, std::time::Duration::from_secs(60), None).await
+        }).map_err(|e| ServerError::Internal(format!("failed to acquire lock: {}", e)))?
+        .ok_or_else(|| ServerError::Internal("failed to acquire lock for flush".into()))?;
+        
         self.connection
             .with_inner(|conn| {
-                // Need to block on the async flush_sealed_file
-                tokio::runtime::Handle::current().block_on(async {
-                    crate::dq::runtime::flush_sealed_file(&dq_manager, conn, &sealed_path).await
-                })
+                crate::dq::runtime::flush_sealed_file_sync(&dq_manager, conn, &sealed_path)
             })
             .map_err(|e| ServerError::Internal(format!("failed to flush queue file: {}", e)))?;
 

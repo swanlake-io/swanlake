@@ -21,7 +21,7 @@ pub(crate) async fn get_flight_info_statement(
     request: Request<FlightDescriptor>,
 ) -> Result<Response<FlightInfo>, Status> {
     let sql = query.query;
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     let sql_for_schema = sql.clone();
     let session_for_schema = Arc::clone(&session);
@@ -64,7 +64,7 @@ pub(crate) async fn do_get_statement(
         })?;
 
     if let Some(handle) = payload.handle() {
-        let session = service.get_session(&request)?;
+        let session = service.get_session(&request).await?;
         match session.get_prepared_statement_meta(handle) {
             Ok(meta) => {
                 if !meta.is_query {
@@ -121,7 +121,7 @@ pub(crate) async fn do_put_statement_update(
     request: Request<PeekableFlightDataStream>,
 ) -> Result<i64, Status> {
     let sql = command.query;
-    let session = service.prepare_request(&request)?;
+    let session = service.prepare_request(&request).await?;
 
     let affected_rows = tokio::task::spawn_blocking(move || session.execute_statement(&sql))
         .await
@@ -137,7 +137,7 @@ async fn execute_ephemeral_ticket_statement(
     request: &Request<Ticket>,
 ) -> Result<Response<<SwanFlightSqlService as FlightService>::DoGetStream>, Status> {
     info!(sql = %sql, "executing ticket via fallback SQL");
-    let session = service.get_session(request)?;
+    let session = service.get_session(request).await?;
     let handle = session
         .create_prepared_statement(
             sql.clone(),
