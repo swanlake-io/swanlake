@@ -39,7 +39,7 @@ impl ParsedStatement {
 
     /// Check if this is a query statement (returns results).
     ///
-    /// Returns true for SELECT, SHOW, EXPLAIN, and other query statements.
+    /// Returns true for SELECT, SHOW, EXPLAIN, PRAGMA, and other query statements.
     /// Returns false for INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, etc.
     pub fn is_query(&self) -> bool {
         matches!(
@@ -52,6 +52,7 @@ impl ParsedStatement {
                 | Statement::ShowVariables { .. }
                 | Statement::Explain { .. }
                 | Statement::ExplainTable { .. }
+                | Statement::Pragma { .. }
         )
     }
 

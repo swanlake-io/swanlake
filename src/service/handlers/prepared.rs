@@ -311,12 +311,10 @@ pub(crate) async fn do_put_prepared_statement_update(
 
     // Use appender optimization via session layer
     let session_clone = Arc::clone(&session);
-    let sql_clone = sql.clone();
-    let batches_clone = batches.clone();
     
     let affected_rows = tokio::task::spawn_blocking(move || {
         session_clone
-            .execute_with_record_batches(&sql_clone, batches_clone)
+            .execute_with_record_batches(&sql, batches)
             .map(|rows| rows as i64)
     })
     .await
