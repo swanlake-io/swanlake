@@ -68,7 +68,7 @@ async fn rotation_loop(
         interval.tick().await;
 
         // 1. Check all sessions for size/time-based rotation
-        registry.maybe_rotate_all_queues();
+        registry.maybe_rotate_all_queues().await;
 
         // 2. Sweep orphaned active files
         let active_ids = registry.get_all_session_ids();

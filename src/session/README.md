@@ -250,7 +250,7 @@ pub struct SessionRegistry {
 }
 
 impl SessionRegistry {
-    pub fn get_or_create_by_id(&self, session_id: &SessionId) -> Result<Arc<Session>, ServerError>;
+    pub async fn get_or_create_by_id(&self, session_id: &SessionId) -> Result<Arc<Session>, ServerError>;
     pub fn cleanup_idle_sessions(&self) -> usize;
 }
 ```
@@ -283,6 +283,7 @@ async fn handler(
     // Get or create session
     let session = self.registry
         .get_or_create_by_id(&session_id)
+        .await
         .map_err(Self::status_from_error)?;
 
     // Use session to execute operation

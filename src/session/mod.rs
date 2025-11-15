@@ -261,8 +261,10 @@ impl Session {
 
     /// Force flush: rotate this session's queue and flush the sealed file immediately.
     fn force_flush_own_queue(&self) -> Result<(), ServerError> {
-        // Rotate the current session's queue file
-        let sealed_path = self.force_rotate_queue()?;
+        // Rotate the current session's queue file (this runs inside spawn_blocking)
+        let sealed_path = tokio::runtime::Handle::current()
+            .block_on(async { self.force_rotate_queue().await })
+            .map_err(|e| ServerError::Internal(format!("failed to rotate queue: {}", e)))?;
 
         // Flush only this session's sealed file synchronously
         let dq_manager = self
@@ -500,8 +502,8 @@ impl Session {
     // === Duckling Queue ===
 
     /// Check if rotation is needed and rotate if necessary.
-    pub fn maybe_rotate_queue(&self) -> Result<(), ServerError> {
-        // Check if rotation is needed
+    pub async fn maybe_rotate_queue(&self) -> Result<(), ServerError> {
+        // Check if rotation is needed without holding the mutex during awaits
         let should_rotate = {
             let queue = self.dq_queue.lock().unwrap();
             if let Some(ref sq) = *queue {
@@ -513,32 +515,56 @@ impl Session {
             }
         };
 
-        // If rotation needed, rotate (re-acquire lock)
-        if should_rotate {
-            let mut queue = self.dq_queue.lock().unwrap();
-            if let Some(ref mut sq) = *queue {
-                // Block on the async rotate
-                let sealed = tokio::runtime::Handle::current()
-                    .block_on(async { sq.rotate(&self.connection).await })
-                    .map_err(|e| ServerError::Internal(format!("failed to rotate queue: {}", e)))?;
-                debug!(session_id = %self.id, sealed_file = %sealed.display(), "session queue rotated");
-            }
+        if !should_rotate {
+            return Ok(());
         }
 
-        Ok(())
+        // Temporarily take ownership of the queue session so we can await safely.
+        let mut queue_session = {
+            let mut guard = self.dq_queue.lock().unwrap();
+            guard.take()
+        };
+
+        if let Some(ref mut sq) = queue_session {
+            let rotate_result = sq.rotate(&self.connection).await;
+
+            // Always put the queue session back before returning.
+            let mut guard = self.dq_queue.lock().unwrap();
+            *guard = queue_session;
+
+            match rotate_result {
+                Ok(sealed) => {
+                    debug!(session_id = %self.id, sealed_file = %sealed.display(), "session queue rotated");
+                    Ok(())
+                }
+                Err(e) => Err(ServerError::Internal(format!(
+                    "failed to rotate queue: {}",
+                    e
+                ))),
+            }
+        } else {
+            // No queue session, nothing to rotate.
+            let mut guard = self.dq_queue.lock().unwrap();
+            *guard = queue_session;
+            Ok(())
+        }
     }
 
     /// Force flush: rotate queue and return sealed file path.
-    pub fn force_rotate_queue(&self) -> Result<std::path::PathBuf, ServerError> {
-        let mut queue = self.dq_queue.lock().unwrap();
+    pub async fn force_rotate_queue(&self) -> Result<std::path::PathBuf, ServerError> {
+        let mut sq = {
+            let mut guard = self.dq_queue.lock().unwrap();
+            guard
+                .take()
+                .ok_or_else(|| ServerError::Internal("no active queue to flush".into()))?
+        };
 
-        if let Some(ref mut sq) = *queue {
-            tokio::runtime::Handle::current()
-                .block_on(async { sq.force_flush(&self.connection).await })
-                .map_err(|e| ServerError::Internal(format!("failed to force flush: {}", e)))
-        } else {
-            Err(ServerError::Internal("no active queue to flush".into()))
-        }
+        let result = sq.force_flush(&self.connection).await;
+
+        let mut queue = self.dq_queue.lock().unwrap();
+        *queue = Some(sq);
+
+        result.map_err(|e| ServerError::Internal(format!("failed to force flush: {}", e)))
     }
 
     /// Seal queue file before session cleanup.

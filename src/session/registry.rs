@@ -168,14 +168,14 @@ impl SessionRegistry {
     }
 
     /// Call maybe_rotate_queue() on all sessions
-    pub fn maybe_rotate_all_queues(&self) {
+    pub async fn maybe_rotate_all_queues(&self) {
         let sessions = {
             let inner = self.inner.read().expect("registry lock poisoned");
             inner.sessions.values().cloned().collect::<Vec<_>>()
         };
 
         for session in sessions {
-            if let Err(e) = session.maybe_rotate_queue() {
+            if let Err(e) = session.maybe_rotate_queue().await {
                 warn!(session_id = %session.id(), error = %e, "failed to rotate session queue");
             }
         }

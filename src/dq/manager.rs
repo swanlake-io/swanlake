@@ -22,14 +22,16 @@ pub struct QueueManager {
 
 impl QueueManager {
     /// Build settings, initialize directories and sweep leftover active files.
-    pub fn new(config: &ServerConfig) -> Result<Self> {
+    pub async fn new(config: &ServerConfig) -> Result<Self> {
         let settings = Settings::from_config(config);
         let dirs = QueueDirectories::new(settings.root.clone())?;
         let ctx = Arc::new(QueueContext::new(settings, dirs));
         let manager = Self { ctx };
 
         // Best-effort orphan sweep during startup so we don't leave straggler files.
-        std::mem::drop(manager.sweep_orphaned_files(&[]));
+        if let Err(err) = manager.sweep_orphaned_files(&[]).await {
+            warn!(error = %err, "failed to sweep orphaned duckling queue files on startup");
+        }
 
         Ok(manager)
     }

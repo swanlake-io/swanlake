@@ -55,7 +55,7 @@ To enable DuckLake S3 connection, see [DuckDB HTTPFS S3 API configuration](https
 
 ## Distributed Locking
 
-SwanLake uses PostgreSQL advisory locks for coordinating access to shared resources across multiple hosts. The distributed lock module uses tokio-postgres for lightweight connections.
+SwanLake uses PostgreSQL advisory locks for coordinating access to shared resources across multiple hosts. A single lightweight PostgreSQL session is shared for all locks on a host, so acquiring a lock never consumes an additional database connection.
 
 | Env Var | Description | Default |
 | --- | --- | --- |
@@ -64,9 +64,9 @@ SwanLake uses PostgreSQL advisory locks for coordinating access to shared resour
 | `PGUSER` | PostgreSQL user | `postgres` |
 | `PGDATABASE` | PostgreSQL database | `postgres` |
 | `PGPASSWORD` | PostgreSQL password | _(unset)_ |
-| `PGSSLMODE` | SSL mode: `disable`, `require`, `verify-ca`, `verify-full` | `disable` |
+| `PGSSLMODE` | TLS mode. `disable` = plaintext, `require` = TLS without verification, `verify-ca` = TLS verifying CA only, `verify-full` = full TLS verification | `disable` |
 
-Configuration is built once at startup from environment variables and reused for all lock connections.
+Configuration is loaded once at startup and reused for the lifetime of the process. Locks are automatically released when the process terminates, so no extra TTL/lease controls are needed.
 
 See `src/lock/README.md` for detailed documentation on the distributed lock implementation.
 
@@ -80,6 +80,7 @@ See `src/lock/README.md` for detailed documentation on the distributed lock impl
 | `SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often sealed files are scanned | `60` |
 | `SWANLAKE_DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
 | `SWANLAKE_DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema for flushed tables | `swanlake` |
+| `SWANLAKE_DUCKLING_QUEUE_AUTO_CREATE_TABLES` | Automatically create missing destination tables | `false` |
 
 The root directory is created automatically if it does not exist. Within that root the manager
 expects three child directories: `active/`, `sealed/`, and `flushed/`.

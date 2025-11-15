@@ -1,0 +1,28 @@
+# name: tests/sql/duckling_queue_force_flush.test
+# description: ensures repeated PRAGMA duckling_queue.flush calls succeed without errors
+# group: [sql]
+
+require ducklake
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '__TEST_DIR__/swanlake_files', OVERRIDE_DATA_PATH true)
+
+statement ok
+DROP TABLE IF EXISTS swanlake.force_flush_test;
+
+statement ok
+CREATE TABLE duckling_queue.force_flush_test AS SELECT 42 AS i;
+
+statement ok
+PRAGMA duckling_queue.flush;
+
+statement ok
+PRAGMA duckling_queue.flush;
+
+query I
+SELECT COUNT(*) FROM swanlake.force_flush_test
+----
+1
+
+statement ok
+DROP TABLE IF EXISTS swanlake.force_flush_test;
