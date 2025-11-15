@@ -29,7 +29,7 @@ impl QueueManager {
         let manager = Self { ctx };
 
         // Best-effort orphan sweep during startup so we don't leave straggler files.
-        let _ = manager.sweep_orphaned_files(&[]);
+        std::mem::drop(manager.sweep_orphaned_files(&[]));
 
         Ok(manager)
     }
@@ -50,12 +50,16 @@ impl QueueManager {
     }
 
     /// Sweep orphaned files from `active/` into `sealed/`.
-    pub async fn sweep_orphaned_files(&self, active_session_ids: &[SessionId]) -> Result<Vec<PathBuf>> {
+    pub async fn sweep_orphaned_files(
+        &self,
+        active_session_ids: &[SessionId],
+    ) -> Result<Vec<PathBuf>> {
         sweep_orphaned_active_files(
             self.ctx.dirs(),
             active_session_ids,
             self.ctx.settings().lock_ttl,
-        ).await
+        )
+        .await
     }
 
     /// Enumerate sealed queue files ready to flush.

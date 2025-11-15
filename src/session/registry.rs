@@ -108,7 +108,10 @@ impl SessionRegistry {
     /// The session_id is derived from the connection info (e.g., remote address).
     /// If a session already exists with this ID, it is reused.
     /// Otherwise, a new session is created with the given ID.
-    pub async fn get_or_create_by_id(&self, session_id: &SessionId) -> Result<Arc<Session>, ServerError> {
+    pub async fn get_or_create_by_id(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Arc<Session>, ServerError> {
         // First, try to get existing session (read lock)
         {
             let inner = self.inner.read().expect("registry lock poisoned");
@@ -145,11 +148,7 @@ impl SessionRegistry {
         };
 
         let session = if let Some(dq_manager) = dq_manager {
-            Arc::new(Session::new_with_id_and_dq(
-                session_id.clone(),
-                connection,
-                dq_manager,
-            ).await?)
+            Arc::new(Session::new_with_id_and_dq(session_id.clone(), connection, dq_manager).await?)
         } else {
             Arc::new(Session::new_with_id(session_id.clone(), connection))
         };

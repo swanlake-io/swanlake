@@ -26,7 +26,4 @@ pub trait DistributedLock: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Option<Self>>> + Send
     where
         Self: Sized;
-
-    /// Refresh the lock by updating its timestamp to prevent expiration.
-    fn refresh(&self) -> impl std::future::Future<Output = Result<()>> + Send;
 }

@@ -128,26 +128,25 @@ async fn flush_loop(
         let path_for_log = path.clone();
         tokio::spawn(async move {
             // Acquire lock first (async operation)
-            let lock_result = PostgresLock::try_acquire(&path, manager_clone.settings().lock_ttl, None).await;
-            
+            let lock_result =
+                PostgresLock::try_acquire(&path, manager_clone.settings().lock_ttl, None).await;
+
             let flush_result = match lock_result {
                 Ok(Some(_lock)) => {
                     // Lock acquired, now do the flush with sync DuckDB operations
                     let conn = factory_clone.lock().unwrap().create_connection();
                     match conn {
-                        Ok(conn) => {
-                            conn.with_inner(|inner| {
-                                flush_sealed_file_sync(&manager_clone, inner, &path)
-                            })
-                        }
-                        Err(e) => Err(e.into())
+                        Ok(conn) => conn.with_inner(|inner| {
+                            flush_sealed_file_sync(&manager_clone, inner, &path)
+                        }),
+                        Err(e) => Err(e.into()),
                     }
                 }
                 Ok(None) => {
                     // Lock not acquired - file busy
                     Ok(false)
                 }
-                Err(e) => Err(e)
+                Err(e) => Err(e),
             };
 
             match flush_result {
@@ -253,23 +252,6 @@ pub fn flush_sealed_file_sync(
         "duckling queue file flushed successfully"
     );
     Ok(true)
-}
-
-/// Flush a sealed queue file into the target DuckLake schema (async wrapper).
-/// Returns true if flushed, false if file is busy (locked by another worker).
-pub async fn flush_sealed_file(
-    manager: &QueueManager,
-    conn: &duckdb::Connection,
-    path: &Path,
-) -> Result<bool> {
-    // Acquire lock first
-    let Some(_lock) = PostgresLock::try_acquire(path, manager.settings().lock_ttl, None).await? else {
-        debug!(file = %path.display(), "duckling queue file already being flushed by another worker");
-        return Ok(false);
-    };
-    
-    // Now do the sync flush
-    flush_sealed_file_sync(manager, conn, path)
 }
 
 fn list_queue_tables(conn: &duckdb::Connection) -> Result<Vec<String>> {

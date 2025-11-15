@@ -28,8 +28,8 @@ use tracing::{debug, error, info, instrument};
 
 use crate::dq::{QueueManager, QueueSession};
 use crate::engine::{DuckDbConnection, QueryResult};
-use crate::lock::DistributedLock;
 use crate::error::ServerError;
+use crate::lock::DistributedLock;
 use crate::session::id::{
     StatementHandle, StatementHandleGenerator, TransactionId, TransactionIdGenerator,
 };
@@ -154,7 +154,8 @@ impl Session {
 
         // Create and attach queue immediately
         let sq = dq_manager
-            .open_session_queue(id.clone()).await
+            .open_session_queue(id.clone())
+            .await
             .map_err(|e| ServerError::Internal(format!("failed to create session queue: {}", e)))?;
 
         let sql = sq.attach_sql();
@@ -272,11 +273,18 @@ impl Session {
 
         // Use session's own connection to flush
         // Acquire lock first (this is safe here because execute_statement is called from spawn_blocking)
-        let _lock = tokio::runtime::Handle::current().block_on(async {
-            crate::lock::PostgresLock::try_acquire(&sealed_path, std::time::Duration::from_secs(60), None).await
-        }).map_err(|e| ServerError::Internal(format!("failed to acquire lock: {}", e)))?
-        .ok_or_else(|| ServerError::Internal("failed to acquire lock for flush".into()))?;
-        
+        let _lock = tokio::runtime::Handle::current()
+            .block_on(async {
+                crate::lock::PostgresLock::try_acquire(
+                    &sealed_path,
+                    std::time::Duration::from_secs(60),
+                    None,
+                )
+                .await
+            })
+            .map_err(|e| ServerError::Internal(format!("failed to acquire lock: {}", e)))?
+            .ok_or_else(|| ServerError::Internal("failed to acquire lock for flush".into()))?;
+
         self.connection
             .with_inner(|conn| {
                 crate::dq::runtime::flush_sealed_file_sync(&dq_manager, conn, &sealed_path)
@@ -497,8 +505,9 @@ impl Session {
         let should_rotate = {
             let queue = self.dq_queue.lock().unwrap();
             if let Some(ref sq) = *queue {
-                sq.should_rotate()
-                    .map_err(|e| ServerError::Internal(format!("failed to check rotation: {}", e)))?
+                sq.should_rotate().map_err(|e| {
+                    ServerError::Internal(format!("failed to check rotation: {}", e))
+                })?
             } else {
                 false
             }
@@ -509,9 +518,9 @@ impl Session {
             let mut queue = self.dq_queue.lock().unwrap();
             if let Some(ref mut sq) = *queue {
                 // Block on the async rotate
-                let sealed = tokio::runtime::Handle::current().block_on(async {
-                    sq.rotate(&self.connection).await
-                }).map_err(|e| ServerError::Internal(format!("failed to rotate queue: {}", e)))?;
+                let sealed = tokio::runtime::Handle::current()
+                    .block_on(async { sq.rotate(&self.connection).await })
+                    .map_err(|e| ServerError::Internal(format!("failed to rotate queue: {}", e)))?;
                 debug!(session_id = %self.id, sealed_file = %sealed.display(), "session queue rotated");
             }
         }
@@ -524,9 +533,9 @@ impl Session {
         let mut queue = self.dq_queue.lock().unwrap();
 
         if let Some(ref mut sq) = *queue {
-            tokio::runtime::Handle::current().block_on(async {
-                sq.force_flush(&self.connection).await
-            }).map_err(|e| ServerError::Internal(format!("failed to force flush: {}", e)))
+            tokio::runtime::Handle::current()
+                .block_on(async { sq.force_flush(&self.connection).await })
+                .map_err(|e| ServerError::Internal(format!("failed to force flush: {}", e)))
         } else {
             Err(ServerError::Internal("no active queue to flush".into()))
         }

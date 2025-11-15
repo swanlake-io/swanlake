@@ -1,10 +1,11 @@
-use std::collections::hash_map::DefaultHasher;
+use siphasher::sip::SipHasher13;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use postgres_native_tls::MakeTlsConnector;
 use tokio::sync::Mutex;
 use tokio_postgres::{Client, NoTls};
 use tracing::{debug, warn};
@@ -24,18 +25,18 @@ impl PgConfig {
         let user = std::env::var("PGUSER").unwrap_or_else(|_| "postgres".to_string());
         let dbname = std::env::var("PGDATABASE").unwrap_or_else(|_| "postgres".to_string());
         let password = std::env::var("PGPASSWORD").ok();
-        
-        // Check SSL mode from environment
-        let ssl_mode = std::env::var("PGSSLMODE").unwrap_or_else(|_| "disable".to_string());
-        let use_tls = ssl_mode != "disable";
 
-        let mut config = format!("host={} port={} user={} dbname={}", host, port, user, dbname);
+        let mut config = format!(
+            "host={} port={} user={} dbname={}",
+            host, port, user, dbname
+        );
         if let Some(pwd) = password {
             config.push_str(&format!(" password={}", pwd));
         }
-        if use_tls {
-            config.push_str(&format!(" sslmode={}", ssl_mode));
-        }
+
+        let use_tls = std::env::var("PGSSLMODE")
+            .map(|s| s.to_lowercase() == "require")
+            .unwrap_or(false);
 
         Self {
             connection_string: config,
@@ -59,7 +60,6 @@ pub struct PostgresLock {
     client: Arc<Mutex<Client>>,
     lock_key: i64,
     target_path: PathBuf,
-    owner: Option<String>,
 }
 
 impl PostgresLock {
@@ -68,23 +68,37 @@ impl PostgresLock {
     async fn connect() -> Result<Arc<Mutex<Client>>> {
         let config = PgConfig::get();
 
-        // For now, only NoTls is supported. TLS support can be added later if needed.
-        // The connection string already includes sslmode parameter for PostgreSQL server.
-        let (client, connection) = tokio_postgres::connect(&config.connection_string, NoTls).await?;
+        macro_rules! spawn_and_return {
+            ($client:expr, $connection:expr) => {{
+                tokio::spawn(async move {
+                    if let Err(e) = $connection.await {
+                        warn!(error = %e, "PostgreSQL connection error");
+                    }
+                });
+                $client
+            }};
+        }
 
-        // Spawn connection handler
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                warn!(error = %e, "PostgreSQL connection error");
-            }
-        });
+        let client = if config.use_tls {
+            debug!("connecting to PostgreSQL with TLS");
+            let connector = native_tls::TlsConnector::new()?;
+            let tls = MakeTlsConnector::new(connector);
+            let (client, connection) =
+                tokio_postgres::connect(&config.connection_string, tls).await?;
+            spawn_and_return!(client, connection)
+        } else {
+            debug!("connecting to PostgreSQL without TLS");
+            let (client, connection) =
+                tokio_postgres::connect(&config.connection_string, NoTls).await?;
+            spawn_and_return!(client, connection)
+        };
 
         Ok(Arc::new(Mutex::new(client)))
     }
 
     /// Convert a path to a lock key by hashing it to a 64-bit integer.
     fn path_to_lock_key(path: &Path) -> i64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = SipHasher13::new_with_key(&[0u8; 16]);
         path.hash(&mut hasher);
         hasher.finish() as i64
     }
@@ -94,7 +108,7 @@ impl DistributedLock for PostgresLock {
     async fn try_acquire(
         target: &Path,
         _ttl: Duration,
-        owner: Option<&str>,
+        _owner: Option<&str>,
     ) -> Result<Option<Self>> {
         let client = Self::connect().await?;
         let lock_key = Self::path_to_lock_key(target);
@@ -124,7 +138,6 @@ impl DistributedLock for PostgresLock {
                 client,
                 lock_key,
                 target_path: target.to_path_buf(),
-                owner: owner.map(|s| s.to_string()),
             }))
         } else {
             debug!(
@@ -134,14 +147,6 @@ impl DistributedLock for PostgresLock {
             );
             Ok(None)
         }
-    }
-
-    async fn refresh(&self) -> Result<()> {
-        // PostgreSQL advisory locks are session-based and don't expire,
-        // so this is a no-op. We just verify the connection is still alive.
-        let client = self.client.lock().await;
-        client.query_one("SELECT 1", &[]).await?;
-        Ok(())
     }
 }
 

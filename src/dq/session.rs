@@ -34,7 +34,8 @@ impl QueueSession {
             &active_file,
             context.settings().lock_ttl,
             Some(session_id.as_ref()),
-        ).await?
+        )
+        .await?
         .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for session queue file"))?;
 
         info!(
@@ -115,7 +116,8 @@ impl QueueSession {
             &new_file,
             self.context.settings().lock_ttl,
             Some(self.session_id.as_ref()),
-        ).await?
+        )
+        .await?
         .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for new session queue file"))?;
 
         // Update state
