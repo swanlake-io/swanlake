@@ -139,17 +139,21 @@ impl SessionRegistry {
         let connection = self.factory.lock().unwrap().create_connection()?;
 
         // Create session with the specified ID
-        let session = {
+        let dq_manager = {
             let inner = self.inner.read().expect("registry lock poisoned");
-            if let Some(ref dq_manager) = inner.dq_manager {
-                Arc::new(Session::new_with_id_and_dq(
+            inner.dq_manager.clone()
+        };
+
+        let session = if let Some(dq_manager) = dq_manager {
+            Arc::new(tokio::runtime::Handle::current().block_on(async {
+                Session::new_with_id_and_dq(
                     session_id.clone(),
                     connection,
-                    dq_manager.clone(),
-                )?)
-            } else {
-                Arc::new(Session::new_with_id(session_id.clone(), connection))
-            }
+                    dq_manager,
+                ).await
+            })?)
+        } else {
+            Arc::new(Session::new_with_id(session_id.clone(), connection))
         };
 
         // Register session

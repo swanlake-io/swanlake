@@ -55,20 +55,17 @@ To enable DuckLake S3 connection, see [DuckDB HTTPFS S3 API configuration](https
 
 ## Distributed Locking
 
-SwanLake includes a distributed lock module that supports PostgreSQL advisory locks for coordinating access to shared resources across multiple hosts. This is particularly useful for the Duckling Queue flush operations in multi-host deployments.
+SwanLake uses PostgreSQL advisory locks for coordinating access to shared resources across multiple hosts. The distributed lock module uses DuckDB's postgres extension to connect.
 
 | Env Var | Description | Default |
 | --- | --- | --- |
-| `SWANLAKE_LOCK_POSTGRES_CONNECTION` | Full PostgreSQL connection string for distributed locks | _(constructed from PG* vars)_ |
-| `PGHOST` | PostgreSQL host for distributed locks | `localhost` |
-| `PGPORT` | PostgreSQL port for distributed locks | `5432` |
-| `PGUSER` | PostgreSQL user for distributed locks | `postgres` |
-| `PGDATABASE` | PostgreSQL database for distributed locks | `postgres` |
-| `PGPASSWORD` | PostgreSQL password for distributed locks | _(unset)_ |
+| `PGHOST` | PostgreSQL host | `localhost` |
+| `PGPORT` | PostgreSQL port | `5432` |
+| `PGUSER` | PostgreSQL user | `postgres` |
+| `PGDATABASE` | PostgreSQL database | `postgres` |
+| `PGPASSWORD` | PostgreSQL password | _(unset)_ |
 
-The distributed lock module can be used independently or as part of the Duckling Queue flush coordination. See `src/lock/README.md` for detailed documentation on the distributed lock implementation.
-
-**Note**: If `SWANLAKE_LOCK_POSTGRES_CONNECTION` is set, it takes precedence over individual `PG*` environment variables. The connection string format is: `host=HOST port=PORT user=USER dbname=DATABASE password=PASSWORD`
+See `src/lock/README.md` for detailed documentation on the distributed lock implementation.
 
 ## Queueing & Flush Runtime
 

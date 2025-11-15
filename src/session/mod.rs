@@ -18,7 +18,8 @@ pub use id::SessionId;
 // - Transaction state
 // - Prepared statements
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use arrow_schema::Schema;
@@ -143,7 +144,7 @@ impl Session {
     /// Create a new session with duckling queue support.
     /// The queue is attached immediately on session creation.
     #[instrument(skip(connection, dq_manager))]
-    pub fn new_with_id_and_dq(
+    pub async fn new_with_id_and_dq(
         id: SessionId,
         connection: DuckDbConnection,
         dq_manager: Arc<QueueManager>,
@@ -152,7 +153,7 @@ impl Session {
 
         // Create and attach queue immediately
         let sq = dq_manager
-            .open_session_queue(id.clone())
+            .open_session_queue(id.clone()).await
             .map_err(|e| ServerError::Internal(format!("failed to create session queue: {}", e)))?;
 
         let sql = sq.attach_sql();
@@ -268,15 +269,18 @@ impl Session {
             .ok_or_else(|| ServerError::Internal("no duckling queue manager".into()))?
             .clone();
 
-        // Use session's own connection to flush (it's already in a spawn_blocking context)
+        // Use session's own connection to flush
         self.connection
             .with_inner(|conn| {
-                crate::dq::runtime::flush_sealed_file(&dq_manager, conn, &sealed_path)
+                // Need to block on the async flush_sealed_file
+                tokio::runtime::Handle::current().block_on(async {
+                    crate::dq::runtime::flush_sealed_file(&dq_manager, conn, &sealed_path).await
+                })
             })
             .map_err(|e| ServerError::Internal(format!("failed to flush queue file: {}", e)))?;
 
         // Re-attach the active queue to ensure duckling_queue is always available
-        if let Some(sq) = &*self.dq_queue.lock().expect("dq_queue mutex poisoned") {
+        if let Some(sq) = &*self.dq_queue.lock().unwrap() {
             self.connection
                 .execute_batch(&sq.attach_sql())
                 .map_err(|e| {
@@ -485,17 +489,25 @@ impl Session {
 
     /// Check if rotation is needed and rotate if necessary.
     pub fn maybe_rotate_queue(&self) -> Result<(), ServerError> {
-        let mut queue = self.dq_queue.lock().expect("dq_queue mutex poisoned");
+        // Check if rotation is needed
+        let should_rotate = {
+            let queue = self.dq_queue.lock().unwrap();
+            if let Some(ref sq) = *queue {
+                sq.should_rotate()
+                    .map_err(|e| ServerError::Internal(format!("failed to check rotation: {}", e)))?
+            } else {
+                false
+            }
+        };
 
-        if let Some(ref mut sq) = *queue {
-            let should_rotate = sq
-                .should_rotate()
-                .map_err(|e| ServerError::Internal(format!("failed to check rotation: {}", e)))?;
-
-            if should_rotate {
-                let sealed = sq
-                    .rotate(&self.connection)
-                    .map_err(|e| ServerError::Internal(format!("failed to rotate queue: {}", e)))?;
+        // If rotation needed, rotate (re-acquire lock)
+        if should_rotate {
+            let mut queue = self.dq_queue.lock().unwrap();
+            if let Some(ref mut sq) = *queue {
+                // Block on the async rotate
+                let sealed = tokio::runtime::Handle::current().block_on(async {
+                    sq.rotate(&self.connection).await
+                }).map_err(|e| ServerError::Internal(format!("failed to rotate queue: {}", e)))?;
                 debug!(session_id = %self.id, sealed_file = %sealed.display(), "session queue rotated");
             }
         }
@@ -505,11 +517,12 @@ impl Session {
 
     /// Force flush: rotate queue and return sealed file path.
     pub fn force_rotate_queue(&self) -> Result<std::path::PathBuf, ServerError> {
-        let mut queue = self.dq_queue.lock().expect("dq_queue mutex poisoned");
+        let mut queue = self.dq_queue.lock().unwrap();
 
         if let Some(ref mut sq) = *queue {
-            sq.force_flush(&self.connection)
-                .map_err(|e| ServerError::Internal(format!("failed to force flush: {}", e)))
+            tokio::runtime::Handle::current().block_on(async {
+                sq.force_flush(&self.connection).await
+            }).map_err(|e| ServerError::Internal(format!("failed to force flush: {}", e)))
         } else {
             Err(ServerError::Internal("no active queue to flush".into()))
         }

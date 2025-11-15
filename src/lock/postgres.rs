@@ -2,45 +2,40 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use duckdb::Connection;
 use tokio::sync::Mutex;
-use tokio_postgres::{Client, NoTls};
 use tracing::{debug, warn};
 
 use super::DistributedLock;
 
-/// PostgreSQL-based distributed lock using advisory locks.
+/// PostgreSQL-based distributed lock using advisory locks via DuckDB's postgres extension.
 ///
 /// This lock uses PostgreSQL advisory locks to coordinate access across multiple hosts.
 /// The lock is identified by a 64-bit integer derived from hashing the target path.
+/// Uses DuckDB's postgres extension to connect, avoiding additional dependencies.
 pub struct PostgresLock {
-    client: Arc<Mutex<Client>>,
+    conn: Arc<Mutex<Connection>>,
     lock_key: i64,
     target_path: PathBuf,
     owner: Option<String>,
-    acquired_at: SystemTime,
 }
 
 impl PostgresLock {
-    /// Create a new PostgreSQL lock client.
-    ///
-    /// # Arguments
-    /// * `connection_string` - PostgreSQL connection string (e.g., "host=localhost user=postgres")
-    pub async fn connect(connection_string: &str) -> Result<Arc<Mutex<Client>>> {
-        let (client, connection) = tokio_postgres::connect(connection_string, NoTls)
-            .await
-            .context("failed to connect to PostgreSQL")?;
-
-        // Spawn connection handler
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                warn!(error = %e, "PostgreSQL connection error");
-            }
-        });
-
-        Ok(Arc::new(Mutex::new(client)))
+    /// Create a new PostgreSQL lock connection using DuckDB's postgres extension.
+    fn connect() -> Result<Arc<Mutex<Connection>>> {
+        let conn = Connection::open_in_memory()?;
+        
+        // Install and load postgres extension
+        conn.execute_batch("INSTALL postgres; LOAD postgres;")?;
+        
+        // Attach to PostgreSQL using environment variables
+        // DuckDB's postgres extension reads from standard PG* environment variables
+        conn.execute_batch("ATTACH '' AS lock_db (TYPE postgres);")?;
+        
+        Ok(Arc::new(Mutex::new(conn)))
     }
 
     /// Convert a path to a lock key by hashing it to a 64-bit integer.
@@ -57,25 +52,7 @@ impl DistributedLock for PostgresLock {
         _ttl: Duration,
         owner: Option<&str>,
     ) -> Result<Option<Self>> {
-        // Get PostgreSQL connection string from environment
-        let connection_string = std::env::var("SWANLAKE_LOCK_POSTGRES_CONNECTION")
-            .or_else(|_| std::env::var("PGCONNECTION"))
-            .unwrap_or_else(|_| {
-                // Build connection string from individual env vars
-                let host = std::env::var("PGHOST").unwrap_or_else(|_| "localhost".to_string());
-                let port = std::env::var("PGPORT").unwrap_or_else(|_| "5432".to_string());
-                let user = std::env::var("PGUSER").unwrap_or_else(|_| "postgres".to_string());
-                let dbname =
-                    std::env::var("PGDATABASE").unwrap_or_else(|_| "postgres".to_string());
-
-                let mut conn_str = format!("host={} port={} user={} dbname={}", host, port, user, dbname);
-                if let Ok(password) = std::env::var("PGPASSWORD") {
-                    conn_str.push_str(&format!(" password={}", password));
-                }
-                conn_str
-            });
-
-        let client = Self::connect(&connection_string).await?;
+        let conn = Self::connect()?;
         let lock_key = Self::path_to_lock_key(target);
 
         debug!(
@@ -86,12 +63,10 @@ impl DistributedLock for PostgresLock {
 
         // Try to acquire the advisory lock (non-blocking)
         let locked = {
-            let client = client.lock().await;
-            let row = client
-                .query_one("SELECT pg_try_advisory_lock($1)", &[&lock_key])
-                .await
-                .context("failed to execute pg_try_advisory_lock")?;
-            row.get::<_, bool>(0)
+            let conn = conn.lock().await;
+            let mut stmt = conn.prepare("SELECT pg_try_advisory_lock(?)")?;
+            let locked: bool = stmt.query_row([lock_key], |row| row.get(0))?;
+            locked
         };
 
         if locked {
@@ -101,11 +76,10 @@ impl DistributedLock for PostgresLock {
                 "acquired PostgreSQL advisory lock"
             );
             Ok(Some(Self {
-                client,
+                conn,
                 lock_key,
                 target_path: target.to_path_buf(),
                 owner: owner.map(|s| s.to_string()),
-                acquired_at: SystemTime::now(),
             }))
         } else {
             debug!(
@@ -120,28 +94,22 @@ impl DistributedLock for PostgresLock {
     async fn refresh(&self) -> Result<()> {
         // PostgreSQL advisory locks are session-based and don't expire,
         // so this is a no-op. We just verify the connection is still alive.
-        let client = self.client.lock().await;
-        client
-            .query_one("SELECT 1", &[])
-            .await
-            .context("failed to refresh PostgreSQL lock (connection lost)")?;
+        let conn = self.conn.lock().await;
+        conn.execute("SELECT 1", [])?;
         Ok(())
     }
 }
 
 impl Drop for PostgresLock {
     fn drop(&mut self) {
-        let client = self.client.clone();
+        let conn = self.conn.clone();
         let lock_key = self.lock_key;
         let target_path = self.target_path.clone();
 
         // Spawn a task to release the lock asynchronously
         tokio::spawn(async move {
-            let client = client.lock().await;
-            if let Err(err) = client
-                .execute("SELECT pg_advisory_unlock($1)", &[&lock_key])
-                .await
-            {
+            let conn = conn.lock().await;
+            if let Err(err) = conn.execute("SELECT pg_advisory_unlock(?)", [lock_key]) {
                 warn!(
                     error = %err,
                     lock_key = lock_key,
