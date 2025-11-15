@@ -1,0 +1,25 @@
+# name: tests/sql/quoted_identifiers.test
+# description: verify quoted identifier handling for ducklake tables
+# group: [sql]
+
+require ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files')
+
+statement ok
+CREATE TABLE ducklake."CamelCase" ("First Column" INTEGER, value INTEGER)
+
+statement ok
+INSERT INTO ducklake."CamelCase" ("First Column", value) VALUES (1, 2)
+
+query II
+SELECT "First Column", value FROM ducklake."CamelCase"
+----
+1	2
+
+statement ok
+DROP TABLE ducklake."CamelCase"
+
+statement ok
+DETACH ducklake

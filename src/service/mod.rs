@@ -134,6 +134,4 @@ impl SwanFlightSqlService {
     ) -> Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>> {
         Box::pin(stream::iter(batches.into_iter().map(Ok)))
     }
-
-
 }

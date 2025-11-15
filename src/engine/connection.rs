@@ -6,7 +6,7 @@
 use std::sync::Mutex;
 
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, IntervalUnit, Schema};
 use duckdb::types::Value;
 use duckdb::{params_from_iter, Connection};
 use tracing::{debug, info, instrument};
@@ -289,11 +289,11 @@ impl DuckDbConnection {
     }
 
     fn duckdb_type_to_arrow(duckdb_type: &str) -> Result<DataType, ServerError> {
-        let upper = duckdb_type.to_uppercase();
+        let upper = duckdb_type.trim().to_uppercase();
         match upper.as_str() {
             // Signed integers
-            "INTEGER" | "BIGINT" | "INT8" | "LONG" => Ok(DataType::Int64),
-            "INT" | "INT4" | "SIGNED" => Ok(DataType::Int32),
+            "BIGINT" | "INT8" | "LONG" => Ok(DataType::Int64),
+            "INTEGER" | "INT" | "INT4" | "SIGNED" => Ok(DataType::Int32),
             "SMALLINT" | "INT2" | "SHORT" => Ok(DataType::Int16),
             "TINYINT" | "INT1" => Ok(DataType::Int8),
             // Unsigned integers
@@ -306,7 +306,7 @@ impl DuckDbConnection {
             // Booleans
             "BOOLEAN" | "BOOL" | "LOGICAL" => Ok(DataType::Boolean),
             // Floats
-            "DOUBLE" | "FLOAT8" => Ok(DataType::Float64),
+            "DOUBLE" | "DOUBLE PRECISION" | "FLOAT8" => Ok(DataType::Float64),
             "FLOAT" | "FLOAT4" | "REAL" => Ok(DataType::Float32),
             // Dates and times
             "DATE" => Ok(DataType::Date32),
@@ -315,7 +315,7 @@ impl DuckDbConnection {
                 arrow_schema::TimeUnit::Microsecond,
                 None,
             )),
-            "TIMESTAMPTZ" => Ok(DataType::Timestamp(
+            "TIMESTAMP WITH TIME ZONE" | "TIMESTAMPTZ" => Ok(DataType::Timestamp(
                 arrow_schema::TimeUnit::Microsecond,
                 Some("UTC".into()),
             )),
@@ -325,34 +325,107 @@ impl DuckDbConnection {
             "UUID" => Ok(DataType::FixedSizeBinary(16)),
             // JSON (treat as string)
             "JSON" => Ok(DataType::Utf8),
-            // Decimal (basic support, assume DECIMAL(18,3) -> Decimal128)
-            s if s.starts_with("DECIMAL") || s.starts_with("NUMERIC") => {
-                // Parse DECIMAL(prec, scale), default to 18,3
-                let (precision, scale) = if let Some(inner) = s.split('(').nth(1) {
-                    let parts: Vec<&str> = inner.trim_end_matches(')').split(',').collect();
-                    if parts.len() == 2 {
-                        let p = parts[0].trim().parse().unwrap_or(18);
-                        let s = parts[1].trim().parse().unwrap_or(3);
-                        (p, s)
-                    } else {
-                        (18, 3)
-                    }
-                } else {
-                    (18, 3)
-                };
-                Ok(DataType::Decimal128(precision, scale))
-            }
-            // Bit string (treat as binary)
+            // Bit string types
             "BIT" | "BITSTRING" => Ok(DataType::Binary),
-            // Interval (not directly supported, treat as string)
-            "INTERVAL" => Ok(DataType::Utf8),
+            // Interval
+            s if s.starts_with("INTERVAL") => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+            // Decimal / Numeric
+            s if s.starts_with("DECIMAL") || s.starts_with("NUMERIC") => {
+                let (precision_raw, scale_raw) = Self::parse_decimal_precision_scale(duckdb_type);
+                let precision = precision_raw.min(76);
+                let scale = scale_raw.min(precision);
+                let arrow_precision = precision as u8;
+                let arrow_scale = scale as i8;
+                if precision <= 38 {
+                    Ok(DataType::Decimal128(arrow_precision, arrow_scale))
+                } else {
+                    Ok(DataType::Decimal256(arrow_precision, arrow_scale))
+                }
+            }
             // Bignum/Hugeint (approximate with Decimal)
             "BIGNUM" | "HUGEINT" => Ok(DataType::Decimal128(38, 0)),
-            "UHUGEINT" => Ok(DataType::Decimal128(38, 0)), // Unsigned, but approximate
+            "UHUGEINT" => Ok(DataType::Decimal128(38, 0)),
             _ => Err(ServerError::Internal(format!(
                 "unsupported DuckDB type: {}",
                 duckdb_type
             ))),
         }
+    }
+
+    fn parse_decimal_precision_scale(spec: &str) -> (usize, usize) {
+        if let Some(start) = spec.find('(') {
+            let end = spec[start + 1..]
+                .find(')')
+                .map(|idx| start + 1 + idx)
+                .unwrap_or(spec.len());
+            let inner = spec[start + 1..end].trim();
+            if inner.is_empty() {
+                return (18, 3);
+            }
+            let mut parts = inner
+                .split(',')
+                .map(|part| part.trim())
+                .filter(|s| !s.is_empty());
+            let precision = parts
+                .next()
+                .and_then(|p| p.parse::<usize>().ok())
+                .unwrap_or(18);
+            let scale = parts
+                .next()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            (precision, scale)
+        } else {
+            (18, 3)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duckdb_integer_mappings() {
+        assert_eq!(
+            DuckDbConnection::duckdb_type_to_arrow("INTEGER").unwrap(),
+            DataType::Int32
+        );
+        assert_eq!(
+            DuckDbConnection::duckdb_type_to_arrow("BIGINT").unwrap(),
+            DataType::Int64
+        );
+        assert_eq!(
+            DuckDbConnection::duckdb_type_to_arrow("SMALLINT").unwrap(),
+            DataType::Int16
+        );
+        assert_eq!(
+            DuckDbConnection::duckdb_type_to_arrow("UTINYINT").unwrap(),
+            DataType::UInt8
+        );
+    }
+
+    #[test]
+    fn duckdb_interval_and_timestamp_mappings() {
+        assert_eq!(
+            DuckDbConnection::duckdb_type_to_arrow("INTERVAL").unwrap(),
+            DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(
+            DuckDbConnection::duckdb_type_to_arrow("TIMESTAMPTZ").unwrap(),
+            DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
+        );
+    }
+
+    #[test]
+    fn duckdb_decimal_mapping_promotes_precision() {
+        assert_eq!(
+            DuckDbConnection::duckdb_type_to_arrow("DECIMAL(20,2)").unwrap(),
+            DataType::Decimal128(20, 2)
+        );
+        assert_eq!(
+            DuckDbConnection::duckdb_type_to_arrow("NUMERIC(60,5)").unwrap(),
+            DataType::Decimal256(60, 5)
+        );
     }
 }

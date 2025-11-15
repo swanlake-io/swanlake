@@ -70,7 +70,9 @@ impl SwanFlightSqlService {
         Ok(params)
     }
 
-    pub(crate) fn record_batch_to_params(batch: &RecordBatch) -> Result<Vec<Vec<Value>>, ServerError> {
+    pub(crate) fn record_batch_to_params(
+        batch: &RecordBatch,
+    ) -> Result<Vec<Vec<Value>>, ServerError> {
         let row_count = batch.num_rows();
         let column_count = batch.num_columns();
         let mut rows = vec![Vec::with_capacity(column_count); row_count];

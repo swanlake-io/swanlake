@@ -3,7 +3,7 @@
 //! This module provides lightweight SQL parsing to extract information
 //! needed for optimizations, such as the table name from INSERT statements.
 
-use sqlparser::ast::{ObjectName, ObjectNamePart, Statement, TableObject};
+use sqlparser::ast::{ObjectName, Statement, TableObject};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
@@ -13,6 +13,21 @@ use sqlparser::parser::Parser;
 /// making it easier to extend for DQ statements and other use cases.
 pub struct ParsedStatement {
     statement: Statement,
+}
+
+pub struct TableReference {
+    sql_name: String,
+    logical_name: String,
+}
+
+impl TableReference {
+    pub fn sql_name(&self) -> &str {
+        &self.sql_name
+    }
+
+    pub fn logical_name(&self) -> &str {
+        &self.logical_name
+    }
 }
 
 impl ParsedStatement {
@@ -56,24 +71,22 @@ impl ParsedStatement {
         )
     }
 
-    /// Get the table name from an INSERT statement.
-    ///
-    /// Returns the fully qualified table name (with schema if present).
-    /// For example:
-    /// - "INSERT INTO users ..." returns "users"
-    /// - "INSERT INTO schema.users ..." returns "schema.users"
-    pub fn get_insert_table_name(&self) -> Option<String> {
+    /// Get the table name from an INSERT statement, including quoting info.
+    pub fn get_insert_table(&self) -> Option<TableReference> {
         match &self.statement {
-            Statement::Insert(insert) => {
-                let obj_name = match &insert.table {
-                    TableObject::TableName(name) => name,
-                    TableObject::TableFunction(_) => return None,
-                };
-
-                Some(format_object_name(obj_name))
-            }
+            Statement::Insert(insert) => match &insert.table {
+                TableObject::TableName(name) => Some(TableReference::from_object_name(name)),
+                TableObject::TableFunction(_) => None,
+            },
             _ => None,
         }
+    }
+
+    /// Convenience wrapper returning the unquoted, dot-separated table name.
+    #[allow(dead_code)]
+    pub fn get_insert_table_name(&self) -> Option<String> {
+        self.get_insert_table()
+            .map(|table| table.logical_name().to_string())
     }
 
     /// Get the column names from an INSERT statement.
@@ -116,22 +129,24 @@ impl ParsedStatement {
     }
 }
 
-/// Converts an ObjectName to a fully qualified string.
-///
-/// Preserves the schema prefix if present:
-/// - "table" becomes "table"
-/// - "schema.table" becomes "schema.table"
-/// - "catalog.schema.table" becomes "catalog.schema.table"
-fn format_object_name(obj_name: &ObjectName) -> String {
-    obj_name
-        .0
-        .iter()
-        .filter_map(|part| match part {
-            ObjectNamePart::Identifier(ident) => Some(ident.value.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join(".")
+impl TableReference {
+    fn from_object_name(name: &ObjectName) -> Self {
+        let sql_name = name.to_string();
+        let logical_name = name
+            .0
+            .iter()
+            .map(|part| {
+                part.as_ident()
+                    .map(|ident| ident.value.clone())
+                    .unwrap_or_else(|| part.to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(".");
+        Self {
+            sql_name,
+            logical_name,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -176,6 +191,32 @@ mod tests {
             parsed.get_insert_table_name(),
             Some("duckling_queue.events".to_string())
         );
+    }
+
+    #[test]
+    fn test_parsed_statement_preserves_quotes() {
+        let sql = r#"INSERT INTO "CamelCase" VALUES (1)"#;
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        assert_eq!(
+            parsed.get_insert_table_name(),
+            Some("CamelCase".to_string())
+        );
+        let table_ref = parsed.get_insert_table().expect("should have table");
+        assert_eq!(table_ref.sql_name(), r#""CamelCase""#);
+        assert_eq!(table_ref.logical_name(), "CamelCase");
+    }
+
+    #[test]
+    fn test_parsed_statement_preserves_schema_and_quotes() {
+        let sql = r#"INSERT INTO analytics."Monthly Sales" VALUES (1)"#;
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        assert_eq!(
+            parsed.get_insert_table_name(),
+            Some("analytics.Monthly Sales".to_string())
+        );
+        let table_ref = parsed.get_insert_table().expect("should have table");
+        assert_eq!(table_ref.sql_name(), r#"analytics."Monthly Sales""#);
+        assert_eq!(table_ref.logical_name(), "analytics.Monthly Sales");
     }
 
     #[test]

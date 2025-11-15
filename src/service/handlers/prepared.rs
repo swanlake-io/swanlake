@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{new_null_array, RecordBatch};
+use arrow_cast::cast;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::server::PeekableFlightDataStream;
 use arrow_flight::sql::{
@@ -10,7 +12,7 @@ use arrow_flight::sql::{
     TicketStatementQuery,
 };
 use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
-use arrow_schema::Field;
+use arrow_schema::Schema;
 
 use prost::Message;
 use tonic::{Request, Response, Status};
@@ -304,78 +306,48 @@ pub(crate) async fn do_put_prepared_statement_update(
             .map_err(SwanFlightSqlService::status_from_error)?
         } else {
             let parsed = parsed_opt.unwrap();
-            let table_name = parsed.get_insert_table_name().ok_or_else(|| {
+            let table_ref = parsed.get_insert_table().ok_or_else(|| {
                 Status::invalid_argument("failed to extract table name from INSERT statement")
             })?;
+            let table_sql_name = table_ref.sql_name().to_string();
+            let table_logical_name = table_ref.logical_name().to_string();
             let insert_columns = parsed.get_insert_columns();
-
-            // Rename fields if columns specified
-            let batches_to_use = if let Some(cols) = &insert_columns {
-                batches
-                    .into_iter()
-                    .map(|batch| {
-                        let new_fields: Vec<Field> = batch
-                            .schema()
-                            .fields()
-                            .iter()
-                            .enumerate()
-                            .map(|(i, field)| {
-                                let name = cols[i].clone();
-                                Field::new(name, field.data_type().clone(), field.is_nullable())
-                            })
-                            .collect();
-                        let new_schema = arrow_schema::Schema::new(new_fields);
-                        RecordBatch::try_new(new_schema.into(), batch.columns().to_vec()).map_err(
-                            |e| Status::internal(format!("failed to create record batch: {}", e)),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-            } else {
-                batches
-            };
 
             info!(
                 handle = %handle,
-                table_name = %table_name,
+                table_name = %table_sql_name,
                 "using appender optimization for INSERT"
             );
 
             let session_clone = Arc::clone(&session);
             tokio::task::spawn_blocking(move || {
-                let table_schema = session_clone.table_schema(&table_name)?;
-                let table_column_count = table_schema.fields().len();
+                let table_schema = Arc::new(session_clone.table_schema(&table_sql_name)?);
                 let batches_to_use = if let Some(cols) = &insert_columns {
-                    if cols.len() < table_column_count {
-                        let full_schema = Arc::new(table_schema);
-                        batches_to_use
-                            .into_iter()
-                            .map(|batch| {
-                                let mut columns = Vec::new();
-                                for field in full_schema.fields() {
-                                    if let Some(idx) = cols.iter().position(|c| c == field.name()) {
-                                        columns.push(batch.column(idx).clone());
-                                    } else {
-                                        let null_array =
-                                            new_null_array(field.data_type(), batch.num_rows());
-                                        columns.push(null_array);
-                                    }
-                                }
-                                RecordBatch::try_new(full_schema.clone(), columns)
-                                    .map_err(crate::error::ServerError::Arrow)
-                            })
-                            .collect::<Result<Vec<_>, _>>()?
-                    } else {
-                        batches_to_use
-                    }
+                    batches
+                        .into_iter()
+                        .map(|batch| {
+                            SwanFlightSqlService::align_batch_to_table_schema(
+                                batch,
+                                &table_schema,
+                                cols,
+                                &table_logical_name,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, crate::error::ServerError>>()?
                 } else {
-                    batches_to_use
+                    batches
                 };
                 let mut total_rows = 0usize;
                 for batch in batches_to_use {
                     let rows = session_clone
-                        .insert_with_appender(&table_name, batch.clone())
+                        .insert_with_appender(&table_logical_name, batch)
                         .map_err(|e| {
-                            error!(%e, "appender insert failed sql {}, batch {:?}", sql, batch);
+                            error!(
+                                %e,
+                                "appender insert failed sql {} for table {}",
+                                sql,
+                                table_sql_name
+                            );
                             e
                         })?;
                     total_rows += rows;
@@ -409,4 +381,48 @@ pub(crate) async fn do_put_prepared_statement_update(
         "prepared statement update complete"
     );
     Ok(affected_rows)
+}
+
+impl SwanFlightSqlService {
+    fn align_batch_to_table_schema(
+        batch: RecordBatch,
+        table_schema: &Arc<Schema>,
+        column_order: &[String],
+        table_name: &str,
+    ) -> Result<RecordBatch, crate::error::ServerError> {
+        if batch.num_columns() != column_order.len() {
+            return Err(crate::error::ServerError::Internal(format!(
+                "column count mismatch for table {table_name}: got {} columns but SQL specified {}",
+                batch.num_columns(),
+                column_order.len()
+            )));
+        }
+
+        let index_lookup: HashMap<&str, usize> = column_order
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| (name.as_str(), idx))
+            .collect();
+
+        let mut columns = Vec::with_capacity(table_schema.fields().len());
+        for field in table_schema.fields() {
+            if let Some(idx) = index_lookup.get(field.name().as_str()) {
+                let column = batch.column(*idx);
+                let batch_schema = batch.schema();
+                let source_field = batch_schema.field(*idx);
+                if source_field.data_type() == field.data_type() {
+                    columns.push(column.clone());
+                } else {
+                    let casted = cast(column.as_ref(), field.data_type())
+                        .map_err(|err| crate::error::ServerError::Arrow(err))?;
+                    columns.push(casted);
+                }
+            } else {
+                columns.push(new_null_array(field.data_type(), batch.num_rows()));
+            }
+        }
+
+        RecordBatch::try_new(table_schema.clone(), columns)
+            .map_err(crate::error::ServerError::Arrow)
+    }
 }

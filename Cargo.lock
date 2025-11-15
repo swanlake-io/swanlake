@@ -2611,6 +2611,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
+ "arrow-cast",
  "arrow-flight",
  "arrow-ipc",
  "arrow-schema",
