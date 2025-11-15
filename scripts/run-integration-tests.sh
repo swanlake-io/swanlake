@@ -17,6 +17,9 @@ export LLVM_PROFILE_FILE="$ROOT_DIR/target/llvm-cov-target/swanlake-%p-%m.profra
 # Build with coverage using explicit target directory
 cargo build --target-dir "$CARGO_TARGET_DIR"
 
+# Run Rust unit tests under coverage instrumentation
+cargo test --all --target-dir "$CARGO_TARGET_DIR"
+
 # Run SQL tests with SERVER_BIN set to built binary for coverage
 export SERVER_BIN="$CARGO_TARGET_DIR/debug/swanlake"
 bash "$ROOT_DIR/scripts/run-all-sql-tests.sh"

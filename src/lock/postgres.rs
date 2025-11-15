@@ -30,11 +30,12 @@ enum PgSslMode {
 
 impl PgSslMode {
     fn from_env() -> Self {
-        match std::env::var("PGSSLMODE")
-            .unwrap_or_else(|_| "disable".to_string())
-            .to_lowercase()
-            .as_str()
-        {
+        let value = std::env::var("PGSSLMODE").unwrap_or_else(|_| "disable".to_string());
+        Self::from_str(value.as_str())
+    }
+
+    fn from_str(value: &str) -> Self {
+        match value.to_lowercase().as_str() {
             "require" => Self::Require,
             "verify-ca" => Self::VerifyCa,
             "verify-full" => Self::VerifyFull,
@@ -266,5 +267,40 @@ mod tests {
         assert_eq!(key1, key2);
         // Different paths should produce different keys
         assert_ne!(key1, key3);
+    }
+
+    #[test]
+    fn test_ssl_mode_parsing() {
+        assert!(matches!(PgSslMode::from_str("disable"), PgSslMode::Disable));
+        assert!(matches!(PgSslMode::from_str("require"), PgSslMode::Require));
+        assert!(matches!(
+            PgSslMode::from_str("verify-ca"),
+            PgSslMode::VerifyCa
+        ));
+        assert!(matches!(
+            PgSslMode::from_str("verify-full"),
+            PgSslMode::VerifyFull
+        ));
+        assert!(matches!(PgSslMode::from_str("DiSaBlE"), PgSslMode::Disable));
+    }
+
+    #[test]
+    fn test_tls_connector_building_per_mode() {
+        assert!(PgClient::build_tls(PgSslMode::Disable)
+            .expect("disable mode should not error")
+            .is_none());
+        for mode in [
+            PgSslMode::Require,
+            PgSslMode::VerifyCa,
+            PgSslMode::VerifyFull,
+        ] {
+            let connector = PgClient::build_tls(mode)
+                .unwrap_or_else(|e| panic!("failed to build TLS connector for {:?}: {}", mode, e));
+            assert!(
+                connector.is_some(),
+                "TLS mode {:?} should produce a connector",
+                mode
+            );
+        }
     }
 }
