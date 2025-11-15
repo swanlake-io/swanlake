@@ -32,15 +32,9 @@ fn basic_appender_insert(client: &mut FlightSQLClient) -> Result<()> {
     let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
     let name_array = StringArray::from(vec!["Alice", "Bob", "Charlie", "David", "Eve"]);
 
-    let batch = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(id_array), Arc::new(name_array)],
-    )?;
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(name_array)])?;
 
-    client.execute_batch_update(
-        "INSERT INTO appender_test (id, name) VALUES (?, ?)",
-        batch,
-    )?;
+    client.execute_batch_update("INSERT INTO appender_test (id, name) VALUES (?, ?)", batch)?;
 
     assert_row_count(client, "SELECT COUNT(*) FROM appender_test", 5)?;
     client.execute_update("DROP TABLE appender_test")?;
@@ -58,10 +52,7 @@ fn column_order_with_quoted_table(client: &mut FlightSQLClient) -> Result<()> {
 
     let mixed = Int32Array::from(vec![10, 20]);
     let a_values = Int32Array::from(vec![1, 2]);
-    let batch = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(mixed), Arc::new(a_values)],
-    )?;
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(mixed), Arc::new(a_values)])?;
 
     client.execute_batch_update(
         r#"INSERT INTO "QuotedInsert" ("MixedCase", a) VALUES (?, ?)"#,
@@ -70,7 +61,10 @@ fn column_order_with_quoted_table(client: &mut FlightSQLClient) -> Result<()> {
 
     match client.run_statement(r#"SELECT a, "MixedCase" FROM "QuotedInsert" ORDER BY a"#)? {
         StatementResult::Query { batches, .. } => {
-            let batch = batches.into_iter().next().context("expected result batch")?;
+            let batch = batches
+                .into_iter()
+                .next()
+                .context("expected result batch")?;
             let a_col = batch
                 .column(0)
                 .as_any()
@@ -118,10 +112,7 @@ fn type_mapping_with_partial_columns(client: &mut FlightSQLClient) -> Result<()>
     ]));
     let ids = Int32Array::from(vec![1, 2]);
     let ubigs = UInt64Array::from(vec![100, 200]);
-    let batch = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(ids), Arc::new(ubigs)],
-    )?;
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(ids), Arc::new(ubigs)])?;
 
     client.execute_batch_update(
         "INSERT INTO appender_type_test (id, ubig) VALUES (?, ?)",
@@ -130,11 +121,12 @@ fn type_mapping_with_partial_columns(client: &mut FlightSQLClient) -> Result<()>
 
     assert_row_count(client, "SELECT COUNT(*) FROM appender_type_test", 2)?;
 
-    match client.run_statement(
-        "SELECT id, ubig FROM appender_type_test ORDER BY id",
-    )? {
+    match client.run_statement("SELECT id, ubig FROM appender_type_test ORDER BY id")? {
         StatementResult::Query { batches, .. } => {
-            let batch = batches.into_iter().next().context("expected result batch")?;
+            let batch = batches
+                .into_iter()
+                .next()
+                .context("expected result batch")?;
             let ids = batch
                 .column(0)
                 .as_any()
@@ -168,14 +160,20 @@ fn type_mapping_with_partial_columns(client: &mut FlightSQLClient) -> Result<()>
 fn assert_row_count(client: &mut FlightSQLClient, sql: &str, expected: i64) -> Result<()> {
     match client.run_statement(sql)? {
         StatementResult::Query { batches, .. } => {
-            let batch = batches.into_iter().next().context("expected row count batch")?;
+            let batch = batches
+                .into_iter()
+                .next()
+                .context("expected row count batch")?;
             let array = batch
                 .column(0)
                 .as_any()
                 .downcast_ref::<arrow_array::Int64Array>()
                 .context("expected Int64 array for COUNT(*)")?;
             if array.value(0) != expected {
-                bail!("expected {expected} rows, but query returned {}", array.value(0));
+                bail!(
+                    "expected {expected} rows, but query returned {}",
+                    array.value(0)
+                );
             }
         }
         _ => bail!("expected query result for row count"),

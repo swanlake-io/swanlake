@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::arrow::value_as_i64;
+use crate::arrow::{value_as_bool, value_as_f64, value_as_i64, value_as_string};
 use adbc_core::{
     error::Status as AdbcStatus,
     options::{AdbcVersion, OptionDatabase, OptionValue},
@@ -354,6 +354,102 @@ impl FlightSQLClient {
                 }
                 let column = batch.column(0);
                 Ok(value_as_i64(column.as_ref(), 0)?)
+            }
+            StatementResult::Command { .. } => {
+                Err(anyhow!("expected query to return a scalar result"))
+            }
+        }
+    }
+
+    /// Execute a query that returns a single f64 value.
+    ///
+    /// Useful for scalar float queries.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flight_sql_client::FlightSQLClient;
+    ///
+    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
+    /// let value = client.query_scalar_f64("SELECT AVG(price) FROM products")?;
+    /// println!("Average price: {}", value);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn query_scalar_f64(&mut self, sql: &str) -> Result<f64> {
+        match self.run_statement(sql)? {
+            StatementResult::Query { batches, .. } => {
+                let batch = batches
+                    .first()
+                    .ok_or_else(|| anyhow!("query returned no rows"))?;
+                if batch.num_rows() == 0 || batch.num_columns() == 0 {
+                    return Err(anyhow!("query returned empty result"));
+                }
+                let column = batch.column(0);
+                Ok(value_as_f64(column.as_ref(), 0)?)
+            }
+            StatementResult::Command { .. } => {
+                Err(anyhow!("expected query to return a scalar result"))
+            }
+        }
+    }
+
+    /// Execute a query that returns a single bool value.
+    ///
+    /// Useful for scalar boolean queries.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flight_sql_client::FlightSQLClient;
+    ///
+    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
+    /// let exists = client.query_scalar_bool("SELECT EXISTS(SELECT 1 FROM users WHERE id = 1)")?;
+    /// println!("User exists: {}", exists);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn query_scalar_bool(&mut self, sql: &str) -> Result<bool> {
+        match self.run_statement(sql)? {
+            StatementResult::Query { batches, .. } => {
+                let batch = batches
+                    .first()
+                    .ok_or_else(|| anyhow!("query returned no rows"))?;
+                if batch.num_rows() == 0 || batch.num_columns() == 0 {
+                    return Err(anyhow!("query returned empty result"));
+                }
+                let column = batch.column(0);
+                Ok(value_as_bool(column.as_ref(), 0)?)
+            }
+            StatementResult::Command { .. } => {
+                Err(anyhow!("expected query to return a scalar result"))
+            }
+        }
+    }
+
+    /// Execute a query that returns a single string value.
+    ///
+    /// Useful for scalar string queries.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flight_sql_client::FlightSQLClient;
+    ///
+    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
+    /// let name = client.query_scalar_string("SELECT name FROM users WHERE id = 1")?;
+    /// println!("User name: {}", name);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn query_scalar_string(&mut self, sql: &str) -> Result<String> {
+        match self.run_statement(sql)? {
+            StatementResult::Query { batches, .. } => {
+                let batch = batches
+                    .first()
+                    .ok_or_else(|| anyhow!("query returned no rows"))?;
+                if batch.num_rows() == 0 || batch.num_columns() == 0 {
+                    return Err(anyhow!("query returned empty result"));
+                }
+                let column = batch.column(0);
+                Ok(value_as_string(column.as_ref(), 0)?)
             }
             StatementResult::Command { .. } => {
                 Err(anyhow!("expected query to return a scalar result"))

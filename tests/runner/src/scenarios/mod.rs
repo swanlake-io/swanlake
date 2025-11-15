@@ -1,44 +1,17 @@
-use anyhow::{Context, Result};
-use arrow_array::RecordBatch;
-use flight_sql_client::FlightSQLClient;
-
 use crate::CliArgs;
+use anyhow::Result;
 
 pub mod appender_insert;
 pub mod duckling_queue_auto_load;
 pub mod duckling_queue_rotation;
 pub mod parameter_types;
+pub mod prepared_statements;
 
 pub async fn run_all(args: &CliArgs) -> Result<()> {
     duckling_queue_rotation::run_duckling_queue_rotation(args).await?;
     duckling_queue_auto_load::run_duckling_queue_auto_load(args).await?;
     parameter_types::run_parameter_types(args).await?;
+    prepared_statements::run_prepared_statements(args).await?;
     appender_insert::run(args).await?;
     Ok(())
-}
-
-pub struct SqlClient {
-    client: FlightSQLClient,
-}
-
-impl SqlClient {
-    pub fn connect(endpoint: &str) -> Result<Self> {
-        let client = FlightSQLClient::connect(endpoint)
-            .with_context(|| format!("failed to connect to {endpoint}"))?;
-        Ok(Self { client })
-    }
-
-    pub fn exec_prepared(&mut self, sql: &str, params: RecordBatch) -> Result<()> {
-        self.client.execute_batch_update(sql, params)?;
-        Ok(())
-    }
-
-    pub fn exec(&mut self, sql: &str) -> Result<()> {
-        self.client.exec(sql)?;
-        Ok(())
-    }
-
-    pub fn query_single_i64(&mut self, sql: &str) -> Result<i64> {
-        self.client.query_scalar_i64(sql)
-    }
 }

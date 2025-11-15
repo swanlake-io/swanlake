@@ -11,12 +11,12 @@ use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
-use crate::scenarios::SqlClient;
 use crate::CliArgs;
+use flight_sql_client::FlightSQLClient;
 
 pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     let endpoint = args.endpoint();
-    let mut client = SqlClient::connect(endpoint)?;
+    let mut client = FlightSQLClient::connect(endpoint)?;
 
     // Create test table with various supported types
     client.exec(
@@ -45,19 +45,19 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
 
     // Insert row via prepared statement to exercise Arrow->DuckDB conversions
     let params = build_parameter_batch()?;
-    client.exec_prepared(
+    client.execute_batch_update(
         "INSERT INTO parameter_types_test VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params,
     )?;
 
     // Verify insertion
-    let count = client.query_single_i64("SELECT COUNT(*) FROM parameter_types_test")?;
+    let count = client.query_scalar_i64("SELECT COUNT(*) FROM parameter_types_test")?;
     if count != 1 {
         return Err(anyhow!("Expected 1 row, got {}", count));
     }
 
     // Query back and verify values (basic check for non-null)
-    let id = client.query_single_i64("SELECT id FROM parameter_types_test")?;
+    let id = client.query_scalar_i64("SELECT id FROM parameter_types_test")?;
     if id != 1 {
         return Err(anyhow!("Expected id 1, got {}", id));
     }
@@ -80,7 +80,7 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     ];
 
     for col in columns {
-        let col_count = client.query_single_i64(&format!(
+        let col_count = client.query_scalar_i64(&format!(
             "SELECT COUNT({}) FROM parameter_types_test WHERE {} IS NOT NULL",
             col, col
         ))?;
