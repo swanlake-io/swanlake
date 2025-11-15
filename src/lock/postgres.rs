@@ -11,6 +11,45 @@ use tracing::{debug, warn};
 
 use super::DistributedLock;
 
+/// PostgreSQL connection configuration, built once from environment variables.
+struct PgConfig {
+    connection_string: String,
+    use_tls: bool,
+}
+
+impl PgConfig {
+    fn from_env() -> Self {
+        let host = std::env::var("PGHOST").unwrap_or_else(|_| "localhost".to_string());
+        let port = std::env::var("PGPORT").unwrap_or_else(|_| "5432".to_string());
+        let user = std::env::var("PGUSER").unwrap_or_else(|_| "postgres".to_string());
+        let dbname = std::env::var("PGDATABASE").unwrap_or_else(|_| "postgres".to_string());
+        let password = std::env::var("PGPASSWORD").ok();
+        
+        // Check SSL mode from environment
+        let ssl_mode = std::env::var("PGSSLMODE").unwrap_or_else(|_| "disable".to_string());
+        let use_tls = ssl_mode != "disable";
+
+        let mut config = format!("host={} port={} user={} dbname={}", host, port, user, dbname);
+        if let Some(pwd) = password {
+            config.push_str(&format!(" password={}", pwd));
+        }
+        if use_tls {
+            config.push_str(&format!(" sslmode={}", ssl_mode));
+        }
+
+        Self {
+            connection_string: config,
+            use_tls,
+        }
+    }
+
+    fn get() -> &'static Self {
+        use std::sync::OnceLock;
+        static CONFIG: OnceLock<PgConfig> = OnceLock::new();
+        CONFIG.get_or_init(Self::from_env)
+    }
+}
+
 /// PostgreSQL-based distributed lock using advisory locks.
 ///
 /// This lock uses PostgreSQL advisory locks to coordinate access across multiple hosts.
@@ -25,21 +64,13 @@ pub struct PostgresLock {
 
 impl PostgresLock {
     /// Create a new PostgreSQL client connection.
-    /// Uses standard PG* environment variables for connection parameters.
+    /// Uses connection configuration built from environment variables.
     async fn connect() -> Result<Arc<Mutex<Client>>> {
-        // Build connection string from environment variables
-        let host = std::env::var("PGHOST").unwrap_or_else(|_| "localhost".to_string());
-        let port = std::env::var("PGPORT").unwrap_or_else(|_| "5432".to_string());
-        let user = std::env::var("PGUSER").unwrap_or_else(|_| "postgres".to_string());
-        let dbname = std::env::var("PGDATABASE").unwrap_or_else(|_| "postgres".to_string());
-        let password = std::env::var("PGPASSWORD").ok();
+        let config = PgConfig::get();
 
-        let mut config = format!("host={} port={} user={} dbname={}", host, port, user, dbname);
-        if let Some(pwd) = password {
-            config.push_str(&format!(" password={}", pwd));
-        }
-
-        let (client, connection) = tokio_postgres::connect(&config, NoTls).await?;
+        // For now, only NoTls is supported. TLS support can be added later if needed.
+        // The connection string already includes sslmode parameter for PostgreSQL server.
+        let (client, connection) = tokio_postgres::connect(&config.connection_string, NoTls).await?;
 
         // Spawn connection handler
         tokio::spawn(async move {

@@ -55,7 +55,7 @@ To enable DuckLake S3 connection, see [DuckDB HTTPFS S3 API configuration](https
 
 ## Distributed Locking
 
-SwanLake uses PostgreSQL advisory locks for coordinating access to shared resources across multiple hosts. The distributed lock module uses DuckDB's postgres extension to connect.
+SwanLake uses PostgreSQL advisory locks for coordinating access to shared resources across multiple hosts. The distributed lock module uses tokio-postgres for lightweight connections.
 
 | Env Var | Description | Default |
 | --- | --- | --- |
@@ -64,6 +64,9 @@ SwanLake uses PostgreSQL advisory locks for coordinating access to shared resour
 | `PGUSER` | PostgreSQL user | `postgres` |
 | `PGDATABASE` | PostgreSQL database | `postgres` |
 | `PGPASSWORD` | PostgreSQL password | _(unset)_ |
+| `PGSSLMODE` | SSL mode: `disable`, `require`, `verify-ca`, `verify-full` | `disable` |
+
+Configuration is built once at startup from environment variables and reused for all lock connections.
 
 See `src/lock/README.md` for detailed documentation on the distributed lock implementation.
 
