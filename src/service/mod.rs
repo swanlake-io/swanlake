@@ -135,46 +135,5 @@ impl SwanFlightSqlService {
         Box::pin(stream::iter(batches.into_iter().map(Ok)))
     }
 
-    /// Detect if SQL is a query (returns results) or statement (doesn't return results).
-    pub(crate) fn is_query_statement(sql: &str) -> bool {
-        let trimmed = sql.trim_start();
 
-        let mut cleaned = trimmed;
-        loop {
-            if let Some(rest) = cleaned.strip_prefix("--") {
-                if let Some(newline_pos) = rest.find('\n') {
-                    cleaned = rest[newline_pos + 1..].trim_start();
-                } else {
-                    return false;
-                }
-            } else if let Some(rest) = cleaned.strip_prefix("/*") {
-                if let Some(end_pos) = rest.find("*/") {
-                    cleaned = rest[end_pos + 2..].trim_start();
-                } else {
-                    return false;
-                }
-            } else {
-                break;
-            }
-        }
-
-        let first_word = cleaned
-            .split(|c: char| c.is_whitespace() || c == '(' || c == ';')
-            .find(|w| !w.is_empty())
-            .unwrap_or("")
-            .to_uppercase();
-
-        matches!(
-            first_word.as_str(),
-            "SELECT"
-                | "WITH"
-                | "SHOW"
-                | "DESCRIBE"
-                | "DESC"
-                | "EXPLAIN"
-                | "VALUES"
-                | "TABLE"
-                | "PRAGMA"
-        )
-    }
 }

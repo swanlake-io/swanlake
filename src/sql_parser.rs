@@ -79,6 +79,7 @@ impl ParsedStatement {
     ///
     /// This can be extended to detect PRAGMA duckling_queue statements,
     /// duckling_queue schema references, etc.
+    #[allow(dead_code)]
     pub fn is_dq_statement(&self) -> bool {
         // Placeholder for future DQ statement detection
         // Can be extended to parse:

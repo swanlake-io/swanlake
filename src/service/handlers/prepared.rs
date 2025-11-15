@@ -36,13 +36,11 @@ pub(crate) async fn do_action_create_prepared_statement(
 ) -> Result<ActionCreatePreparedStatementResult, Status> {
     let sql = query.query;
     
-    // Try to use SQL parser first, fall back to legacy method if parsing fails
-    let is_query = if let Some(parsed) = crate::sql_parser::ParsedStatement::parse(&sql) {
-        parsed.is_query()
-    } else {
-        // Fallback to legacy detection for SQL that the parser can't handle
-        SwanFlightSqlService::is_query_statement(&sql)
-    };
+    // Use SQL parser to determine if this is a query
+    let parsed = crate::sql_parser::ParsedStatement::parse(&sql).ok_or_else(|| {
+        Status::invalid_argument(format!("failed to parse SQL statement: {}", sql))
+    })?;
+    let is_query = parsed.is_query();
     
     tracing::Span::current().record("is_query", is_query);
     let session = service.prepare_request(&request)?;
@@ -311,7 +309,7 @@ pub(crate) async fn do_put_prepared_statement_update(
         return Ok(affected_rows);
     }
 
-    // Try to use appender optimization via session layer
+    // Use appender optimization via session layer
     let session_clone = Arc::clone(&session);
     let sql_clone = sql.clone();
     let batches_clone = batches.clone();
@@ -322,46 +320,13 @@ pub(crate) async fn do_put_prepared_statement_update(
             .map(|rows| rows as i64)
     })
     .await
-    .map_err(SwanFlightSqlService::status_from_join)?;
-    
-    // If appender optimization succeeded, return the result
-    if let Ok(rows) = affected_rows {
-        info!(
-            handle = %handle,
-            affected_rows = rows,
-            "statement executed with RecordBatch optimization"
-        );
-        return Ok(rows);
-    }
-
-    // Fallback: convert RecordBatches to parameters for non-INSERT statements
-    let err = affected_rows.unwrap_err();
-    debug!(%err, "RecordBatch execution not available, converting to parameters");
-    
-    let parameter_sets: Vec<Vec<duckdb::types::Value>> = batches
-        .iter()
-        .flat_map(|batch| {
-            SwanFlightSqlService::record_batch_to_params(batch)
-                .unwrap_or_else(|_| Vec::new())
-        })
-        .collect();
-    
-    if parameter_sets.is_empty() {
-        return Err(SwanFlightSqlService::status_from_error(err));
-    }
-
-    let session_clone = Arc::clone(&session);
-    let affected_rows = tokio::task::spawn_blocking(move || {
-        SwanFlightSqlService::execute_statement_batches(&sql, &parameter_sets, &session_clone)
-    })
-    .await
     .map_err(SwanFlightSqlService::status_from_join)?
     .map_err(SwanFlightSqlService::status_from_error)?;
 
     info!(
         handle = %handle,
         affected_rows,
-        "prepared statement update complete (parameter fallback)"
+        "statement executed with RecordBatch optimization"
     );
     Ok(affected_rows)
 }
