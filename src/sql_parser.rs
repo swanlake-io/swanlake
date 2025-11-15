@@ -69,8 +69,33 @@ impl ParsedStatement {
                     TableObject::TableName(name) => name,
                     TableObject::TableFunction(_) => return None,
                 };
-                
+
                 Some(format_object_name(obj_name))
+            }
+            _ => None,
+        }
+    }
+
+    /// Get the column names from an INSERT statement.
+    ///
+    /// Returns the list of column names if specified in the INSERT statement.
+    /// For example:
+    /// - "INSERT INTO users (id, name) VALUES (1, 'Alice')" returns ["id", "name"]
+    /// - "INSERT INTO users VALUES (1, 'Alice')" returns None (no explicit columns)
+    pub fn get_insert_columns(&self) -> Option<Vec<String>> {
+        match &self.statement {
+            Statement::Insert(insert) => {
+                if insert.columns.is_empty() {
+                    None
+                } else {
+                    Some(
+                        insert
+                            .columns
+                            .iter()
+                            .map(|ident| ident.value.clone())
+                            .collect(),
+                    )
+                }
             }
             _ => None,
         }

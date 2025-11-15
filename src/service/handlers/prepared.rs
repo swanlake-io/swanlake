@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arrow_array::{new_null_array, RecordBatch};
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::server::PeekableFlightDataStream;
 use arrow_flight::sql::{
@@ -9,6 +10,8 @@ use arrow_flight::sql::{
     TicketStatementQuery,
 };
 use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
+use arrow_schema::Field;
+
 use prost::Message;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
@@ -288,51 +291,103 @@ pub(crate) async fn do_put_prepared_statement_update(
 
     let parsed_opt = crate::sql_parser::ParsedStatement::parse(&sql);
 
-    let (batches, params) = if parsed_opt.as_ref().is_some_and(|p| p.is_insert()) {
+    let affected_rows = if parsed_opt.as_ref().is_some_and(|p| p.is_insert()) {
         let batches = SwanFlightSqlService::collect_record_batches(request).await?;
-        if !batches.is_empty() {
-            (Some(batches), None)
+        if batches.is_empty() {
+            // No batches, execute with empty params
+            let session_clone = Arc::clone(&session);
+            tokio::task::spawn_blocking(move || {
+                SwanFlightSqlService::execute_statement_batches(&sql, &[], &session_clone)
+            })
+            .await
+            .map_err(SwanFlightSqlService::status_from_join)?
+            .map_err(SwanFlightSqlService::status_from_error)?
         } else {
-            (None, Some(vec![]))
+            let parsed = parsed_opt.unwrap();
+            let table_name = parsed.get_insert_table_name().ok_or_else(|| {
+                Status::invalid_argument("failed to extract table name from INSERT statement")
+            })?;
+            let insert_columns = parsed.get_insert_columns();
+
+            // Rename fields if columns specified
+            let batches_to_use = if let Some(cols) = &insert_columns {
+                batches
+                    .into_iter()
+                    .map(|batch| {
+                        let new_fields: Vec<Field> = batch
+                            .schema()
+                            .fields()
+                            .iter()
+                            .enumerate()
+                            .map(|(i, field)| {
+                                let name = cols[i].clone();
+                                Field::new(name, field.data_type().clone(), field.is_nullable())
+                            })
+                            .collect();
+                        let new_schema = arrow_schema::Schema::new(new_fields);
+                        RecordBatch::try_new(new_schema.into(), batch.columns().to_vec()).map_err(
+                            |e| Status::internal(format!("failed to create record batch: {}", e)),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                batches
+            };
+
+            info!(
+                handle = %handle,
+                table_name = %table_name,
+                "using appender optimization for INSERT"
+            );
+
+            let session_clone = Arc::clone(&session);
+            tokio::task::spawn_blocking(move || {
+                let table_schema = session_clone.table_schema(&table_name)?;
+                let table_column_count = table_schema.fields().len();
+                let batches_to_use = if let Some(cols) = &insert_columns {
+                    if cols.len() < table_column_count {
+                        let full_schema = Arc::new(table_schema);
+                        batches_to_use
+                            .into_iter()
+                            .map(|batch| {
+                                let mut columns = Vec::new();
+                                for field in full_schema.fields() {
+                                    if let Some(idx) = cols.iter().position(|c| c == field.name()) {
+                                        columns.push(batch.column(idx).clone());
+                                    } else {
+                                        let null_array =
+                                            new_null_array(field.data_type(), batch.num_rows());
+                                        columns.push(null_array);
+                                    }
+                                }
+                                RecordBatch::try_new(full_schema.clone(), columns)
+                                    .map_err(crate::error::ServerError::Arrow)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                    } else {
+                        batches_to_use
+                    }
+                } else {
+                    batches_to_use
+                };
+                let mut total_rows = 0usize;
+                for batch in batches_to_use {
+                    let rows = session_clone
+                        .insert_with_appender(&table_name, batch.clone())
+                        .map_err(|e| {
+                            error!(%e, "appender insert failed sql {}, batch {:?}", sql, batch);
+                            e
+                        })?;
+                    total_rows += rows;
+                }
+                Ok::<_, crate::error::ServerError>(total_rows as i64)
+            })
+            .await
+            .map_err(SwanFlightSqlService::status_from_join)?
+            .map_err(SwanFlightSqlService::status_from_error)?
         }
     } else {
-        (
-            None,
-            Some(SwanFlightSqlService::collect_parameter_sets(request).await?),
-        )
-    };
-
-    let affected_rows = if let Some(batches) = batches {
-        let parsed = parsed_opt.unwrap();
-        let table_name = parsed.get_insert_table_name().ok_or_else(|| {
-            Status::invalid_argument("failed to extract table name from INSERT statement")
-        })?;
-
-        info!(
-            handle = %handle,
-            table_name = %table_name,
-            "using appender optimization for INSERT"
-        );
-
-        let session_clone = Arc::clone(&session);
-        tokio::task::spawn_blocking(move || {
-            let mut total_rows = 0usize;
-            for batch in batches {
-                let rows = session_clone
-                    .insert_with_appender(&table_name, batch)
-                    .map_err(|e| {
-                        error!(%e, "appender insert failed");
-                        e
-                    })?;
-                total_rows += rows;
-            }
-            Ok::<_, crate::error::ServerError>(total_rows as i64)
-        })
-        .await
-        .map_err(SwanFlightSqlService::status_from_join)?
-        .map_err(SwanFlightSqlService::status_from_error)?
-    } else {
-        let params = params.unwrap();
+        let params = SwanFlightSqlService::collect_parameter_sets(request).await?;
         info!(
             handle = %handle,
             sql = %sql,

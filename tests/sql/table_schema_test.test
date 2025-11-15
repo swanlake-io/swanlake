@@ -1,0 +1,53 @@
+# name: test/sql/table_schema_test.test
+# description: test table_schema with various DuckDB types
+# group: [sql]
+
+statement ok
+CREATE TABLE type_test (
+    id INTEGER,
+    big_int BIGINT,
+    small_int SMALLINT,
+    tiny_int TINYINT,
+    u_big_int UBIGINT,
+    u_int UINTEGER,
+    u_small_int USMALLINT,
+    u_tiny_int UTINYINT,
+    name VARCHAR,
+    is_active BOOLEAN,
+    price DOUBLE,
+    rate FLOAT,
+    birth_date DATE,
+    created_at TIMESTAMP,
+    data BLOB,
+    amount DECIMAL(10,2),
+    uuid_col UUID
+);
+
+statement ok
+INSERT INTO type_test VALUES (
+    1,
+    9223372036854775807,
+    32767,
+    127,
+    18446744073709551615,
+    4294967295,
+    65535,
+    255,
+    'Test Name',
+    true,
+    123.456,
+    78.9,
+    '2023-01-01',
+    '2023-01-01 12:00:00',
+    'binary data',
+    999.99,
+    '550e8400-e29b-41d4-a716-446655440000'
+);
+
+query ITTTTTTTTTTFTTTBTU
+SELECT * FROM type_test
+----
+1 9223372036854775807 32767 127 18446744073709551615 4294967295 65535 255 Test Name true 123.456 78.9 2023-01-01 2023-01-01 12:00:00.000000 binary data 999.99 550e8400-e29b-41d4-a716-446655440000
+
+statement ok
+DROP TABLE type_test;

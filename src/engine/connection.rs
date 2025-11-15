@@ -6,10 +6,10 @@
 use std::sync::Mutex;
 
 use arrow_array::RecordBatch;
-use arrow_schema::Schema;
+use arrow_schema::{DataType, Field, Schema};
 use duckdb::types::Value;
 use duckdb::{params_from_iter, Connection};
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::error::ServerError;
 
@@ -206,9 +206,10 @@ impl DuckDbConnection {
     where
         F: FnOnce(&duckdb::Connection) -> R,
     {
-        let conn = self.conn.lock().map_err(|_| {
-            ServerError::Internal("connection mutex poisoned".to_string())
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
         Ok(f(&conn))
     }
 
@@ -232,20 +233,126 @@ impl DuckDbConnection {
         batch: RecordBatch,
     ) -> Result<usize, ServerError> {
         let row_count = batch.num_rows();
-        
-        let conn = self.conn.lock().map_err(|_| {
-            ServerError::Internal("connection mutex poisoned".to_string())
-        })?;
+        info!(
+            "appender to {} with row {} and column {}",
+            table_name,
+            row_count,
+            batch.num_columns()
+        );
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
         let mut appender = conn.appender(table_name)?;
         appender.append_record_batch(batch)?;
         appender.flush()?;
-        
+
         debug!(
             rows = row_count,
             table = %table_name,
             "inserted data using appender"
         );
-        
+
         Ok(row_count)
+    }
+
+    /// Get the schema of a table using DESC SELECT
+    pub fn table_schema(&self, table_name: &str) -> Result<arrow_schema::Schema, ServerError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
+
+        // Use DESC to get table schema without preparing parameters
+        let desc_query = format!("DESC SELECT * FROM {}", table_name);
+        let mut stmt = conn.prepare(&desc_query).map_err(ServerError::DuckDb)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?, // column_name
+                    row.get::<_, String>(1)?, // column_type
+                    row.get::<_, String>(2)?, // null (YES or NO)
+                ))
+            })
+            .map_err(ServerError::DuckDb)?;
+
+        let mut fields = Vec::new();
+        for row in rows {
+            let (name, duckdb_type, null_str) = row.map_err(ServerError::DuckDb)?;
+            let data_type = Self::duckdb_type_to_arrow(&duckdb_type)?;
+            let nullable = null_str == "YES";
+            fields.push(Field::new(&name, data_type, nullable));
+        }
+
+        Ok(Schema::new(fields))
+    }
+
+    fn duckdb_type_to_arrow(duckdb_type: &str) -> Result<DataType, ServerError> {
+        let upper = duckdb_type.to_uppercase();
+        match upper.as_str() {
+            // Signed integers
+            "INTEGER" | "BIGINT" | "INT8" | "LONG" => Ok(DataType::Int64),
+            "INT" | "INT4" | "SIGNED" => Ok(DataType::Int32),
+            "SMALLINT" | "INT2" | "SHORT" => Ok(DataType::Int16),
+            "TINYINT" | "INT1" => Ok(DataType::Int8),
+            // Unsigned integers
+            "UBIGINT" => Ok(DataType::UInt64),
+            "UINTEGER" => Ok(DataType::UInt32),
+            "USMALLINT" => Ok(DataType::UInt16),
+            "UTINYINT" => Ok(DataType::UInt8),
+            // Strings
+            "VARCHAR" | "CHAR" | "BPCHAR" | "TEXT" | "STRING" => Ok(DataType::Utf8),
+            // Booleans
+            "BOOLEAN" | "BOOL" | "LOGICAL" => Ok(DataType::Boolean),
+            // Floats
+            "DOUBLE" | "FLOAT8" => Ok(DataType::Float64),
+            "FLOAT" | "FLOAT4" | "REAL" => Ok(DataType::Float32),
+            // Dates and times
+            "DATE" => Ok(DataType::Date32),
+            "TIME" => Ok(DataType::Time64(arrow_schema::TimeUnit::Microsecond)),
+            "TIMESTAMP" | "DATETIME" => Ok(DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                None,
+            )),
+            "TIMESTAMPTZ" => Ok(DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                Some("UTC".into()),
+            )),
+            // Binary
+            "BLOB" | "BYTEA" | "BINARY" | "VARBINARY" => Ok(DataType::Binary),
+            // UUID
+            "UUID" => Ok(DataType::FixedSizeBinary(16)),
+            // JSON (treat as string)
+            "JSON" => Ok(DataType::Utf8),
+            // Decimal (basic support, assume DECIMAL(18,3) -> Decimal128)
+            s if s.starts_with("DECIMAL") || s.starts_with("NUMERIC") => {
+                // Parse DECIMAL(prec, scale), default to 18,3
+                let (precision, scale) = if let Some(inner) = s.split('(').nth(1) {
+                    let parts: Vec<&str> = inner.trim_end_matches(')').split(',').collect();
+                    if parts.len() == 2 {
+                        let p = parts[0].trim().parse().unwrap_or(18);
+                        let s = parts[1].trim().parse().unwrap_or(3);
+                        (p, s)
+                    } else {
+                        (18, 3)
+                    }
+                } else {
+                    (18, 3)
+                };
+                Ok(DataType::Decimal128(precision, scale))
+            }
+            // Bit string (treat as binary)
+            "BIT" | "BITSTRING" => Ok(DataType::Binary),
+            // Interval (not directly supported, treat as string)
+            "INTERVAL" => Ok(DataType::Utf8),
+            // Bignum/Hugeint (approximate with Decimal)
+            "BIGNUM" | "HUGEINT" => Ok(DataType::Decimal128(38, 0)),
+            "UHUGEINT" => Ok(DataType::Decimal128(38, 0)), // Unsigned, but approximate
+            _ => Err(ServerError::Internal(format!(
+                "unsupported DuckDB type: {}",
+                duckdb_type
+            ))),
+        }
     }
 }

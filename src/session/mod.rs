@@ -269,13 +269,15 @@ impl Session {
             .clone();
 
         // Use session's own connection to flush (it's already in a spawn_blocking context)
-        let flush_result = self.connection
+        let flush_result = self
+            .connection
             .with_inner(|conn| {
                 crate::dq::runtime::flush_sealed_file(&dq_manager, conn, &sealed_path)
             })
             .map_err(|e| ServerError::Internal(format!("failed to flush queue file: {}", e)))?;
-        
-        flush_result.map_err(|e| ServerError::Internal(format!("failed to flush queue file: {}", e)))?;
+
+        flush_result
+            .map_err(|e| ServerError::Internal(format!("failed to flush queue file: {}", e)))?;
 
         // Re-attach the active queue to ensure duckling_queue is always available
         if let Some(sq) = &*self.dq_queue.lock().expect("dq_queue mutex poisoned") {
@@ -332,10 +334,18 @@ impl Session {
                 self.maybe_create_queue_table_and_retry(
                     &format!("INSERT INTO {}", table_name),
                     err,
-                    || self.connection.insert_with_appender(&table_name_owned, batch_for_retry),
+                    || {
+                        self.connection
+                            .insert_with_appender(&table_name_owned, batch_for_retry)
+                    },
                 )
             }
         }
+    }
+
+    /// Get the schema of a table
+    pub fn table_schema(&self, table_name: &str) -> Result<arrow_schema::Schema, ServerError> {
+        self.connection.table_schema(table_name)
     }
 
     // === Prepared Statements ===

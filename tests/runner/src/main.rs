@@ -21,6 +21,8 @@ use sqllogictest::{AsyncDB, DBOutput, DefaultColumnType, MakeConnection, Runner}
 use thiserror::Error;
 use tracing::{info, warn};
 
+use chrono::{DateTime, Utc};
+
 mod scenarios;
 
 #[derive(Debug, Error)]
@@ -78,7 +80,7 @@ impl FlightSqlDb {
                             if column.is_null(row_idx) {
                                 row.push("NULL".to_string());
                             } else {
-                                row.push(array_value_to_string(column.as_ref(), row_idx)?);
+                                row.push(format_value(column.as_ref(), row_idx)?);
                             }
                         }
                         rows.push(row);
@@ -339,6 +341,76 @@ async fn run_sqllogictest(args: &CliArgs) -> Result<()> {
     info!("All SQLLogicTest scripts completed");
 
     Ok(())
+}
+
+fn format_value(array: &dyn Array, idx: usize) -> Result<String> {
+    match array.data_type() {
+        DataType::Binary => {
+            let arr = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+            let bytes = arr.value(idx);
+            if let Ok(s) = std::str::from_utf8(bytes) {
+                Ok(s.to_string())
+            } else {
+                Ok(format!("{:?}", bytes))
+            }
+        }
+        DataType::Decimal128(_precision, scale) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<arrow_array::Decimal128Array>()
+                .unwrap();
+            let value = arr.value(idx);
+            let divisor = 10i128.pow(*scale as u32);
+            let integer_part = value / divisor;
+            let fractional_part = (value % divisor).abs();
+            if *scale == 0 {
+                Ok(integer_part.to_string())
+            } else {
+                Ok(format!(
+                    "{}.{:0width$}",
+                    integer_part,
+                    fractional_part,
+                    width = *scale as usize
+                ))
+            }
+        }
+        DataType::Timestamp(unit, _tz) => {
+            let micros = match unit {
+                arrow_schema::TimeUnit::Microsecond => {
+                    let arr = array
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .unwrap();
+                    arr.value(idx)
+                }
+                _ => return array_value_to_string(array, idx),
+            };
+            let dt = DateTime::from_timestamp_micros(micros).unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+            Ok(dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
+        }
+        DataType::FixedSizeBinary(16) => {
+            // Assume UUID
+            let arr = array
+                .as_any()
+                .downcast_ref::<arrow_array::FixedSizeBinaryArray>()
+                .unwrap();
+            let bytes = arr.value(idx);
+            if bytes.len() == 16 {
+                // Format as UUID
+                Ok(format!(
+                    "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                    bytes[4], bytes[5],
+                    bytes[6], bytes[7],
+                    bytes[8], bytes[9],
+                    bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+                ))
+            } else {
+                Ok(format!("{:?}", bytes))
+            }
+        }
+        _ => array_value_to_string(array, idx),
+    }
 }
 
 fn init_logging() {
