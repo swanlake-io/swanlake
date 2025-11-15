@@ -309,13 +309,42 @@ pub(crate) async fn do_put_prepared_statement_update(
         return Ok(affected_rows);
     }
 
-    // Use appender optimization via session layer
+    // Parse SQL to extract table name for INSERT statements
+    let parsed = crate::sql_parser::ParsedStatement::parse(&sql).ok_or_else(|| {
+        Status::invalid_argument(format!("failed to parse SQL statement: {}", sql))
+    })?;
+    
+    if !parsed.is_insert() {
+        return Err(Status::invalid_argument(
+            "RecordBatch execution only supported for INSERT statements"
+        ));
+    }
+    
+    let table_name = parsed.get_insert_table_name().ok_or_else(|| {
+        Status::invalid_argument("failed to extract table name from INSERT statement")
+    })?;
+
+    info!(
+        handle = %handle,
+        table_name = %table_name,
+        "using appender optimization for INSERT"
+    );
+
+    // Use appender optimization directly with table name
     let session_clone = Arc::clone(&session);
     
     let affected_rows = tokio::task::spawn_blocking(move || {
-        session_clone
-            .execute_with_record_batches(&sql, batches)
-            .map(|rows| rows as i64)
+        let mut total_rows = 0usize;
+        for batch in batches {
+            let rows = session_clone
+                .insert_with_appender(&table_name, batch)
+                .map_err(|e| {
+                    error!(%e, "appender insert failed");
+                    e
+                })?;
+            total_rows += rows;
+        }
+        Ok::<_, crate::error::ServerError>(total_rows as i64)
     })
     .await
     .map_err(SwanFlightSqlService::status_from_join)?
@@ -324,7 +353,7 @@ pub(crate) async fn do_put_prepared_statement_update(
     info!(
         handle = %handle,
         affected_rows,
-        "statement executed with RecordBatch optimization"
+        "statement executed with appender optimization"
     );
     Ok(affected_rows)
 }
