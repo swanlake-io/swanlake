@@ -37,6 +37,24 @@ impl ParsedStatement {
         matches!(self.statement, Statement::Insert(_))
     }
 
+    /// Check if this is a query statement (returns results).
+    ///
+    /// Returns true for SELECT, SHOW, EXPLAIN, and other query statements.
+    /// Returns false for INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, etc.
+    pub fn is_query(&self) -> bool {
+        matches!(
+            self.statement,
+            Statement::Query(_)
+                | Statement::ShowTables { .. }
+                | Statement::ShowColumns { .. }
+                | Statement::ShowCreate { .. }
+                | Statement::ShowVariable { .. }
+                | Statement::ShowVariables { .. }
+                | Statement::Explain { .. }
+                | Statement::ExplainTable { .. }
+        )
+    }
+
     /// Get the table name from an INSERT statement.
     ///
     /// Returns the fully qualified table name (with schema if present).
@@ -87,13 +105,6 @@ fn format_object_name(obj_name: &ObjectName) -> String {
         })
         .collect::<Vec<_>>()
         .join(".")
-}
-
-/// Legacy function for backward compatibility.
-/// Consider using `ParsedStatement::parse()` instead for better extensibility.
-#[deprecated(since = "0.1.0", note = "Use ParsedStatement::parse() instead")]
-pub fn extract_insert_table_name(sql: &str) -> Option<String> {
-    ParsedStatement::parse(sql)?.get_insert_table_name()
 }
 
 #[cfg(test)]
@@ -159,74 +170,5 @@ mod tests {
         let sql = "INSERT INTO users VALUES (1, 'Alice'); INSERT INTO users VALUES (2, 'Bob');";
         // Should reject multiple statements
         assert!(ParsedStatement::parse(sql).is_none());
-    }
-
-    // Legacy function tests for backward compatibility
-    #[test]
-    fn test_extract_insert_table_name_simple() {
-        let sql = "INSERT INTO users VALUES (1, 'Alice')";
-        #[allow(deprecated)]
-        {
-            assert_eq!(
-                extract_insert_table_name(sql),
-                Some("users".to_string())
-            );
-        }
-    }
-
-    #[test]
-    fn test_extract_insert_table_name_with_columns() {
-        let sql = "INSERT INTO users (id, name) VALUES (1, 'Alice')";
-        #[allow(deprecated)]
-        {
-            assert_eq!(
-                extract_insert_table_name(sql),
-                Some("users".to_string())
-            );
-        }
-    }
-
-    #[test]
-    fn test_extract_insert_table_name_schema_qualified() {
-        let sql = "INSERT INTO public.users (id, name) VALUES (1, 'Alice')";
-        #[allow(deprecated)]
-        {
-            // Now preserves schema
-            assert_eq!(
-                extract_insert_table_name(sql),
-                Some("public.users".to_string())
-            );
-        }
-    }
-
-    #[test]
-    fn test_extract_insert_table_name_duckling_queue() {
-        let sql = "INSERT INTO duckling_queue.events VALUES (1, 'test')";
-        #[allow(deprecated)]
-        {
-            // Now preserves schema
-            assert_eq!(
-                extract_insert_table_name(sql),
-                Some("duckling_queue.events".to_string())
-            );
-        }
-    }
-
-    #[test]
-    fn test_extract_insert_table_name_not_insert() {
-        let sql = "SELECT * FROM users";
-        #[allow(deprecated)]
-        {
-            assert_eq!(extract_insert_table_name(sql), None);
-        }
-    }
-
-    #[test]
-    fn test_extract_insert_table_name_invalid_sql() {
-        let sql = "INVALID SQL";
-        #[allow(deprecated)]
-        {
-            assert_eq!(extract_insert_table_name(sql), None);
-        }
     }
 }

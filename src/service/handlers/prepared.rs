@@ -35,7 +35,15 @@ pub(crate) async fn do_action_create_prepared_statement(
     request: Request<arrow_flight::Action>,
 ) -> Result<ActionCreatePreparedStatementResult, Status> {
     let sql = query.query;
-    let is_query = SwanFlightSqlService::is_query_statement(&sql);
+    
+    // Try to use SQL parser first, fall back to legacy method if parsing fails
+    let is_query = if let Some(parsed) = crate::sql_parser::ParsedStatement::parse(&sql) {
+        parsed.is_query()
+    } else {
+        // Fallback to legacy detection for SQL that the parser can't handle
+        SwanFlightSqlService::is_query_statement(&sql)
+    };
+    
     tracing::Span::current().record("is_query", is_query);
     let session = service.prepare_request(&request)?;
 
@@ -279,75 +287,72 @@ pub(crate) async fn do_put_prepared_statement_update(
     // Collect RecordBatches first - we can only consume the stream once
     let batches = SwanFlightSqlService::collect_record_batches(request).await?;
     
-    if !batches.is_empty() {
-        // Let the session layer determine the best execution strategy
+    // No batches provided - execute with empty parameters
+    if batches.is_empty() {
+        info!(
+            handle = %handle,
+            sql = %sql,
+            "executing prepared statement update without parameters"
+        );
+
         let session_clone = Arc::clone(&session);
-        let sql_clone = sql.clone();
-        let batches_clone = batches.clone();
-        
         let affected_rows = tokio::task::spawn_blocking(move || {
-            session_clone
-                .execute_with_record_batches(&sql_clone, batches_clone)
-                .map(|rows| rows as i64)
+            SwanFlightSqlService::execute_statement_batches(&sql, &[], &session_clone)
         })
         .await
-        .map_err(SwanFlightSqlService::status_from_join)?;
-        
-        match affected_rows {
-            Ok(rows) => {
-                info!(
-                    handle = %handle,
-                    affected_rows = rows,
-                    "statement executed with RecordBatch optimization"
-                );
-                return Ok(rows);
-            }
-            Err(err) => {
-                // If RecordBatch execution failed (e.g., not an INSERT), convert to parameters
-                debug!(%err, "RecordBatch execution not available, converting to parameters");
-                
-                // Convert RecordBatches to parameter sets for fallback
-                let parameter_sets: Vec<Vec<duckdb::types::Value>> = batches
-                    .iter()
-                    .flat_map(|batch| {
-                        SwanFlightSqlService::record_batch_to_params(batch)
-                            .unwrap_or_else(|_| Vec::new())
-                    })
-                    .collect();
-                
-                if parameter_sets.is_empty() {
-                    return Err(SwanFlightSqlService::status_from_error(err));
-                }
+        .map_err(SwanFlightSqlService::status_from_join)?
+        .map_err(SwanFlightSqlService::status_from_error)?;
 
-                let session_clone = Arc::clone(&session);
-                let affected_rows = tokio::task::spawn_blocking(move || {
-                    SwanFlightSqlService::execute_statement_batches(&sql, &parameter_sets, &session_clone)
-                })
-                .await
-                .map_err(SwanFlightSqlService::status_from_join)?
-                .map_err(SwanFlightSqlService::status_from_error)?;
-
-                info!(
-                    handle = %handle,
-                    affected_rows,
-                    "prepared statement update complete (parameter fallback)"
-                );
-                return Ok(affected_rows);
-            }
-        }
+        info!(
+            handle = %handle,
+            affected_rows,
+            "prepared statement update complete"
+        );
+        return Ok(affected_rows);
     }
 
-    // No batches provided - execute with empty parameters
-    info!(
-        handle = %handle,
-        sql = %sql,
-        "executing prepared statement update without parameters"
-    );
+    // Try to use appender optimization via session layer
+    let session_clone = Arc::clone(&session);
+    let sql_clone = sql.clone();
+    let batches_clone = batches.clone();
+    
+    let affected_rows = tokio::task::spawn_blocking(move || {
+        session_clone
+            .execute_with_record_batches(&sql_clone, batches_clone)
+            .map(|rows| rows as i64)
+    })
+    .await
+    .map_err(SwanFlightSqlService::status_from_join)?;
+    
+    // If appender optimization succeeded, return the result
+    if let Ok(rows) = affected_rows {
+        info!(
+            handle = %handle,
+            affected_rows = rows,
+            "statement executed with RecordBatch optimization"
+        );
+        return Ok(rows);
+    }
+
+    // Fallback: convert RecordBatches to parameters for non-INSERT statements
+    let err = affected_rows.unwrap_err();
+    debug!(%err, "RecordBatch execution not available, converting to parameters");
+    
+    let parameter_sets: Vec<Vec<duckdb::types::Value>> = batches
+        .iter()
+        .flat_map(|batch| {
+            SwanFlightSqlService::record_batch_to_params(batch)
+                .unwrap_or_else(|_| Vec::new())
+        })
+        .collect();
+    
+    if parameter_sets.is_empty() {
+        return Err(SwanFlightSqlService::status_from_error(err));
+    }
 
     let session_clone = Arc::clone(&session);
-
     let affected_rows = tokio::task::spawn_blocking(move || {
-        SwanFlightSqlService::execute_statement_batches(&sql, &[], &session_clone)
+        SwanFlightSqlService::execute_statement_batches(&sql, &parameter_sets, &session_clone)
     })
     .await
     .map_err(SwanFlightSqlService::status_from_join)?
@@ -356,7 +361,7 @@ pub(crate) async fn do_put_prepared_statement_update(
     info!(
         handle = %handle,
         affected_rows,
-        "prepared statement update complete"
+        "prepared statement update complete (parameter fallback)"
     );
     Ok(affected_rows)
 }
