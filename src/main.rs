@@ -13,6 +13,7 @@ mod config;
 mod dq;
 mod engine;
 mod error;
+mod lock;
 mod service;
 mod session;
 
