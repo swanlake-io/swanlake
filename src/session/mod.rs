@@ -310,6 +310,49 @@ impl Session {
         self.connection.schema_for_query(sql)
     }
 
+    /// Execute a statement with RecordBatch data, using optimized paths when possible.
+    ///
+    /// This method analyzes the SQL and chooses the best execution strategy:
+    /// - For INSERT statements: uses appender API for zero-copy insertion
+    /// - For other statements: falls back to parameter-based execution
+    ///
+    /// This provides a layered abstraction that encapsulates SQL parsing logic
+    /// within the session layer, keeping the service layer clean.
+    #[instrument(skip(self, batches), fields(session_id = %self.id, sql = %sql, batch_count = batches.len()))]
+    pub fn execute_with_record_batches(
+        &self,
+        sql: &str,
+        batches: Vec<arrow_array::RecordBatch>,
+    ) -> Result<usize, ServerError> {
+        self.touch();
+
+        // Parse SQL to determine execution strategy
+        if let Some(parsed) = crate::sql_parser::ParsedStatement::parse(sql) {
+            if parsed.is_insert() {
+                if let Some(table_name) = parsed.get_insert_table_name() {
+                    info!(
+                        sql = %sql,
+                        table_name = %table_name,
+                        "using appender optimization for INSERT"
+                    );
+                    
+                    let mut total_rows = 0usize;
+                    for batch in batches {
+                        let rows = self.insert_with_appender(&table_name, batch)?;
+                        total_rows += rows;
+                    }
+                    return Ok(total_rows);
+                }
+            }
+        }
+
+        // Fallback: not an INSERT or couldn't parse
+        info!(sql = %sql, "using parameter-based execution");
+        Err(ServerError::Internal(
+            "RecordBatch execution only supported for INSERT statements".to_string(),
+        ))
+    }
+
     /// Insert data using appender API with RecordBatch.
     ///
     /// This is an optimized path for INSERT statements that avoids

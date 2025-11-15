@@ -276,62 +276,78 @@ pub(crate) async fn do_put_prepared_statement_update(
         ));
     }
 
-    // Check if this is an INSERT statement that can use the appender optimization
-    if let Some(table_name) = crate::sql_parser::extract_insert_table_name(&sql) {
-        info!(
-            handle = %handle,
-            sql = %sql,
-            table_name = %table_name,
-            "using appender optimization for INSERT"
-        );
-
-        let batches = SwanFlightSqlService::collect_record_batches(request).await?;
-        let batch_count = batches.len();
-
+    // Collect RecordBatches first - we can only consume the stream once
+    let batches = SwanFlightSqlService::collect_record_batches(request).await?;
+    
+    if !batches.is_empty() {
+        // Let the session layer determine the best execution strategy
         let session_clone = Arc::clone(&session);
-
+        let sql_clone = sql.clone();
+        let batches_clone = batches.clone();
+        
         let affected_rows = tokio::task::spawn_blocking(move || {
-            let mut total_rows = 0usize;
-            for batch in batches {
-                let rows = session_clone
-                    .insert_with_appender(&table_name, batch)
-                    .map_err(|e| {
-                        error!(%e, "appender insert failed");
-                        e
-                    })?;
-                total_rows += rows;
-            }
-            Ok::<_, crate::error::ServerError>(total_rows as i64)
+            session_clone
+                .execute_with_record_batches(&sql_clone, batches_clone)
+                .map(|rows| rows as i64)
         })
         .await
-        .map_err(SwanFlightSqlService::status_from_join)?
-        .map_err(SwanFlightSqlService::status_from_error)?;
+        .map_err(SwanFlightSqlService::status_from_join)?;
+        
+        match affected_rows {
+            Ok(rows) => {
+                info!(
+                    handle = %handle,
+                    affected_rows = rows,
+                    "statement executed with RecordBatch optimization"
+                );
+                return Ok(rows);
+            }
+            Err(err) => {
+                // If RecordBatch execution failed (e.g., not an INSERT), convert to parameters
+                debug!(%err, "RecordBatch execution not available, converting to parameters");
+                
+                // Convert RecordBatches to parameter sets for fallback
+                let parameter_sets: Vec<Vec<duckdb::types::Value>> = batches
+                    .iter()
+                    .flat_map(|batch| {
+                        SwanFlightSqlService::record_batch_to_params(batch)
+                            .unwrap_or_else(|_| Vec::new())
+                    })
+                    .collect();
+                
+                if parameter_sets.is_empty() {
+                    return Err(SwanFlightSqlService::status_from_error(err));
+                }
 
-        info!(
-            handle = %handle,
-            affected_rows,
-            batch_count,
-            "appender insert complete"
-        );
-        return Ok(affected_rows);
+                let session_clone = Arc::clone(&session);
+                let affected_rows = tokio::task::spawn_blocking(move || {
+                    SwanFlightSqlService::execute_statement_batches(&sql, &parameter_sets, &session_clone)
+                })
+                .await
+                .map_err(SwanFlightSqlService::status_from_join)?
+                .map_err(SwanFlightSqlService::status_from_error)?;
+
+                info!(
+                    handle = %handle,
+                    affected_rows,
+                    "prepared statement update complete (parameter fallback)"
+                );
+                return Ok(affected_rows);
+            }
+        }
     }
 
-    // Fall back to parameter-based execution for non-INSERT statements
-    let parameter_sets = SwanFlightSqlService::collect_parameter_sets(request).await?;
-
-    let parameter_set_count = parameter_sets.len();
-
+    // No batches provided - execute with empty parameters
     info!(
         handle = %handle,
         sql = %sql,
-        parameter_sets = parameter_set_count,
-        "executing prepared statement update"
+        "executing prepared statement update without parameters"
     );
 
     let session_clone = Arc::clone(&session);
 
     let affected_rows = tokio::task::spawn_blocking(move || {
-        SwanFlightSqlService::execute_statement_batches(&sql, &parameter_sets, &session_clone)
+        SwanFlightSqlService::execute_statement_batches(&sql, &[], &session_clone)
     })
     .await
     .map_err(SwanFlightSqlService::status_from_join)?

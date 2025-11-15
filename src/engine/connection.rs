@@ -231,7 +231,9 @@ impl DuckDbConnection {
     ) -> Result<usize, ServerError> {
         let row_count = batch.num_rows();
         
-        let conn = self.conn.lock().expect("connection mutex poisoned");
+        let conn = self.conn.lock().map_err(|_| {
+            ServerError::Internal("connection mutex poisoned".to_string())
+        })?;
         let mut appender = conn.appender(table_name)?;
         appender.append_record_batch(batch)?;
         appender.flush()?;
