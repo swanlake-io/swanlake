@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
 use arrow_array::{
-    ArrayRef, BinaryArray, BooleanArray, Date32Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-    RecordBatch, StringArray, Time64MicrosecondArray, TimestampMicrosecondArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    RecordBatch, StringArray, Time32MillisecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
@@ -62,7 +63,11 @@ impl<'a> PreparedStatementTester<'a> {
                     time_col TIME,
                     timestamp_col TIMESTAMP,
                     interval_dt_col INTERVAL,
-                    interval_mdn_col INTERVAL
+                    interval_mdn_col INTERVAL,
+                    date64_col DATE,
+                    time32_col TIME,
+                    time64_ns_col TIME,
+                    interval_ym_col INTERVAL
                 )
                 "#,
             )?;
@@ -80,7 +85,11 @@ impl<'a> PreparedStatementTester<'a> {
                     TIME '00:00:00',
                     TIMESTAMP '2000-01-01 00:00:00',
                     INTERVAL '0 days',
-                    INTERVAL '0 days'
+                    INTERVAL '0 days',
+                    DATE '2000-01-01',
+                    TIME '00:00:00',
+                    TIME '00:00:00',
+                    INTERVAL '0 months'
                 )
                 "#,
             )?;
@@ -106,7 +115,11 @@ impl<'a> PreparedStatementTester<'a> {
                     time_col = ?,
                     timestamp_col = ?,
                     interval_dt_col = ?,
-                    interval_mdn_col = ?
+                    interval_mdn_col = ?,
+                    date64_col = ?,
+                    time32_col = ?,
+                    time64_ns_col = ?,
+                    interval_ym_col = ?
                 WHERE id = ?
                 "#,
                 update_params,
@@ -132,7 +145,10 @@ impl<'a> PreparedStatementTester<'a> {
                    float32_col,
                    float64_col,
                    bool_col,
-                   string_col
+                   string_col,
+                   CAST((date64_col - DATE '1970-01-01') * 86400000 AS BIGINT) AS date64_col,
+                   CAST(EXTRACT(epoch FROM time32_col) * 1000 AS BIGINT) AS time32_col,
+                   CAST(EXTRACT(epoch FROM time64_ns_col) * 1000000000 AS BIGINT) AS time64_ns_col
             FROM prepared_update_test
             WHERE id = 1
             "#,
@@ -153,6 +169,19 @@ impl<'a> PreparedStatementTester<'a> {
         self.expect_f64(batch, 8, 2.718281828, "float64_col")?;
         self.expect_bool(batch, 9, true, "bool_col")?;
         self.expect_string(batch, 10, "updated value", "string_col")?;
+        self.expect_i64(batch, 11, 20081i64 * 24 * 3600 * 1000, "date64_col")?;
+        self.expect_i64(
+            batch,
+            12,
+            ((14 * 3600 + 30 * 60 + 45) * 1000) as i64,
+            "time32_col",
+        )?;
+        self.expect_i64(
+            batch,
+            13,
+            (14 * 3600 + 30 * 60 + 45) * 1_000_000 * 1000,
+            "time64_ns_col",
+        )?;
         Ok(())
     }
 
@@ -264,9 +293,7 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn assert_remaining_ids(&mut self, expected_ids: &[i64]) -> Result<()> {
-        let ids = self.collect_i64_column(
-            "SELECT id FROM prepared_delete_test ORDER BY id",
-        )?;
+        let ids = self.collect_i64_column("SELECT id FROM prepared_delete_test ORDER BY id")?;
         ensure!(
             ids == expected_ids,
             "expected ids {:?}, got {:?}",
@@ -402,14 +429,29 @@ fn build_update_parameter_batch() -> Result<RecordBatch> {
             DataType::Interval(IntervalUnit::MonthDayNano),
             false,
         ),
+        Field::new("date64_col", DataType::Date64, false),
+        Field::new("time32_col", DataType::Time32(TimeUnit::Millisecond), false),
+        Field::new(
+            "time64_ns_col",
+            DataType::Time64(TimeUnit::Nanosecond),
+            false,
+        ),
+        Field::new(
+            "interval_ym_col",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            false,
+        ),
         Field::new("id", DataType::Int32, false),
     ]));
 
     // Date: 2024-12-25 (days since 1970-01-01)
     let date32_value = 20081; // 2024-12-25
+    let date64_value = date32_value as i64 * 24 * 3600 * 1000; // milliseconds
 
     // Time: 14:30:45 in microseconds
     let time_us = (14 * 3600 + 30 * 60 + 45) * 1_000_000i64;
+    let time_ms = ((14 * 3600 + 30 * 60 + 45) * 1000) as i32;
+    let time_ns = time_us * 1000;
 
     // Timestamp: 2024-12-25 14:30:45 in microseconds since epoch
     let timestamp_us = 1735138245000000i64;
@@ -437,6 +479,12 @@ fn build_update_parameter_batch() -> Result<RecordBatch> {
         )])),
         Arc::new(IntervalMonthDayNanoArray::from(vec![
             IntervalMonthDayNano::new(2, 15, 500_000_000),
+        ])),
+        Arc::new(Date64Array::from(vec![date64_value])),
+        Arc::new(Time32MillisecondArray::from(vec![time_ms])),
+        Arc::new(Time64NanosecondArray::from(vec![time_ns])),
+        Arc::new(IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNano::new(18, 0, 0),
         ])),
         Arc::new(Int32Array::from(vec![1])), // WHERE id = 1
     ];
