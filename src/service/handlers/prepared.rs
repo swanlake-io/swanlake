@@ -414,7 +414,7 @@ impl SwanFlightSqlService {
                     columns.push(column.clone());
                 } else {
                     let casted = cast(column.as_ref(), field.data_type())
-                        .map_err(|err| crate::error::ServerError::Arrow(err))?;
+                        .map_err(crate::error::ServerError::Arrow)?;
                     columns.push(casted);
                 }
             } else {
