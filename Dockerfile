@@ -1,19 +1,25 @@
-# Build stage
-FROM rust:slim AS builder
+# Common base with toolchain deps and cargo-chef
+FROM rust:slim AS base
 
 WORKDIR /app
 
-# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && cargo install --locked cargo-chef
 
-# Copy source
+# Plan dependencies (only reruns when lockfiles/manifests change)
+FROM base AS planner
+COPY Cargo.toml Cargo.lock build.rs ./
+RUN cargo chef prepare --recipe-path recipe.json
+
+# Build stage
+FROM base AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json --locked
 COPY . .
-
-# Build the project
-RUN cargo build --release
+RUN cargo build --release --locked
 
 # Runtime stage
 FROM debian:trixie-slim
@@ -46,6 +52,7 @@ USER swanlake
 
 # Expose port
 EXPOSE 4214
+EXPOSE 4213
 
 # Entrypoint and command
 ENTRYPOINT ["docker-entrypoint.sh"]

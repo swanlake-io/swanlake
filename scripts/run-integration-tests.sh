@@ -3,8 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Clean old coverage data
-cargo llvm-cov clean --workspace
+# Clean old coverage data but keep expensive build artifacts unless forced
+if [[ "${SWANLAKE_FORCE_LLVM_COV_CLEAN:-0}" == "1" ]]; then
+  cargo llvm-cov clean --workspace
+else
+  COV_TARGET="$ROOT_DIR/target/llvm-cov-target"
+  if [[ -d "$COV_TARGET" ]]; then
+    find "$COV_TARGET" -name "*.profraw" -delete || true
+    find "$COV_TARGET" -name "*.profdata" -delete || true
+  fi
+fi
 
 # Export llvm-cov environment for coverage instrumentation
 source <(cargo llvm-cov show-env --export-prefix)
