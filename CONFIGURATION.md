@@ -87,6 +87,7 @@ See `src/lock/README.md` for detailed documentation on the distributed lock impl
 | `SWANLAKE_DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
 | `SWANLAKE_DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema for flushed tables | `swanlake` |
 | `SWANLAKE_DUCKLING_QUEUE_AUTO_CREATE_TABLES` | Automatically create missing destination tables | `false` |
+| `SWANLAKE_DUCKLING_QUEUE_DISABLE_FILE_LOCKING` | Disable DuckDB file locks for queue files (useful on filesystems without POSIX locking) | `false` |
 
 The root directory is created automatically if it does not exist. Within that root the manager
 expects three child directories: `active/`, `sealed/`, and `flushed/`.
@@ -102,6 +103,10 @@ failed before the per-session DuckDB queue was attached. The most common root ca
   `PGPASSWORD`, and `PGSSLMODE` are set so SwanLake can reach the shared locking database. When the
   lock connection cannot be created the log includes `session_id` and the queue file path it was
   trying to lock.
+- DuckDB could not take a filesystem lock (error mentions `disable_file_locking`). This often happens
+  on network filesystems such as EFS where POSIX locks are not supported. Set
+  `SWANLAKE_DUCKLING_QUEUE_DISABLE_FILE_LOCKING=true` so SwanLake relies solely on PostgreSQL advisory
+  locks for coordination.
 
 With full tracing enabled (`RUST_LOG=debug`), SwanLake additionally emits debug lines when it starts
 creating the queue file and immediately before trying to acquire the advisory lock, which helps

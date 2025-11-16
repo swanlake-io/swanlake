@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use duckdb::Config;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -35,13 +36,15 @@ impl QueueSession {
             "creating session queue file"
         );
 
-        let active_file = create_session_queue_file(context.dirs()).with_context(|| {
-            format!(
-                "session {} failed to create queue file in {:?}",
-                session_id,
-                context.dirs().active
-            )
-        })?;
+        let active_file =
+            create_session_queue_file(context.dirs(), context.settings().disable_file_locking)
+                .with_context(|| {
+                    format!(
+                        "session {} failed to create queue file in {:?}",
+                        session_id,
+                        context.dirs().active
+                    )
+                })?;
 
         debug!(
             session_id = %session_id,
@@ -140,7 +143,10 @@ impl QueueSession {
         let sealed_path = self.seal_current_file()?;
 
         // Create new active file
-        let new_file = create_session_queue_file(self.context.dirs())?;
+        let new_file = create_session_queue_file(
+            self.context.dirs(),
+            self.context.settings().disable_file_locking,
+        )?;
         let new_lock = PostgresLock::try_acquire(
             &new_file,
             self.context.settings().lock_ttl,
@@ -253,7 +259,10 @@ impl QueueSession {
 
 /// Create a new session queue file in the active/ directory.
 /// File ID is a UUID, safe for use in filenames.
-fn create_session_queue_file(dirs: &QueueDirectories) -> Result<PathBuf> {
+fn create_session_queue_file(
+    dirs: &QueueDirectories,
+    disable_file_locking: bool,
+) -> Result<PathBuf> {
     let timestamp_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -267,11 +276,14 @@ fn create_session_queue_file(dirs: &QueueDirectories) -> Result<PathBuf> {
         .with_context(|| format!("failed to create active directory {:?}", dirs.active))?;
 
     // Initialize the file via DuckDB so it's a valid database
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid session queue path {:?}", path))?;
+    let mut config = Config::default();
+    if disable_file_locking {
+        config = config
+            .with("disable_file_locking", "true")
+            .context("failed to configure DuckDB to disable file locking")?;
+    }
 
-    let conn = duckdb::Connection::open(path_str)
+    let conn = duckdb::Connection::open_with_flags(&path, config)
         .with_context(|| format!("failed to initialize session queue db {:?}", path))?;
 
     // Create a dummy table to ensure the file is non-empty and valid

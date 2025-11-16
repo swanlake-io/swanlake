@@ -17,6 +17,7 @@ pub struct Settings {
     pub lock_ttl: Duration,
     pub target_schema: String,
     pub auto_create_tables: bool,
+    pub disable_file_locking: bool,
 }
 
 impl Settings {
@@ -42,6 +43,7 @@ impl Settings {
             lock_ttl,
             target_schema: config.duckling_queue_target_schema.clone(),
             auto_create_tables: config.duckling_queue_auto_create_tables,
+            disable_file_locking: config.duckling_queue_disable_file_locking,
         }
     }
 }

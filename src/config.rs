@@ -33,6 +33,8 @@ pub struct ServerConfig {
     pub duckling_queue_target_schema: String,
     /// Automatically create tables if they don't exist when flushing Duckling Queue data.
     pub duckling_queue_auto_create_tables: bool,
+    /// Disable DuckDB's file locking when working with duckling queue files.
+    pub duckling_queue_disable_file_locking: bool,
 }
 
 impl Default for ServerConfig {
@@ -53,6 +55,7 @@ impl Default for ServerConfig {
 
             duckling_queue_target_schema: "swanlake".to_string(),
             duckling_queue_auto_create_tables: false,
+            duckling_queue_disable_file_locking: false,
         }
     }
 }

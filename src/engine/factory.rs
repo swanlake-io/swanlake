@@ -14,6 +14,7 @@ use crate::error::ServerError;
 #[derive(Clone)]
 pub struct EngineFactory {
     init_sql: String,
+    disable_file_locking: bool,
 }
 
 impl EngineFactory {
@@ -37,15 +38,24 @@ impl EngineFactory {
         let init_sql = init_statements.join("\n");
         info!("base init sql {}", init_sql);
 
-        Ok(Self { init_sql })
+        Ok(Self {
+            init_sql,
+            disable_file_locking: config.duckling_queue_disable_file_locking,
+        })
     }
 
     /// Create a DuckDB connection with the given init SQL
-    fn create_connection_with_sql(init_sql: &str) -> Result<Connection, ServerError> {
+    fn create_connection_with_sql(
+        init_sql: &str,
+        disable_file_locking: bool,
+    ) -> Result<Connection, ServerError> {
         let config = Config::default()
             .enable_autoload_extension(true)?
             .allow_unsigned_extensions()?;
         let conn = Connection::open_in_memory_with_flags(config)?;
+        if disable_file_locking {
+            conn.execute_batch("PRAGMA disable_file_locking=ON;")?;
+        }
         conn.execute_batch(init_sql)?;
         Ok(conn)
     }
@@ -56,7 +66,7 @@ impl EngineFactory {
     /// This ensures complete isolation between sessions.
     #[instrument(skip(self))]
     pub fn create_connection(&self) -> Result<DuckDbConnection, ServerError> {
-        let conn = Self::create_connection_with_sql(&self.init_sql)?;
+        let conn = Self::create_connection_with_sql(&self.init_sql, self.disable_file_locking)?;
         info!("created new DuckDB connection");
         Ok(DuckDbConnection::new(conn))
     }
