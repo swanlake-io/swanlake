@@ -18,6 +18,7 @@ mod service;
 mod session;
 mod sql_parser;
 mod types;
+mod ui;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -61,6 +62,10 @@ async fn main() -> Result<()> {
             }
         }
     });
+
+    // Optionally start the DuckDB UI server in the background.
+    let _ui_server = ui::maybe_start_ui_server(&config, registry.engine_factory())
+        .context("failed to start DuckDB UI server")?;
 
     // Pass dq_runtime to the service to keep the QueueRuntime alive throughout the server's lifetime.
     let flight_service = SwanFlightSqlService::new(registry, Some(dq_runtime));

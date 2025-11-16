@@ -1,0 +1,12 @@
+target
+*/target
+.git
+.github
+Dockerfile
+docker-compose.yml
+README.md
+AGENT.md
+CONFIGURATION.md
+swanlake.jpeg
+tests
+examples

@@ -23,10 +23,35 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Cache cargo build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            target
+          key: cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-build-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
           go-version: "1.25"
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            examples/go-*/go.sum
 
       - name: Set up Docker Compose
         uses: docker/setup-compose-action@v1
@@ -57,12 +82,24 @@ jobs:
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Cache uv environments
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.local/share/uv
+            ~/.uv
+          key: uv-${{ runner.os }}-${{ hashFiles('examples/python-adbc/uv.lock') }}
+          restore-keys: |
+            uv-${{ runner.os }}-
+
       - name: Run integration tests
         run: bash scripts/run-integration-tests.sh
         env:
           PGPASSWORD: postgres
           PGHOST: 127.0.0.1
           PGUSER: postgres
+          SWANLAKE_DUCKDB_UI_SERVER_ENABLED: true
 
       - name: Collect coverage
         run: |

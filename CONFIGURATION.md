@@ -19,6 +19,12 @@ and boolean flags accept `true/false` (case-insensitive).
 | `SWANLAKE_MAX_SESSIONS` | Maximum concurrent sessions | `100` |
 | `SWANLAKE_SESSION_TIMEOUT_SECONDS` | Idle timeout before cleanup | `900` (15 min) |
 
+## DuckDB UI Server
+
+| Env Var | Description | Default |
+| --- | --- | --- |
+| `SWANLAKE_DUCKDB_UI_SERVER_ENABLED` | Start DuckDB's UI server (listens on port 4213 inside the process) | `false` |
+
 ## Logging
 
 | Env Var | Description | Default |
