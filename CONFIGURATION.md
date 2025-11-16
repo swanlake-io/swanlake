@@ -53,6 +53,23 @@ To enable DuckLake Postgres connection, see [DuckDB Postgres extension configura
 
 To enable DuckLake S3 connection, see [DuckDB HTTPFS S3 API configuration](https://duckdb.org/docs/stable/core_extensions/httpfs/s3api#platform-specific-secret-types).
 
+## Distributed Locking
+
+SwanLake uses PostgreSQL advisory locks for coordinating access to shared resources across multiple hosts. A single lightweight PostgreSQL session is shared for all locks on a host, so acquiring a lock never consumes an additional database connection.
+
+| Env Var | Description | Default |
+| --- | --- | --- |
+| `PGHOST` | PostgreSQL host | `localhost` |
+| `PGPORT` | PostgreSQL port | `5432` |
+| `PGUSER` | PostgreSQL user | `postgres` |
+| `PGDATABASE` | PostgreSQL database | `postgres` |
+| `PGPASSWORD` | PostgreSQL password | _(unset)_ |
+| `PGSSLMODE` | TLS mode. `disable` = plaintext, `require` = TLS without verification, `verify-ca` = TLS verifying CA only, `verify-full` = full TLS verification | `disable` |
+
+Configuration is loaded once at startup and reused for the lifetime of the process. Locks are automatically released when the process terminates, so no extra TTL/lease controls are needed.
+
+See `src/lock/README.md` for detailed documentation on the distributed lock implementation.
+
 ## Queueing & Flush Runtime
 
 | Env Var | Description | Default |
@@ -63,6 +80,7 @@ To enable DuckLake S3 connection, see [DuckDB HTTPFS S3 API configuration](https
 | `SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often sealed files are scanned | `60` |
 | `SWANLAKE_DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
 | `SWANLAKE_DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema for flushed tables | `swanlake` |
+| `SWANLAKE_DUCKLING_QUEUE_AUTO_CREATE_TABLES` | Automatically create missing destination tables | `false` |
 
 The root directory is created automatically if it does not exist. Within that root the manager
 expects three child directories: `active/`, `sealed/`, and `flushed/`.

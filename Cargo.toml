@@ -22,17 +22,21 @@ duckdb = { git = "https://github.com/swanlake-io/duckdb-rs", branch = "wfj/cargo
 sqlparser = "0.59.0"
 futures = "0.3.31"
 prost = "0.14.1"
-serde = { version = "1.0.217", features = ["derive"] }
-uuid = { version = "1.11.0", features = ["v4"] }
-serde_json = "1.0.134"
-thiserror = "2.0.6"
-tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "signal"] }
+serde = { version = "1.0.228", features = ["derive"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+serde_json = "1.0.145"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal"] }
+tokio-postgres = "0.7"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
 tonic = { version = "0.14.2", features = ["transport"] }
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "json"] }
-config = "0.15.5"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
+config = "0.15.19"
 tonic-health = "0.14.2"
 chrono = "0.4"
+siphasher = "1.0"
 
 [build-dependencies]
 reqwest = { version = "0.12", features = ["blocking"] }

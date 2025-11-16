@@ -7,8 +7,8 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::dq::config::{QueueContext, QueueDirectories};
-use crate::dq::lock::FileLock;
 use crate::engine::DuckDbConnection;
+use crate::lock::{DistributedLock, PostgresLock};
 use crate::session::SessionId;
 
 /// Per-session queue file manager.
@@ -23,18 +23,19 @@ pub struct QueueSession {
     active_file: PathBuf,
     created_at: Instant,
     context: Arc<QueueContext>,
-    _lock: FileLock,
+    _lock: PostgresLock,
 }
 
 impl QueueSession {
     /// Create a new session queue with a fresh active file.
-    pub(crate) fn create(session_id: SessionId, context: Arc<QueueContext>) -> Result<Self> {
+    pub(crate) async fn create(session_id: SessionId, context: Arc<QueueContext>) -> Result<Self> {
         let active_file = create_session_queue_file(context.dirs())?;
-        let lock = FileLock::try_acquire(
+        let lock = PostgresLock::try_acquire(
             &active_file,
             context.settings().lock_ttl,
             Some(session_id.as_ref()),
-        )?
+        )
+        .await?
         .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for session queue file"))?;
 
         info!(
@@ -59,9 +60,8 @@ impl QueueSession {
 
     /// Check if rotation is needed based on size or time thresholds.
     pub fn should_rotate(&self) -> Result<bool> {
-        self._lock
-            .refresh()
-            .with_context(|| "failed to refresh session queue lock")?;
+        // Note: PostgreSQL advisory locks don't need refresh (they're session-based)
+        // so we skip the refresh step that was needed for file locks
 
         // Time-based rotation
         let settings = self.context.settings();
@@ -97,7 +97,7 @@ impl QueueSession {
 
     /// Rotate the queue file: detach, seal current file, create and attach new file.
     /// Returns the path to the sealed file.
-    pub fn rotate(&mut self, conn: &DuckDbConnection) -> Result<PathBuf> {
+    pub async fn rotate(&mut self, conn: &DuckDbConnection) -> Result<PathBuf> {
         debug!(
             session_id = %self.session_id,
             old_file = %self.active_file.display(),
@@ -112,11 +112,12 @@ impl QueueSession {
 
         // Create new active file
         let new_file = create_session_queue_file(self.context.dirs())?;
-        let new_lock = FileLock::try_acquire(
+        let new_lock = PostgresLock::try_acquire(
             &new_file,
             self.context.settings().lock_ttl,
             Some(self.session_id.as_ref()),
-        )?
+        )
+        .await?
         .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for new session queue file"))?;
 
         // Update state
@@ -138,9 +139,9 @@ impl QueueSession {
     }
 
     /// Force flush: rotate and return sealed file for immediate flushing.
-    pub fn force_flush(&mut self, conn: &DuckDbConnection) -> Result<PathBuf> {
+    pub async fn force_flush(&mut self, conn: &DuckDbConnection) -> Result<PathBuf> {
         debug!(session_id = %self.session_id, "force flush requested");
-        self.rotate(conn)
+        self.rotate(conn).await
     }
 
     /// Seal the current file before session cleanup.

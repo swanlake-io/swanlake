@@ -108,7 +108,10 @@ impl SessionRegistry {
     /// The session_id is derived from the connection info (e.g., remote address).
     /// If a session already exists with this ID, it is reused.
     /// Otherwise, a new session is created with the given ID.
-    pub fn get_or_create_by_id(&self, session_id: &SessionId) -> Result<Arc<Session>, ServerError> {
+    pub async fn get_or_create_by_id(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Arc<Session>, ServerError> {
         // First, try to get existing session (read lock)
         {
             let inner = self.inner.read().expect("registry lock poisoned");
@@ -139,17 +142,15 @@ impl SessionRegistry {
         let connection = self.factory.lock().unwrap().create_connection()?;
 
         // Create session with the specified ID
-        let session = {
+        let dq_manager = {
             let inner = self.inner.read().expect("registry lock poisoned");
-            if let Some(ref dq_manager) = inner.dq_manager {
-                Arc::new(Session::new_with_id_and_dq(
-                    session_id.clone(),
-                    connection,
-                    dq_manager.clone(),
-                )?)
-            } else {
-                Arc::new(Session::new_with_id(session_id.clone(), connection))
-            }
+            inner.dq_manager.clone()
+        };
+
+        let session = if let Some(dq_manager) = dq_manager {
+            Arc::new(Session::new_with_id_and_dq(session_id.clone(), connection, dq_manager).await?)
+        } else {
+            Arc::new(Session::new_with_id(session_id.clone(), connection))
         };
 
         // Register session
@@ -167,14 +168,14 @@ impl SessionRegistry {
     }
 
     /// Call maybe_rotate_queue() on all sessions
-    pub fn maybe_rotate_all_queues(&self) {
+    pub async fn maybe_rotate_all_queues(&self) {
         let sessions = {
             let inner = self.inner.read().expect("registry lock poisoned");
             inner.sessions.values().cloned().collect::<Vec<_>>()
         };
 
         for session in sessions {
-            if let Err(e) = session.maybe_rotate_queue() {
+            if let Err(e) = session.maybe_rotate_queue().await {
                 warn!(session_id = %session.id(), error = %e, "failed to rotate session queue");
             }
         }

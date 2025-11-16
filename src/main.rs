@@ -13,6 +13,7 @@ mod config;
 mod dq;
 mod engine;
 mod error;
+mod lock;
 mod service;
 mod session;
 mod sql_parser;
@@ -30,7 +31,9 @@ async fn main() -> Result<()> {
         .context("failed to resolve bind address")?;
 
     let dq_manager = Arc::new(
-        QueueManager::new(&config).context("failed to initialize duckling queue manager")?,
+        QueueManager::new(&config)
+            .await
+            .context("failed to initialize duckling queue manager")?,
     );
 
     // Create session registry (Phase 2: connection-based session persistence)

@@ -6,9 +6,9 @@ use anyhow::{anyhow, Context, Result};
 use tokio::sync::{mpsc, Semaphore};
 use tracing::{debug, error, info, warn};
 
-use crate::dq::lock::FileLock;
 use crate::dq::QueueManager;
 use crate::engine::EngineFactory;
+use crate::lock::{DistributedLock, PostgresLock};
 use crate::session::registry::SessionRegistry;
 
 const MIN_ROTATION_TICK: Duration = Duration::from_secs(5);
@@ -68,11 +68,11 @@ async fn rotation_loop(
         interval.tick().await;
 
         // 1. Check all sessions for size/time-based rotation
-        registry.maybe_rotate_all_queues();
+        registry.maybe_rotate_all_queues().await;
 
         // 2. Sweep orphaned active files
         let active_ids = registry.get_all_session_ids();
-        if let Ok(orphaned) = manager.sweep_orphaned_files(&active_ids) {
+        if let Ok(orphaned) = manager.sweep_orphaned_files(&active_ids).await {
             if !orphaned.is_empty() {
                 info!(
                     "found {} orphaned duckling queue files to flush",
@@ -127,14 +127,32 @@ async fn flush_loop(
         let factory_clone = factory.clone();
         let path_for_log = path.clone();
         tokio::spawn(async move {
-            let flush_result = tokio::task::spawn_blocking(move || {
-                let conn = factory_clone.lock().unwrap().create_connection()?;
-                conn.with_inner(|inner| flush_sealed_file(&manager_clone, inner, &path))
-                    .map_err(|e| anyhow!(e))?
-            })
-            .await
-            .map_err(|join_err| anyhow!(join_err))
-            .and_then(|res| res);
+            // Acquire distributed lock before flushing to avoid double-processing.
+            let lock_result =
+                PostgresLock::try_acquire(&path, manager_clone.settings().lock_ttl, None).await;
+
+            let flush_result = match lock_result {
+                Ok(Some(lock)) => {
+                    let manager_for_flush = manager_clone.clone();
+                    let factory_for_flush = factory_clone.clone();
+                    let path_for_flush = path.clone();
+
+                    tokio::task::spawn_blocking(move || {
+                        // Hold the lock for the duration of sync DuckDB operations.
+                        let _lock = lock;
+                        let conn = factory_for_flush.lock().unwrap().create_connection()?;
+                        conn.with_inner(|inner| {
+                            flush_sealed_file_sync(&manager_for_flush, inner, &path_for_flush)
+                        })
+                        .map_err(|e| anyhow!(e))?
+                    })
+                    .await
+                    .map_err(|join_err| anyhow!(join_err))
+                    .and_then(|res| res)
+                }
+                Ok(None) => Ok(false),
+                Err(e) => Err(e),
+            };
 
             match flush_result {
                 Ok(true) => {}
@@ -153,9 +171,10 @@ async fn flush_loop(
     }
 }
 
-/// Flush a sealed queue file into the target DuckLake schema.
+/// Flush a sealed queue file into the target DuckLake schema (synchronous version).
 /// Returns true if flushed, false if file is busy (locked by another worker).
-pub fn flush_sealed_file(
+/// Note: Lock must be acquired before calling this function.
+pub fn flush_sealed_file_sync(
     manager: &QueueManager,
     conn: &duckdb::Connection,
     path: &Path,
@@ -170,10 +189,6 @@ pub fn flush_sealed_file(
         return Ok(true);
     }
 
-    let Some(lock) = FileLock::try_acquire(path, manager.settings().lock_ttl, None)? else {
-        debug!(file = %path.display(), "duckling queue file already being flushed by another worker");
-        return Ok(false);
-    };
     info!(file = %path.display(), "start flush duckling queue file");
 
     detach_if_attached(conn, "duckling_queue")
@@ -232,12 +247,15 @@ pub fn flush_sealed_file(
     std::fs::rename(path, &flushed_path).with_context(|| {
         format!(
             "failed to move flushed queue file {:?} to {:?}",
-            path, flushed_path
+            path.display(),
+            flushed_path.display()
         )
     })?;
 
-    info!(file = %path.display(), flushed = %flushed_path.display(), "duckling queue file flushed and moved");
-    drop(lock);
+    info!(
+        flushed_path = %flushed_path.display(),
+        "duckling queue file flushed successfully"
+    );
     Ok(true)
 }
 

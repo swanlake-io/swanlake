@@ -55,21 +55,29 @@ impl SwanFlightSqlService {
     /// Get or create a session based on connection (Phase 2: connection-based persistence)
     ///
     /// Extracts session ID from the gRPC connection and reuses sessions across requests.
-    pub(crate) fn get_session<T>(&self, request: &Request<T>) -> Result<Arc<Session>, Status> {
+    pub(crate) async fn get_session<T>(
+        &self,
+        request: &Request<T>,
+    ) -> Result<Arc<Session>, Status> {
         let session_id = Self::extract_session_id(request);
         self.registry
             .get_or_create_by_id(&session_id)
+            .await
             .map_err(Self::status_from_error)
     }
 
     /// Prepare request: extract session_id, record to tracing span, and get/create session
     ///
     /// This centralizes the common pattern of session management in handlers.
-    pub(crate) fn prepare_request<T>(&self, request: &Request<T>) -> Result<Arc<Session>, Status> {
+    pub(crate) async fn prepare_request<T>(
+        &self,
+        request: &Request<T>,
+    ) -> Result<Arc<Session>, Status> {
         let session_id = Self::extract_session_id(request);
         Span::current().record("session_id", session_id.as_ref());
         self.registry
             .get_or_create_by_id(&session_id)
+            .await
             .map_err(Self::status_from_error)
     }
 

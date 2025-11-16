@@ -53,12 +53,11 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
   flushed/duckling_queue_{uuid}_{timestamp}.db
 ```
 - Each session owns exactly one active file at a time
-- Session IDs live inside the `.lock` file metadata (filenames are UUID-based)
 - Timestamp is Unix epoch seconds
 - Active file is attached per-session: `ATTACH '{path}' AS duckling_queue;`
 - When rotating, file moves from active/ to sealed/
-- Lock files prevent concurrent flush: `{filename}.lock` contains hostname, PID, and lease expiry
 - Each queue DB contains helper table: `__session_queue_metadata` with creation timestamp
+- PostgreSQL advisory locks keyed by the file path prevent concurrent flushers across hosts
 
 `ServerConfig` gets the matching fields. Queue files are created and attached per-session, not globally in `EngineFactory`.
 
@@ -71,16 +70,16 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
 | `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation | `100_000_000` |
 | `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the worker scans for sealed files | `60` |
 | `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrency limit | `2` |
-| `DUCKLING_QUEUE_LOCK_TTL_SECONDS` | Lease duration before another host can steal a flush lock (clamped between 5–30 min) | `600` |
+| `DUCKLING_QUEUE_AUTO_CREATE_TABLES` | Automatically create missing output tables | `false` |
 
 `ServerConfig` gets the matching fields, and `EngineFactory::new` uses them to append the queue `ATTACH` statement immediately after the DuckLake attachment logic.
 
 ## Failure & Recovery Considerations
 - **Crash before flush:** Sealed files remain on disk; next server restart's flush worker picks them up
-- **Crash during flush:** Lock lease expires; another host re-acquires the lock and replays with at-least-once semantics (duplicates are possible)
+- **Crash during flush:** PostgreSQL releases the advisory lock when the flushing task crashes, letting another host retry with at-least-once semantics (duplicates are possible)
 - **Crash while file is active:** Startup orphan sweep moves all active/ files to sealed/ (no current session owns them)
 - **Session timeout:** Before removing idle session, queue file is automatically sealed
-- **Orphan detection:** Rotation loop periodically sweeps active/ directory, inspecting lock metadata for session IDs and sealing files without matching sessions
+- **Orphan detection:** Rotation loop periodically sweeps `active/` and attempts to re-acquire PostgreSQL advisory locks; any lock that can be reacquired indicates an orphaned file which is then sealed
 - **Out-of-disk:** Rotation fails; session continues writing to current file until space available
 - **At-least-once inserts:** Flushes rename tables with `__dq_flushed_` once the copy succeeds. A crash between the insert and rename can replay the same batch, so downstream consumers must tolerate duplicate rows.
 
@@ -103,7 +102,7 @@ client ─▶ session/connection ─▶ session-specific duckling_queue file (lo
   - [x] Update `cleanup_idle_sessions()` to seal queue files before removal
 - [x] **Manager simplification**
   - [x] Remove global active file tracking and rotation logic
-  - [x] Add `sweep_orphaned_files()` with lock-file session ownership tracking
+  - [x] Add `sweep_orphaned_files()` that leverages PostgreSQL advisory locks to detect abandoned files
   - [x] Keep directory management and configuration
 - [x] **Runtime workers**
   - [x] Update rotation loop to check all sessions + sweep orphans
