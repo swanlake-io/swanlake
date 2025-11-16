@@ -156,7 +156,15 @@ impl Session {
         let sq = dq_manager
             .open_session_queue(id.clone())
             .await
-            .map_err(|e| ServerError::Internal(format!("failed to create session queue: {}", e)))?;
+            .map_err(|e| {
+                error!(
+                    session_id = %id,
+                    queue_active_dir = %dq_manager.dirs().active.display(),
+                    error = %e,
+                    "failed to create session queue"
+                );
+                ServerError::Internal(format!("failed to create session queue: {}", e))
+            })?;
 
         let sql = sq.attach_sql();
         connection

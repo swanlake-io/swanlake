@@ -91,6 +91,22 @@ See `src/lock/README.md` for detailed documentation on the distributed lock impl
 The root directory is created automatically if it does not exist. Within that root the manager
 expects three child directories: `active/`, `sealed/`, and `flushed/`.
 
+## Troubleshooting Session Queue Creation
+
+If the server logs `failed to create session queue: ...` it means one of the early lifecycle steps
+failed before the per-session DuckDB queue was attached. The most common root causes are:
+
+- The `SWANLAKE_DUCKLING_QUEUE_ROOT` path is missing or not writable for the SwanLake process. The
+  log line includes `queue_active_dir`, which points at the exact directory that could not be used.
+- PostgreSQL advisory lock acquisition failed. Ensure `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+  `PGPASSWORD`, and `PGSSLMODE` are set so SwanLake can reach the shared locking database. When the
+  lock connection cannot be created the log includes `session_id` and the queue file path it was
+  trying to lock.
+
+With full tracing enabled (`RUST_LOG=debug`), SwanLake additionally emits debug lines when it starts
+creating the queue file and immediately before trying to acquire the advisory lock, which helps
+pinpoint which phase failed on remote deployments.
+
 ## Validation
 
 During startup `ServerConfig::validate()` ensures `DUCKLING_QUEUE_ROOT` exists (creating it when

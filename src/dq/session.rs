@@ -29,14 +29,43 @@ pub struct QueueSession {
 impl QueueSession {
     /// Create a new session queue with a fresh active file.
     pub(crate) async fn create(session_id: SessionId, context: Arc<QueueContext>) -> Result<Self> {
-        let active_file = create_session_queue_file(context.dirs())?;
+        debug!(
+            session_id = %session_id,
+            active_dir = %context.dirs().active.display(),
+            "creating session queue file"
+        );
+
+        let active_file = create_session_queue_file(context.dirs()).with_context(|| {
+            format!(
+                "session {} failed to create queue file in {:?}",
+                session_id,
+                context.dirs().active
+            )
+        })?;
+
+        debug!(
+            session_id = %session_id,
+            file = %active_file.display(),
+            "acquiring advisory lock for session queue file"
+        );
         let lock = PostgresLock::try_acquire(
             &active_file,
             context.settings().lock_ttl,
             Some(session_id.as_ref()),
         )
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("failed to acquire lock for session queue file"))?;
+        .await
+        .with_context(|| {
+            format!(
+                "session {} failed to contact Postgres for queue lock on {:?}",
+                session_id, active_file
+            )
+        })?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "failed to acquire lock for session queue file {}",
+                active_file.display()
+            )
+        })?;
 
         info!(
             session_id = %session_id,
