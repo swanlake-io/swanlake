@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
 use tokio::sync::OnceCell;
@@ -23,6 +23,7 @@ struct PgConfig {
 #[derive(Clone, Copy, Debug)]
 enum PgSslMode {
     Disable,
+    Prefer,
     Require,
     VerifyCa,
     VerifyFull,
@@ -36,6 +37,7 @@ impl PgSslMode {
 
     fn from_str(value: &str) -> Self {
         match value.to_lowercase().as_str() {
+            "prefer" => Self::Prefer,
             "require" => Self::Require,
             "verify-ca" => Self::VerifyCa,
             "verify-full" => Self::VerifyFull,
@@ -77,62 +79,119 @@ struct PgClient {
     client: Client,
 }
 
+enum TlsConfig {
+    None,
+    Prefer(MakeTlsConnector),
+    Enforced(MakeTlsConnector),
+}
+
+impl std::fmt::Debug for TlsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TlsConfig::None => write!(f, "TlsConfig::None"),
+            TlsConfig::Prefer(_) => write!(f, "TlsConfig::Prefer(..)"),
+            TlsConfig::Enforced(_) => write!(f, "TlsConfig::Enforced(..)"),
+        }
+    }
+}
+
 impl PgClient {
     async fn connect(config: &PgConfig) -> Result<Self> {
-        let maybe_tls = Self::build_tls(config.ssl_mode)?;
-        let client = if let Some(tls) = maybe_tls {
-            debug!(
-                "connecting to PostgreSQL with TLS mode {:?}",
-                config.ssl_mode
-            );
-            let (client, connection) =
-                tokio_postgres::connect(&config.connection_string, tls).await?;
-            tokio::spawn(async move {
-                if let Err(e) = connection.await {
-                    warn!(error = %e, "PostgreSQL connection error");
+        let tls_config = Self::build_tls_config(config.ssl_mode)?;
+        let client = match tls_config {
+            TlsConfig::None => {
+                debug!("connecting to PostgreSQL without TLS");
+                Self::connect_without_tls(&config.connection_string).await?
+            }
+            TlsConfig::Prefer(connector) => {
+                debug!(
+                    "connecting to PostgreSQL with TLS mode {:?}",
+                    config.ssl_mode
+                );
+                match Self::connect_with_tls(&config.connection_string, connector).await {
+                    Ok(client) => client,
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            "TLS connection failed in PGSSLMODE=prefer, retrying without TLS"
+                        );
+                        debug!("connecting to PostgreSQL without TLS (prefer fallback)");
+                        Self::connect_without_tls(&config.connection_string).await?
+                    }
                 }
-            });
-            client
-        } else {
-            debug!("connecting to PostgreSQL without TLS");
-            let (client, connection) =
-                tokio_postgres::connect(&config.connection_string, NoTls).await?;
-            tokio::spawn(async move {
-                if let Err(e) = connection.await {
-                    warn!(error = %e, "PostgreSQL connection error");
-                }
-            });
-            client
+            }
+            TlsConfig::Enforced(connector) => {
+                debug!(
+                    "connecting to PostgreSQL with TLS mode {:?}",
+                    config.ssl_mode
+                );
+                Self::connect_with_tls(&config.connection_string, connector).await?
+            }
         };
 
         Ok(Self { client })
     }
 
-    fn build_tls(mode: PgSslMode) -> Result<Option<MakeTlsConnector>> {
+    fn build_tls_config(mode: PgSslMode) -> Result<TlsConfig> {
         match mode {
-            PgSslMode::Disable => Ok(None),
-            PgSslMode::Require => {
+            PgSslMode::Disable => Ok(TlsConfig::None),
+            PgSslMode::Prefer => Ok(TlsConfig::Prefer(Self::build_tls_connector(mode)?)),
+            PgSslMode::Require | PgSslMode::VerifyCa | PgSslMode::VerifyFull => {
+                Ok(TlsConfig::Enforced(Self::build_tls_connector(mode)?))
+            }
+        }
+    }
+
+    fn build_tls_connector(mode: PgSslMode) -> Result<MakeTlsConnector> {
+        match mode {
+            PgSslMode::Prefer | PgSslMode::Require => {
                 let connector = TlsConnector::builder()
                     .danger_accept_invalid_certs(true)
                     .danger_accept_invalid_hostnames(true)
                     .build()
                     .context("failed to build TLS connector for PGSSLMODE=require")?;
-                Ok(Some(MakeTlsConnector::new(connector)))
+                Ok(MakeTlsConnector::new(connector))
             }
             PgSslMode::VerifyCa => {
                 let connector = TlsConnector::builder()
                     .danger_accept_invalid_hostnames(true)
                     .build()
                     .context("failed to build TLS connector for PGSSLMODE=verify-ca")?;
-                Ok(Some(MakeTlsConnector::new(connector)))
+                Ok(MakeTlsConnector::new(connector))
             }
             PgSslMode::VerifyFull => {
                 let connector = TlsConnector::builder()
                     .build()
                     .context("failed to build TLS connector for PGSSLMODE=verify-full")?;
-                Ok(Some(MakeTlsConnector::new(connector)))
+                Ok(MakeTlsConnector::new(connector))
+            }
+            PgSslMode::Disable => {
+                bail!("PGSSLMODE=disable should not attempt to build a TLS connector")
             }
         }
+    }
+
+    async fn connect_with_tls(
+        connection_string: &str,
+        connector: MakeTlsConnector,
+    ) -> Result<Client> {
+        let (client, connection) = tokio_postgres::connect(connection_string, connector).await?;
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                warn!(error = %e, "PostgreSQL connection error");
+            }
+        });
+        Ok(client)
+    }
+
+    async fn connect_without_tls(connection_string: &str) -> Result<Client> {
+        let (client, connection) = tokio_postgres::connect(connection_string, NoTls).await?;
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                warn!(error = %e, "PostgreSQL connection error");
+            }
+        });
+        Ok(client)
     }
 
     async fn try_lock(&self, lock_key: i64) -> Result<bool> {
@@ -272,6 +331,7 @@ mod tests {
     #[test]
     fn test_ssl_mode_parsing() {
         assert!(matches!(PgSslMode::from_str("disable"), PgSslMode::Disable));
+        assert!(matches!(PgSslMode::from_str("prefer"), PgSslMode::Prefer));
         assert!(matches!(PgSslMode::from_str("require"), PgSslMode::Require));
         assert!(matches!(
             PgSslMode::from_str("verify-ca"),
@@ -286,21 +346,27 @@ mod tests {
 
     #[test]
     fn test_tls_connector_building_per_mode() {
-        assert!(PgClient::build_tls(PgSslMode::Disable)
-            .expect("disable mode should not error")
-            .is_none());
+        assert!(matches!(
+            PgClient::build_tls_config(PgSslMode::Disable)
+                .expect("disable mode config should not error"),
+            TlsConfig::None
+        ));
+        assert!(matches!(
+            PgClient::build_tls_config(PgSslMode::Prefer)
+                .expect("prefer mode config should not error"),
+            TlsConfig::Prefer(_)
+        ));
         for mode in [
             PgSslMode::Require,
             PgSslMode::VerifyCa,
             PgSslMode::VerifyFull,
         ] {
-            let connector = PgClient::build_tls(mode)
-                .unwrap_or_else(|e| panic!("failed to build TLS connector for {:?}: {}", mode, e));
-            assert!(
-                connector.is_some(),
-                "TLS mode {:?} should produce a connector",
-                mode
-            );
+            match PgClient::build_tls_config(mode)
+                .unwrap_or_else(|e| panic!("failed to build TLS config for {:?}: {}", mode, e))
+            {
+                TlsConfig::Enforced(_) => {}
+                other => panic!("mode {:?} expected Enforced, got {:?}", mode, other),
+            }
         }
     }
 }

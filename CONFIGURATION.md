@@ -70,7 +70,7 @@ SwanLake uses PostgreSQL advisory locks for coordinating access to shared resour
 | `PGUSER` | PostgreSQL user | `postgres` |
 | `PGDATABASE` | PostgreSQL database | `postgres` |
 | `PGPASSWORD` | PostgreSQL password | _(unset)_ |
-| `PGSSLMODE` | TLS mode. `disable` = plaintext, `require` = TLS without verification, `verify-ca` = TLS verifying CA only, `verify-full` = full TLS verification | `disable` |
+| `PGSSLMODE` | TLS mode. `disable` = plaintext, `prefer` = try TLS then fall back to plaintext, `require` = TLS without verification, `verify-ca` = TLS verifying CA only, `verify-full` = full TLS verification | `disable` |
 
 Configuration is loaded once at startup and reused for the lifetime of the process. Locks are automatically released when the process terminates, so no extra TTL/lease controls are needed.
 
