@@ -22,6 +22,7 @@ use super::ticket::{StatementTicketKind, TicketStatementPayload};
 use crate::service::SwanFlightSqlService;
 use crate::session::id::StatementHandle;
 use crate::session::{PreparedStatementMeta, PreparedStatementOptions};
+use crate::sql_parser::{ParsedStatement, TableReference};
 
 fn parse_statement_handle(bytes: &[u8], context: &str) -> Result<StatementHandle, Status> {
     StatementHandle::from_bytes(bytes).ok_or_else(|| {
@@ -291,72 +292,87 @@ pub(crate) async fn do_put_prepared_statement_update(
         ));
     }
 
-    let parsed_opt = crate::sql_parser::ParsedStatement::parse(&sql);
+    let parsed_opt = ParsedStatement::parse(&sql);
 
-    let affected_rows = if parsed_opt.as_ref().is_some_and(|p| p.is_insert()) {
-        let batches = SwanFlightSqlService::collect_record_batches(request).await?;
-        if batches.is_empty() {
-            // No batches, execute with empty params
+    let affected_rows = if let Some((parsed, table_ref)) = parsed_opt
+        .as_ref()
+        .filter(|p| p.is_insert())
+        .and_then(|p| p.get_insert_table().map(|t| (p, t)))
+    {
+        if is_duckling_queue_table(&table_ref) {
+            let params = SwanFlightSqlService::collect_parameter_sets(request).await?;
+            info!(
+                handle = %handle,
+                sql = %sql,
+                "executing duckling_queue prepared insert via parameter batching"
+            );
             let session_clone = Arc::clone(&session);
             tokio::task::spawn_blocking(move || {
-                SwanFlightSqlService::execute_statement_batches(&sql, &[], &session_clone)
+                SwanFlightSqlService::execute_statement_batches(&sql, &params, &session_clone)
             })
             .await
             .map_err(SwanFlightSqlService::status_from_join)?
             .map_err(SwanFlightSqlService::status_from_error)?
         } else {
-            let parsed = parsed_opt.unwrap();
-            let table_ref = parsed.get_insert_table().ok_or_else(|| {
-                Status::invalid_argument("failed to extract table name from INSERT statement")
-            })?;
-            let table_sql_name = table_ref.sql_name().to_string();
-            let table_logical_name = table_ref.logical_name().to_string();
-            let insert_columns = parsed.get_insert_columns();
+            let batches = SwanFlightSqlService::collect_record_batches(request).await?;
+            if batches.is_empty() {
+                let session_clone = Arc::clone(&session);
+                tokio::task::spawn_blocking(move || {
+                    SwanFlightSqlService::execute_statement_batches(&sql, &[], &session_clone)
+                })
+                .await
+                .map_err(SwanFlightSqlService::status_from_join)?
+                .map_err(SwanFlightSqlService::status_from_error)?
+            } else {
+                let table_sql_name = table_ref.sql_name().to_string();
+                let table_logical_name = table_ref.logical_name().to_string();
+                let insert_columns = parsed.get_insert_columns();
 
-            info!(
-                handle = %handle,
-                table_name = %table_sql_name,
-                "using appender optimization for INSERT"
-            );
+                info!(
+                    handle = %handle,
+                    table_name = %table_sql_name,
+                    "using appender optimization for INSERT"
+                );
 
-            let session_clone = Arc::clone(&session);
-            tokio::task::spawn_blocking(move || {
-                let table_schema = Arc::new(session_clone.table_schema(&table_sql_name)?);
-                let batches_to_use = if let Some(cols) = &insert_columns {
-                    batches
-                        .into_iter()
-                        .map(|batch| {
-                            SwanFlightSqlService::align_batch_to_table_schema(
-                                batch,
-                                &table_schema,
-                                cols,
-                                &table_logical_name,
-                            )
-                        })
-                        .collect::<Result<Vec<_>, crate::error::ServerError>>()?
-                } else {
-                    batches
-                };
-                let mut total_rows = 0usize;
-                for batch in batches_to_use {
-                    let rows = session_clone
-                        .insert_with_appender(&table_logical_name, batch)
-                        .map_err(|e| {
-                            error!(
-                                %e,
-                                "appender insert failed sql {} for table {}",
-                                sql,
-                                table_sql_name
-                            );
-                            e
-                        })?;
-                    total_rows += rows;
-                }
-                Ok::<_, crate::error::ServerError>(total_rows as i64)
-            })
-            .await
-            .map_err(SwanFlightSqlService::status_from_join)?
-            .map_err(SwanFlightSqlService::status_from_error)?
+                let session_clone = Arc::clone(&session);
+                tokio::task::spawn_blocking(move || {
+                    let table_schema = Arc::new(session_clone.table_schema(&table_sql_name)?);
+                    let batches_to_use = if let Some(cols) = &insert_columns {
+                        batches
+                            .into_iter()
+                            .map(|batch| {
+                                SwanFlightSqlService::align_batch_to_table_schema(
+                                    batch,
+                                    &table_schema,
+                                    cols,
+                                    &table_logical_name,
+                                )
+                            })
+                            .collect::<Result<Vec<_>, crate::error::ServerError>>()?
+                    } else {
+                        batches
+                    };
+                    let mut total_rows = 0usize;
+                    for batch in batches_to_use {
+                        let rows = session_clone
+                            .insert_with_appender(&table_logical_name, batch)
+                            .map_err(|e| {
+                                error!(
+                                    %e,
+                                    "appender insert failed sql {} for table {}",
+                                    sql,
+                                    table_sql_name
+                                );
+                                e
+                            })?;
+                        total_rows += rows;
+                    }
+                    Ok::<_, crate::error::ServerError>(total_rows as i64)
+                })
+                .await
+                .map_err(SwanFlightSqlService::status_from_join)?
+                .map_err(SwanFlightSqlService::status_from_error)?
+            }
         }
     } else {
         let params = SwanFlightSqlService::collect_parameter_sets(request).await?;
@@ -425,4 +441,9 @@ impl SwanFlightSqlService {
         RecordBatch::try_new(table_schema.clone(), columns)
             .map_err(crate::error::ServerError::Arrow)
     }
+}
+
+fn is_duckling_queue_table(table_ref: &TableReference) -> bool {
+    let parts = table_ref.parts();
+    parts.len() == 2 && parts[0].eq_ignore_ascii_case("duckling_queue")
 }
