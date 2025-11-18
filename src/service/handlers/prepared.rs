@@ -352,21 +352,17 @@ pub(crate) async fn do_put_prepared_statement_update(
                     } else {
                         batches
                     };
-                    let mut total_rows = 0usize;
-                    for batch in batches_to_use {
-                        let rows = session_clone
-                            .insert_with_appender(&table_logical_name, batch)
-                            .map_err(|e| {
-                                error!(
-                                    %e,
-                                    "appender insert failed sql {} for table {}",
-                                    sql,
-                                    table_sql_name
-                                );
-                                e
-                            })?;
-                        total_rows += rows;
-                    }
+                    let total_rows = session_clone
+                        .insert_with_appender(&table_logical_name, batches_to_use)
+                        .map_err(|e| {
+                            error!(
+                                %e,
+                                "appender insert failed sql {} for table {}",
+                                sql,
+                                table_sql_name
+                            );
+                            e
+                        })?;
                     Ok::<_, crate::error::ServerError>(total_rows as i64)
                 })
                 .await

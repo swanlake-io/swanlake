@@ -308,18 +308,18 @@ impl Session {
         self.connection.schema_for_query(sql)
     }
 
-    /// Insert data using appender API with RecordBatch.
+    /// Insert data using appender API with RecordBatches.
     ///
     /// This is an optimized path for INSERT statements that avoids
-    /// converting RecordBatch to individual parameter values.
-    #[instrument(skip(self, batch), fields(session_id = %self.id, table_name = %table_name, rows = batch.num_rows()))]
+    /// converting RecordBatches to individual parameter values.
+    #[instrument(skip(self, batches), fields(session_id = %self.id, table_name = %table_name, rows = batches.iter().map(|b| b.num_rows()).sum::<usize>()))]
     pub fn insert_with_appender(
         &self,
         table_name: &str,
-        batch: arrow_array::RecordBatch,
+        batches: Vec<arrow_array::RecordBatch>,
     ) -> Result<usize, ServerError> {
         self.touch();
-        self.connection.insert_with_appender(table_name, batch)
+        self.connection.insert_with_appender(table_name, batches)
     }
 
     /// Get the schema of a table
