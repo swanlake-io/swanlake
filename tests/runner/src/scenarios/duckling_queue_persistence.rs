@@ -26,8 +26,9 @@ pub async fn run_duckling_queue_persistence(args: &CliArgs) -> Result<()> {
     conn.execute_update(&attach_sql)?;
     conn.execute_update("DROP TABLE IF EXISTS swanlake.dq_persist_target;")?;
 
+    conn.execute_update("CREATE TABLE swanlake.dq_persist_target (i INTEGER);")?;
     conn.execute_update(
-        "CREATE TABLE duckling_queue.dq_persist_target AS SELECT 1 AS id UNION ALL SELECT 2;",
+        "INSERT INTO duckling_queue.dq_persist_target SELECT 1 AS id UNION ALL SELECT 2;",
     )?;
 
     wait_for_arrow_chunks(&root, |count| count >= 1).await?;

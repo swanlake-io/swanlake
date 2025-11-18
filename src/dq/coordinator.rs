@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
@@ -10,6 +10,46 @@ use tracing::{debug, info, warn};
 use crate::dq::config::Settings;
 use crate::dq::storage::{DurableChunk, DurableStorage};
 use crate::error::ServerError;
+
+#[derive(Debug)]
+pub struct FlushTracker {
+    pending: Mutex<usize>,
+    signal: Condvar,
+}
+
+impl FlushTracker {
+    pub fn new() -> Self {
+        Self {
+            pending: Mutex::new(0),
+            signal: Condvar::new(),
+        }
+    }
+
+    pub fn track(&self) {
+        let mut guard = self.pending.lock().expect("flush tracker mutex poisoned");
+        *guard += 1;
+    }
+
+    pub fn complete(&self) {
+        let mut guard = self.pending.lock().expect("flush tracker mutex poisoned");
+        if *guard > 0 {
+            *guard -= 1;
+            if *guard == 0 {
+                self.signal.notify_all();
+            }
+        }
+    }
+
+    pub fn wait_for_idle(&self) {
+        let mut guard = self.pending.lock().expect("flush tracker mutex poisoned");
+        while *guard > 0 {
+            guard = self
+                .signal
+                .wait(guard)
+                .expect("flush tracker condvar poisoned");
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FlushPayload {
@@ -140,6 +180,7 @@ struct CoordinatorInner {
 pub struct DqCoordinator {
     settings: Settings,
     storage: Arc<DurableStorage>,
+    tracker: Arc<FlushTracker>,
     flush_tx: UnboundedSender<FlushPayload>,
     inner: Arc<Mutex<CoordinatorInner>>,
 }
@@ -148,6 +189,7 @@ impl DqCoordinator {
     pub fn new(
         settings: Settings,
         storage: Arc<DurableStorage>,
+        tracker: Arc<FlushTracker>,
         flush_tx: UnboundedSender<FlushPayload>,
     ) -> Result<Self, ServerError> {
         let inner = CoordinatorInner {
@@ -156,6 +198,7 @@ impl DqCoordinator {
         let coordinator = Self {
             settings,
             storage,
+            tracker,
             flush_tx,
             inner: Arc::new(Mutex::new(inner)),
         };
@@ -259,6 +302,7 @@ impl DqCoordinator {
         for payload in payloads {
             self.dispatch_payload(payload);
         }
+        self.wait_for_idle();
     }
 
     /// Re-queue payload data when a flush task fails.
@@ -289,9 +333,15 @@ impl DqCoordinator {
     }
 
     fn dispatch_payload(&self, payload: FlushPayload) {
+        self.tracker.track();
         if self.flush_tx.send(payload).is_err() {
+            self.tracker.complete();
             warn!("duckling queue flush channel dropped; dropping payload");
         }
+    }
+
+    pub fn wait_for_idle(&self) {
+        self.tracker.wait_for_idle();
     }
 
     fn restore_from_storage(&self) -> Result<usize, ServerError> {

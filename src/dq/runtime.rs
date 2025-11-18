@@ -6,7 +6,7 @@ use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
 use crate::dq::config::Settings;
-use crate::dq::coordinator::{DqCoordinator, FlushPayload};
+use crate::dq::coordinator::{DqCoordinator, FlushPayload, FlushTracker};
 use crate::dq::storage::DurableStorage;
 use crate::engine::EngineFactory;
 use crate::error::ServerError;
@@ -22,12 +22,19 @@ impl QueueRuntime {
     ) -> Result<(Arc<DqCoordinator>, Arc<Self>), ServerError> {
         let (tx, rx) = mpsc::unbounded_channel::<FlushPayload>();
         let storage = Arc::new(DurableStorage::new(settings.root_dir.clone())?);
-        let coordinator = Arc::new(DqCoordinator::new(settings.clone(), storage.clone(), tx)?);
+        let tracker = Arc::new(FlushTracker::new());
+        let coordinator = Arc::new(DqCoordinator::new(
+            settings.clone(),
+            storage.clone(),
+            tracker.clone(),
+            tx,
+        )?);
         let runtime = Arc::new(Self);
         spawn_flush_workers(
             factory,
             settings.clone(),
             storage.clone(),
+            tracker.clone(),
             coordinator.clone(),
             rx,
         );
@@ -50,6 +57,7 @@ fn spawn_flush_workers(
     factory: Arc<Mutex<EngineFactory>>,
     settings: Settings,
     storage: Arc<DurableStorage>,
+    tracker: Arc<FlushTracker>,
     coordinator: Arc<DqCoordinator>,
     mut rx: UnboundedReceiver<FlushPayload>,
 ) {
@@ -61,6 +69,7 @@ fn spawn_flush_workers(
             let coordinator_cloned = coordinator.clone();
             let settings_clone = settings.clone();
             let storage_clone = storage.clone();
+            let tracker_clone = tracker.clone();
             let retry_payload = payload.clone();
             tokio::spawn(async move {
                 let res = tokio::task::spawn_blocking(move || {
@@ -81,6 +90,7 @@ fn spawn_flush_workers(
                         coordinator_cloned.requeue(retry_payload);
                     }
                 }
+                tracker_clone.complete();
                 drop(permit);
             });
         }
