@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::config::ServerConfig;
-use crate::dq::QueueManager;
 use crate::service::SwanFlightSqlService;
 use anyhow::{Context, Result};
 use tonic::transport::Server;
@@ -31,24 +30,23 @@ async fn main() -> Result<()> {
         .bind_addr()
         .context("failed to resolve bind address")?;
 
-    let dq_manager = Arc::new(
-        QueueManager::new(&config)
-            .await
-            .context("failed to initialize duckling queue manager")?,
-    );
+    let factory = Arc::new(std::sync::Mutex::new(
+        crate::engine::EngineFactory::new(&config)
+            .context("failed to initialize engine factory")?,
+    ));
+
+    let dq_settings = crate::dq::config::Settings::from_config(&config);
+    let (dq_coordinator, dq_runtime) = dq::QueueRuntime::bootstrap(factory.clone(), dq_settings);
 
     // Create session registry (Phase 2: connection-based session persistence)
     let registry = Arc::new(
-        crate::session::registry::SessionRegistry::new(&config, Some(dq_manager.clone()))
-            .context("failed to initialize session registry")?,
+        crate::session::registry::SessionRegistry::new(
+            &config,
+            factory.clone(),
+            Some(dq_coordinator.clone()),
+        )
+        .context("failed to initialize session registry")?,
     );
-
-    // Initialize the QueueRuntime to start background tasks for queue rotation, scanning, flushing, and cleanup.
-    let dq_runtime = Arc::new(dq::QueueRuntime::new(
-        dq_manager.clone(),
-        registry.engine_factory(),
-        registry.clone(),
-    ));
 
     // Spawn periodic session cleanup task
     let registry_clone = registry.clone();

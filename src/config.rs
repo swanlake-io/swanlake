@@ -1,6 +1,4 @@
-use std::fs;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::Path;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -19,8 +17,6 @@ pub struct ServerConfig {
     pub session_timeout_seconds: Option<u64>,
     /// Log format: "compact" or "json".
     pub log_format: String,
-    /// Persistent directory root for Duckling Queue files.
-    pub duckling_queue_root: String,
     /// Time-based rotation threshold in seconds.
     pub duckling_queue_rotate_interval_seconds: u64,
     /// Size-based rotation threshold in bytes.
@@ -29,6 +25,8 @@ pub struct ServerConfig {
     pub duckling_queue_flush_interval_seconds: u64,
     /// Maximum number of parallel flush tasks.
     pub duckling_queue_max_parallel_flushes: usize,
+    /// Maximum number of buffered rows per target table before forcing a flush.
+    pub duckling_queue_buffer_max_rows: usize,
     /// Target schema name for flushing Duckling Queue data.
     pub duckling_queue_target_schema: String,
     /// Automatically create tables if they don't exist when flushing Duckling Queue data.
@@ -45,11 +43,11 @@ impl Default for ServerConfig {
             max_sessions: Some(100),
             session_timeout_seconds: Some(900),
             log_format: "compact".to_string(),
-            duckling_queue_root: "target/ducklake-tests/duckling_queue".to_string(),
             duckling_queue_rotate_interval_seconds: 300,
             duckling_queue_rotate_size_bytes: 100_000_000,
             duckling_queue_flush_interval_seconds: 60,
             duckling_queue_max_parallel_flushes: 2,
+            duckling_queue_buffer_max_rows: 50_000,
 
             duckling_queue_target_schema: "swanlake".to_string(),
             duckling_queue_auto_create_tables: false,
@@ -83,21 +81,6 @@ impl ServerConfig {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
-        let root = &self.duckling_queue_root;
-        let path = Path::new(root);
-        if !path.exists() {
-            fs::create_dir_all(path).with_context(|| {
-                format!(
-                    "failed to create duckling queue root directory '{}'",
-                    path.display()
-                )
-            })?;
-        } else if !path.is_dir() {
-            anyhow::bail!(
-                "duckling queue root path '{}' is not a directory",
-                path.display()
-            );
-        }
         Ok(())
     }
 }

@@ -18,6 +18,7 @@ pub struct ParsedStatement {
 pub struct TableReference {
     sql_name: String,
     logical_name: String,
+    parts: Vec<String>,
 }
 
 impl TableReference {
@@ -27,6 +28,10 @@ impl TableReference {
 
     pub fn logical_name(&self) -> &str {
         &self.logical_name
+    }
+
+    pub fn parts(&self) -> &[String] {
+        &self.parts
     }
 }
 
@@ -82,6 +87,14 @@ impl ParsedStatement {
         }
     }
 
+    /// Return the SQL for the INSERT source (VALUES/SELECT).
+    pub fn insert_source_sql(&self) -> Option<String> {
+        match &self.statement {
+            Statement::Insert(insert) => insert.source.as_ref().map(|query| query.to_string()),
+            _ => None,
+        }
+    }
+
     /// Convenience wrapper returning the unquoted, dot-separated table name.
     #[allow(dead_code)]
     pub fn get_insert_table_name(&self) -> Option<String> {
@@ -132,7 +145,7 @@ impl ParsedStatement {
 impl TableReference {
     fn from_object_name(name: &ObjectName) -> Self {
         let sql_name = name.to_string();
-        let logical_name = name
+        let parts = name
             .0
             .iter()
             .map(|part| {
@@ -140,11 +153,12 @@ impl TableReference {
                     .map(|ident| ident.value.clone())
                     .unwrap_or_else(|| part.to_string())
             })
-            .collect::<Vec<_>>()
-            .join(".");
+            .collect::<Vec<_>>();
+        let logical_name = parts.join(".");
         Self {
             sql_name,
             logical_name,
+            parts,
         }
     }
 }

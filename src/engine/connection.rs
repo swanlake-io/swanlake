@@ -202,18 +202,6 @@ impl DuckDbConnection {
         Ok(())
     }
 
-    /// Execute a closure with access to the inner duckdb::Connection
-    pub fn with_inner<F, R>(&self, f: F) -> Result<R, ServerError>
-    where
-        F: FnOnce(&duckdb::Connection) -> R,
-    {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
-        Ok(f(&conn))
-    }
-
     /// Insert data using DuckDB's appender API with a RecordBatch.
     ///
     /// This method is optimized for bulk inserts as it avoids converting

@@ -1,98 +1,36 @@
-use std::fs;
-use std::path::PathBuf;
 use std::time::Duration;
-
-use anyhow::{Context, Result};
 
 use crate::config::ServerConfig;
 
-/// Duckling Queue settings derived from configuration.
+/// Settings controlling the Duckling Queue buffering runtime.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub root: PathBuf,
-    pub rotate_interval: Duration,
-    pub rotate_size_bytes: u64,
+    /// Maximum number of buffered rows per table before forcing a flush.
+    pub buffer_max_rows: usize,
+    /// Maximum number of buffered bytes per table before forcing a flush.
+    pub buffer_max_bytes: u64,
+    /// Maximum amount of time data may sit in memory without being flushed.
+    pub buffer_max_age: Duration,
+    /// Interval for running the background age-based flush sweep.
     pub flush_interval: Duration,
+    /// Maximum number of concurrent flush tasks.
     pub max_parallel_flushes: usize,
-    pub lock_ttl: Duration,
+    /// Target schema in DuckLake that receives flushed data.
     pub target_schema: String,
+    /// Whether the runtime should attempt to auto-create target tables.
     pub auto_create_tables: bool,
 }
 
 impl Settings {
     pub fn from_config(config: &ServerConfig) -> Self {
-        let root = PathBuf::from(&config.duckling_queue_root);
-        let rotate_interval = Duration::from_secs(config.duckling_queue_rotate_interval_seconds);
-        let lock_ttl = if rotate_interval > Duration::ZERO {
-            let base = rotate_interval
-                .checked_mul(3)
-                .unwrap_or(Duration::from_secs(u64::MAX));
-            let min_ttl = Duration::from_secs(300); // 5 minutes minimum
-            let max_ttl = Duration::from_secs(1800); // 30 minutes maximum
-            base.max(min_ttl).min(max_ttl)
-        } else {
-            Duration::from_secs(900) // 15 minutes as fallback
-        };
         Self {
-            root,
-            rotate_interval,
-            rotate_size_bytes: config.duckling_queue_rotate_size_bytes,
+            buffer_max_rows: config.duckling_queue_buffer_max_rows,
+            buffer_max_bytes: config.duckling_queue_rotate_size_bytes,
+            buffer_max_age: Duration::from_secs(config.duckling_queue_rotate_interval_seconds),
             flush_interval: Duration::from_secs(config.duckling_queue_flush_interval_seconds),
-            max_parallel_flushes: config.duckling_queue_max_parallel_flushes,
-            lock_ttl,
+            max_parallel_flushes: config.duckling_queue_max_parallel_flushes.max(1),
             target_schema: config.duckling_queue_target_schema.clone(),
             auto_create_tables: config.duckling_queue_auto_create_tables,
         }
-    }
-}
-
-/// Directory layout (active/sealed/flushed) under the Duckling Queue root.
-#[derive(Debug, Clone)]
-pub struct QueueDirectories {
-    pub active: PathBuf,
-    pub sealed: PathBuf,
-    pub flushed: PathBuf,
-}
-
-impl QueueDirectories {
-    pub fn new(root: PathBuf) -> Result<Self> {
-        let dirs = Self {
-            active: root.join("active"),
-            sealed: root.join("sealed"),
-            flushed: root.join("flushed"),
-        };
-        dirs.ensure()?;
-        Ok(dirs)
-    }
-
-    fn ensure(&self) -> Result<()> {
-        fs::create_dir_all(&self.active)
-            .with_context(|| format!("failed to create {:?}", &self.active))?;
-        fs::create_dir_all(&self.sealed)
-            .with_context(|| format!("failed to create {:?}", &self.sealed))?;
-        fs::create_dir_all(&self.flushed)
-            .with_context(|| format!("failed to create {:?}", &self.flushed))?;
-        Ok(())
-    }
-}
-
-/// Shared queue context that can be cloned by per-session handles.
-#[derive(Debug, Clone)]
-pub struct QueueContext {
-    pub(crate) settings: Settings,
-    pub(crate) dirs: QueueDirectories,
-}
-
-impl QueueContext {
-    pub fn new(settings: Settings, dirs: QueueDirectories) -> Self {
-        Self { settings, dirs }
-    }
-
-    pub fn settings(&self) -> &Settings {
-        &self.settings
-    }
-
-    pub fn dirs(&self) -> &QueueDirectories {
-        &self.dirs
     }
 }

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Distributed locking module for SwanLake.
 //!
 //! This module provides distributed locking capabilities that can work across multiple
@@ -6,6 +7,7 @@
 
 mod postgres;
 
+#[allow(unused_imports)]
 pub use postgres::PostgresLock;
 
 use std::path::Path;
