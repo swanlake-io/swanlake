@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
@@ -182,6 +183,7 @@ pub struct DqCoordinator {
     storage: Arc<DurableStorage>,
     tracker: Arc<FlushTracker>,
     flush_tx: UnboundedSender<FlushPayload>,
+    persist_tx: mpsc::Sender<PersistJob>,
     inner: Arc<Mutex<CoordinatorInner>>,
 }
 
@@ -195,11 +197,13 @@ impl DqCoordinator {
         let inner = CoordinatorInner {
             tables: HashMap::new(),
         };
+        let persist_tx = spawn_persist_worker(storage.clone());
         let coordinator = Self {
             settings,
             storage,
             tracker,
             flush_tx,
+            persist_tx,
             inner: Arc::new(Mutex::new(inner)),
         };
         let restored = coordinator.restore_from_storage()?;
@@ -231,8 +235,7 @@ impl DqCoordinator {
             entry.ensure_schema(&schema_ref)?;
         }
 
-        let chunk_handle = self.storage.persist_chunk(table, &schema_ref, &batches)?;
-        let chunk = BufferedChunk::new(chunk_handle, batches);
+        let chunk = self.persist_chunk(table_key.clone(), schema_ref, batches)?;
         let mut maybe_payload = None;
         let inserted = {
             let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
@@ -340,6 +343,11 @@ impl DqCoordinator {
         }
     }
 
+    #[cfg(test)]
+    pub fn take_all_payloads_for_test(&self) -> Vec<FlushPayload> {
+        self.take_all_payloads()
+    }
+
     pub fn wait_for_idle(&self) {
         self.tracker.wait_for_idle();
     }
@@ -361,5 +369,108 @@ impl DqCoordinator {
             restored += 1;
         }
         Ok(restored)
+    }
+
+    fn persist_chunk(
+        &self,
+        table: String,
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+    ) -> Result<BufferedChunk, ServerError> {
+        let (tx, rx) = mpsc::channel();
+        self.persist_tx
+            .send(PersistJob {
+                table,
+                schema,
+                batches,
+                respond_to: tx,
+            })
+            .map_err(|_| {
+                ServerError::Internal(
+                    "duckling queue persistence worker stopped unexpectedly".to_string(),
+                )
+            })?;
+        rx.recv().map_err(|_| {
+            ServerError::Internal("duckling queue persistence worker response dropped".to_string())
+        })?
+    }
+}
+
+struct PersistJob {
+    table: String,
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    respond_to: mpsc::Sender<Result<BufferedChunk, ServerError>>,
+}
+
+fn spawn_persist_worker(storage: Arc<DurableStorage>) -> mpsc::Sender<PersistJob> {
+    let (tx, rx) = mpsc::channel::<PersistJob>();
+    thread::Builder::new()
+        .name("dq_persist_worker".to_string())
+        .spawn(move || {
+            while let Ok(job) = rx.recv() {
+                let result = storage
+                    .persist_chunk(&job.table, &job.schema, &job.batches)
+                    .map(|handle| BufferedChunk::new(handle, job.batches));
+                let _ = job.respond_to.send(result);
+            }
+        })
+        .expect("failed to spawn duckling queue persist worker");
+    tx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn test_settings(root: PathBuf) -> Settings {
+        Settings {
+            buffer_max_rows: usize::MAX,
+            buffer_max_bytes: u64::MAX,
+            buffer_max_age: Duration::from_secs(60),
+            flush_interval: Duration::from_secs(60),
+            max_parallel_flushes: 1,
+            target_catalog: "swanlake".to_string(),
+            root_dir: root,
+        }
+    }
+
+    fn sample_batch(schema: &Arc<Schema>) -> RecordBatch {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        RecordBatch::try_new(schema.clone(), vec![values]).expect("valid record batch")
+    }
+
+    #[test]
+    fn restores_chunks_after_restart() {
+        let temp = TempDir::new().expect("tempdir");
+        let settings = test_settings(temp.path().join("dq-root"));
+        let storage = Arc::new(DurableStorage::new(settings.root_dir.clone()).expect("storage"));
+        let tracker = Arc::new(FlushTracker::new());
+        let (flush_tx, _flush_rx) = tokio::sync::mpsc::unbounded_channel();
+        let coordinator = DqCoordinator::new(settings.clone(), storage.clone(), tracker, flush_tx)
+            .expect("coordinator");
+
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let batch = sample_batch(&schema);
+        let rows = coordinator
+            .enqueue("dq_restart_test", schema.as_ref().clone(), vec![batch])
+            .expect("enqueue");
+        assert_eq!(rows, 2);
+        drop(coordinator);
+
+        let tracker2 = Arc::new(FlushTracker::new());
+        let (flush_tx2, _flush_rx2) = tokio::sync::mpsc::unbounded_channel();
+        let coordinator2 = DqCoordinator::new(settings, storage, tracker2, flush_tx2)
+            .expect("recreated coordinator");
+
+        let payloads = coordinator2.take_all_payloads_for_test();
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].table, "dq_restart_test");
+        assert_eq!(payloads[0].total_rows(), 2);
     }
 }

@@ -136,16 +136,32 @@ impl DurableStorage {
 
     pub fn remove_chunks(&self, chunks: Vec<DurableChunk>) -> Result<(), ServerError> {
         for chunk in chunks {
-            match fs::remove_file(&chunk.path) {
-                Ok(_) => self.cleanup_table_dir(chunk.path.parent()),
+            let processed_path = processed_chunk_path(&chunk.path);
+            match fs::rename(&chunk.path, &processed_path) {
+                Ok(_) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                    self.cleanup_table_dir(chunk.path.parent())
+                    self.cleanup_table_dir(chunk.path.parent());
+                    continue;
                 }
                 Err(err) => {
                     return Err(ServerError::Internal(format!(
-                        "failed to remove duckling queue chunk {}: {err}",
+                        "failed to mark duckling queue chunk {} for cleanup: {err}",
                         chunk.path.display()
                     )));
+                }
+            }
+
+            match fs::remove_file(&processed_path) {
+                Ok(_) => self.cleanup_table_dir(processed_path.parent()),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    self.cleanup_table_dir(processed_path.parent())
+                }
+                Err(err) => {
+                    warn!(
+                        path = %processed_path.display(),
+                        error = %err,
+                        "failed to remove processed duckling queue chunk; will retry later"
+                    );
                 }
             }
         }
@@ -246,4 +262,10 @@ fn decode_table_dir_name(dir_name: &str) -> Option<String> {
         i += 2;
     }
     String::from_utf8(bytes).ok()
+}
+
+fn processed_chunk_path(original: &Path) -> PathBuf {
+    let mut processed = original.to_path_buf();
+    processed.set_extension("done");
+    processed
 }

@@ -163,9 +163,7 @@ fn statement_references_duckling_queue(statement: &Statement) -> bool {
             .0
             .first()
             .and_then(ObjectNamePart::as_ident)
-            .is_some_and(|ident| {
-                ident.value.eq_ignore_ascii_case("duckling_queue")
-            })
+            .is_some_and(|ident| ident.value.eq_ignore_ascii_case("duckling_queue"))
         {
             found = true;
             ControlFlow::Break(())
