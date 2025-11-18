@@ -107,6 +107,18 @@ impl SwanFlightSqlService {
                 error!(param = %param, "unsupported parameter type");
                 Status::invalid_argument(format!("unsupported parameter type: {param}"))
             }
+            ServerError::DucklingQueueDisabled => {
+                error!("duckling queue runtime is disabled");
+                Status::failed_precondition(
+                    "duckling queue runtime is disabled; set SWANLAKE_DUCKLING_QUEUE_ENABLED=true",
+                )
+            }
+            ServerError::DucklingQueueWriteOnly => {
+                error!("duckling queue tables are write-only");
+                Status::invalid_argument(
+                    "duckling queue tables are write-only; only INSERT INTO duckling_queue.* is allowed",
+                )
+            }
             ServerError::Internal(msg) => {
                 error!(msg = %msg, "internal error");
                 Status::internal(format!("internal error: {msg}"))

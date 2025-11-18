@@ -4,8 +4,8 @@ SwanLake reads all settings from environment variables using the `SWANLAKE_` pre
 `ServerConfig::load()` merges sources in the following order:
 
 1. Built-in defaults (see `src/config.rs`)
-2. Values from a configuration file passed via CLI (`--config`, if provided)
-3. Environment variables (`SWANLAKE_*`)
+2. Environment variables (`SWANLAKE_*`) – values from a local `.env` file are also picked up
+   because the server calls `dotenvy::dotenv()` before loading the configuration.
 
 Unset options fall back to their defaults. All numeric values are expressed in base-10,
 and boolean flags accept `true/false` (case-insensitive).
@@ -85,6 +85,7 @@ settings control when flushes happen and how aggressive the runtime should be.
 | Env Var | Description | Default |
 | --- | --- | --- |
 | `SWANLAKE_DUCKLING_QUEUE_BUFFER_MAX_ROWS` | Flush once a table buffers this many rows | `50_000` |
+| `SWANLAKE_DUCKLING_QUEUE_ENABLED` | Start the Duckling Queue runtime and intercept `INSERT INTO duckling_queue.*` statements | `false` |
 | `SWANLAKE_DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Flush when buffered bytes exceed this value | `100_000_000` |
 | `SWANLAKE_DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Maximum age (seconds) to hold buffered data before the sweeper flushes it | `300` |
 | `SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the sweeper checks for stale buffers | `60` |
@@ -99,8 +100,8 @@ Admin commands:
 - `PRAGMA duckling_queue.cleanup;` — alias for the same flush command (legacy compatibility).
 
 If the server logs that a flush failed, check DuckLake connectivity (the runtime retries and
-requeues the payload). When the coordinator reports “duckling queue is not enabled”, ensure the
-process was started with the configuration above; the default build enables the buffer.
+requeues the payload). When clients receive “duckling queue runtime is disabled…”, set
+`SWANLAKE_DUCKLING_QUEUE_ENABLED=true` and restart the service.
 
 ## Validation
 

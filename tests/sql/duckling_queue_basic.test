@@ -58,5 +58,14 @@ SELECT * FROM swanlake.queue_sink ORDER BY i
 statement ok
 PRAGMA duckling_queue.cleanup;
 
+statement error
+SELECT 1 FROM duckling_queue.queue_sink WHERE i > 0;
+
+statement error
+DELETE FROM duckling_queue.queue_sink WHERE i > 0;
+
+statement error
+UPDATE duckling_queue.queue_sink SET i = 10 WHERE i = 1;
+
 statement ok
 DROP TABLE IF EXISTS swanlake.queue_sink;

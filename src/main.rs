@@ -35,16 +35,22 @@ async fn main() -> Result<()> {
             .context("failed to initialize engine factory")?,
     ));
 
-    let dq_settings = crate::dq::config::Settings::from_config(&config);
-    let (dq_coordinator, dq_runtime) = dq::QueueRuntime::bootstrap(factory.clone(), dq_settings)
-        .map_err(|err| anyhow!("failed to start duckling queue runtime: {err}"))?;
+    let (dq_coordinator, dq_runtime) = if config.duckling_queue_enabled {
+        let dq_settings = crate::dq::config::Settings::from_config(&config);
+        let (coordinator, runtime) = dq::QueueRuntime::bootstrap(factory.clone(), dq_settings)
+            .map_err(|err| anyhow!("failed to start duckling queue runtime: {err}"))?;
+        (Some(coordinator), Some(runtime))
+    } else {
+        info!("duckling queue disabled; skipping runtime bootstrap");
+        (None, None)
+    };
 
     // Create session registry (Phase 2: connection-based session persistence)
     let registry = Arc::new(
         crate::session::registry::SessionRegistry::new(
             &config,
             factory.clone(),
-            Some(dq_coordinator.clone()),
+            dq_coordinator.clone(),
         )
         .context("failed to initialize session registry")?,
     );
@@ -67,7 +73,7 @@ async fn main() -> Result<()> {
         .context("failed to start DuckDB UI server")?;
 
     // Pass dq_runtime to the service to keep the QueueRuntime alive throughout the server's lifetime.
-    let flight_service = SwanFlightSqlService::new(registry, Some(dq_runtime));
+    let flight_service = SwanFlightSqlService::new(registry, dq_runtime);
 
     // Set up gRPC health service
     let (health_reporter, health_service) = tonic_health::server::health_reporter();

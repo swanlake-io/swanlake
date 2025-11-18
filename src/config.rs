@@ -9,6 +9,8 @@ pub struct ServerConfig {
     pub port: u16,
     /// Enable DuckDB's embedded UI server (listens on port 4213).
     pub duckdb_ui_server_enabled: bool,
+    /// Enable Duckling Queue ingestion.
+    pub duckling_queue_enabled: bool,
     /// Optional SQL statement executed during startup for ducklake integration.
     pub ducklake_init_sql: Option<String>,
     /// Maximum number of concurrent sessions.
@@ -39,6 +41,7 @@ impl Default for ServerConfig {
             host: "0.0.0.0".to_string(),
             port: 4214,
             duckdb_ui_server_enabled: false,
+            duckling_queue_enabled: false,
             ducklake_init_sql: None,
             max_sessions: Some(100),
             session_timeout_seconds: Some(900),

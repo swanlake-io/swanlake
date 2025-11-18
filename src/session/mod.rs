@@ -46,6 +46,33 @@ pub struct PreparedStatementMeta {
     pub ephemeral: bool,
 }
 
+fn contains_duckling_queue_keyword(sql: &str) -> bool {
+    contains_case_insensitive(sql, "duckling_queue")
+}
+
+fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    if haystack_bytes.len() < needle_bytes.len() {
+        return false;
+    }
+
+    'outer: for window in haystack_bytes.windows(needle_bytes.len()) {
+        for (candidate, target) in window.iter().zip(needle_bytes.iter()) {
+            if !candidate.eq_ignore_ascii_case(target) {
+                continue 'outer;
+            }
+        }
+        return true;
+    }
+
+    false
+}
+
 /// Builder-style options passed in when *creating* a prepared statement.
 ///
 /// These options capture contextual data available up front (e.g. a schema
@@ -179,6 +206,7 @@ impl Session {
     /// Execute a SELECT query
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn execute_query(&self, sql: &str) -> Result<QueryResult, ServerError> {
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.execute_query(sql)
     }
@@ -190,6 +218,7 @@ impl Session {
         sql: &str,
         params: &[Value],
     ) -> Result<QueryResult, ServerError> {
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.execute_query_with_params(sql, params)
     }
@@ -205,6 +234,7 @@ impl Session {
             return Ok(result);
         }
 
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.execute_statement(sql)
     }
@@ -223,7 +253,7 @@ impl Session {
             let dq = self
                 .dq_coordinator
                 .as_ref()
-                .ok_or_else(|| ServerError::Internal("duckling queue is not enabled".into()))?;
+                .ok_or(ServerError::DucklingQueueDisabled)?;
             dq.force_flush_all();
             Ok(Some(0))
         } else {
@@ -259,7 +289,7 @@ impl Session {
         let dq = self
             .dq_coordinator
             .as_ref()
-            .ok_or_else(|| ServerError::Internal("duckling queue is not enabled".into()))?;
+            .ok_or(ServerError::DucklingQueueDisabled)?;
 
         let result = if let Some(values) = params {
             self.connection
@@ -283,6 +313,20 @@ impl Session {
         Ok(Some(total_rows as i64))
     }
 
+    fn ensure_duckling_queue_usage_allowed(&self, sql: &str) -> Result<(), ServerError> {
+        if !contains_duckling_queue_keyword(sql) {
+            return Ok(());
+        }
+
+        if let Some(parsed) = ParsedStatement::parse(sql) {
+            if parsed.references_duckling_queue_relation() {
+                return Err(ServerError::DucklingQueueWriteOnly);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Execute a statement with parameters
     #[instrument(skip(self, params), fields(session_id = %self.id, sql = %sql))]
     pub fn execute_statement_with_params(
@@ -297,6 +341,7 @@ impl Session {
             return Ok(result as usize);
         }
 
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.execute_statement_with_params(sql, params)
     }
@@ -304,6 +349,7 @@ impl Session {
     /// Get schema for a query
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn schema_for_query(&self, sql: &str) -> Result<arrow_schema::Schema, ServerError> {
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.schema_for_query(sql)
     }

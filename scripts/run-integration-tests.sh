@@ -12,6 +12,7 @@ TEST_DIR="$ROOT_DIR/target/tmp/all-sql-tests-$(date +%s)"
 rm -rf "$TEST_DIR"
 mkdir -p "$TEST_DIR"
 
+export SWANLAKE_DUCKLING_QUEUE_ENABLED=true
 export SWANLAKE_DUCKLING_QUEUE_ROOT="$TEST_DIR/duckling_queue"
 mkdir -p "$SWANLAKE_DUCKLING_QUEUE_ROOT"
 
