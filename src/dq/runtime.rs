@@ -7,6 +7,7 @@ use tracing::{debug, info, warn};
 
 use crate::dq::config::Settings;
 use crate::dq::coordinator::{DqCoordinator, FlushPayload};
+use crate::dq::storage::DurableStorage;
 use crate::engine::EngineFactory;
 use crate::error::ServerError;
 
@@ -18,13 +19,20 @@ impl QueueRuntime {
     pub fn bootstrap(
         factory: Arc<Mutex<EngineFactory>>,
         settings: Settings,
-    ) -> (Arc<DqCoordinator>, Arc<Self>) {
+    ) -> Result<(Arc<DqCoordinator>, Arc<Self>), ServerError> {
         let (tx, rx) = mpsc::unbounded_channel::<FlushPayload>();
-        let coordinator = Arc::new(DqCoordinator::new(settings.clone(), tx));
+        let storage = Arc::new(DurableStorage::new(settings.root_dir.clone())?);
+        let coordinator = Arc::new(DqCoordinator::new(settings.clone(), storage.clone(), tx)?);
         let runtime = Arc::new(Self);
-        spawn_flush_workers(factory, settings.clone(), coordinator.clone(), rx);
+        spawn_flush_workers(
+            factory,
+            settings.clone(),
+            storage.clone(),
+            coordinator.clone(),
+            rx,
+        );
         spawn_age_sweeper(coordinator.clone(), settings.flush_interval);
-        (coordinator, runtime)
+        Ok((coordinator, runtime))
     }
 }
 
@@ -41,6 +49,7 @@ fn spawn_age_sweeper(coordinator: Arc<DqCoordinator>, interval: Duration) {
 fn spawn_flush_workers(
     factory: Arc<Mutex<EngineFactory>>,
     settings: Settings,
+    storage: Arc<DurableStorage>,
     coordinator: Arc<DqCoordinator>,
     mut rx: UnboundedReceiver<FlushPayload>,
 ) {
@@ -51,10 +60,11 @@ fn spawn_flush_workers(
             let factory_cloned = factory.clone();
             let coordinator_cloned = coordinator.clone();
             let settings_clone = settings.clone();
+            let storage_clone = storage.clone();
             let retry_payload = payload.clone();
             tokio::spawn(async move {
                 let res = tokio::task::spawn_blocking(move || {
-                    flush_payload(factory_cloned, &settings_clone, payload)
+                    flush_payload(factory_cloned, &settings_clone, storage_clone, payload)
                 })
                 .await;
 
@@ -80,19 +90,25 @@ fn spawn_flush_workers(
 fn flush_payload(
     factory: Arc<Mutex<EngineFactory>>,
     settings: &Settings,
+    storage: Arc<DurableStorage>,
     payload: FlushPayload,
 ) -> Result<(), ServerError> {
-    if payload.batches.is_empty() {
+    if payload.is_empty() {
         return Ok(());
     }
 
+    let rows = payload.total_rows();
+    let table = payload.table.clone();
+    let (batches, chunk_handles) = payload.into_batches_and_chunks();
+
     info!(
-        table = %payload.table,
-        rows = payload.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+        table = %table,
+        rows = rows,
         "flushing duckling queue payload"
     );
 
     let conn = factory.lock().unwrap().create_connection()?;
-    conn.insert_with_appender(&settings.target_catalog, &payload.table, payload.batches)?;
+    conn.insert_with_appender(&settings.target_catalog, &table, batches)?;
+    storage.remove_chunks(chunk_handles)?;
     Ok(())
 }

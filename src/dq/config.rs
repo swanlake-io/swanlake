@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::config::ServerConfig;
@@ -17,6 +18,8 @@ pub struct Settings {
     pub max_parallel_flushes: usize,
     /// Target catalog in DuckLake that receives flushed data.
     pub target_catalog: String,
+    /// Root directory for persisted buffered chunks.
+    pub root_dir: PathBuf,
 }
 
 impl Settings {
@@ -28,6 +31,7 @@ impl Settings {
             flush_interval: Duration::from_secs(config.duckling_queue_flush_interval_seconds),
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes.max(1),
             target_catalog: config.duckling_queue_target_catalog.clone(),
+            root_dir: PathBuf::from(&config.duckling_queue_root),
         }
     }
 }

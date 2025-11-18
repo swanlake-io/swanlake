@@ -11,12 +11,21 @@ statement ok
 DROP TABLE IF EXISTS swanlake.queue_sink;
 
 statement ok
-CREATE TABLE duckling_queue.queue_sink AS SELECT 1 AS i UNION ALL SELECT 2;
+CREATE TABLE swanlake.queue_sink(i INTEGER);
+
+statement ok
+INSERT INTO duckling_queue.queue_sink SELECT 1 AS i UNION ALL SELECT 2;
 
 query I
-SELECT COUNT(*) FROM duckling_queue.queue_sink
+SELECT count(*) >= 1
+FROM glob('__TEST_DIR__/duckling_queue/table-*/*.arrow')
 ----
-2
+true
+
+query I
+SELECT COUNT(*) FROM swanlake.queue_sink
+----
+0
 
 statement ok
 PRAGMA duckling_queue.flush;
@@ -26,17 +35,17 @@ SELECT COUNT(*) FROM swanlake.queue_sink
 ----
 2
 
-statement error
-SELECT COUNT(*) FROM duckling_queue.queue_sink;
-
 query I
-SELECT count(*) >= 1
-FROM glob('__TEST_DIR__/duckling_queue/flushed/*.db')
+SELECT count(*) = 0
+FROM glob('__TEST_DIR__/duckling_queue/table-*/*.arrow')
 ----
 true
 
+statement error
+SELECT COUNT(*) FROM duckling_queue.queue_sink;
+
 statement ok
-CREATE TABLE duckling_queue.queue_sink AS SELECT 3 AS i UNION ALL SELECT 4;
+INSERT INTO duckling_queue.queue_sink SELECT 3 AS i UNION ALL SELECT 4;
 
 statement ok
 PRAGMA duckling_queue.flush;
@@ -51,3 +60,6 @@ SELECT * FROM swanlake.queue_sink ORDER BY i
 
 statement ok
 PRAGMA duckling_queue.cleanup;
+
+statement ok
+DROP TABLE IF EXISTS swanlake.queue_sink;

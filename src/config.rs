@@ -29,6 +29,8 @@ pub struct ServerConfig {
     pub duckling_queue_buffer_max_rows: usize,
     /// Target catalog name for flushing Duckling Queue data.
     pub duckling_queue_target_catalog: String,
+    /// Directory where the Duckling Queue persists buffered batches.
+    pub duckling_queue_root: String,
 }
 
 impl Default for ServerConfig {
@@ -48,6 +50,7 @@ impl Default for ServerConfig {
             duckling_queue_buffer_max_rows: 50_000,
 
             duckling_queue_target_catalog: "swanlake".to_string(),
+            duckling_queue_root: "target/duckling_queue".to_string(),
         }
     }
 }

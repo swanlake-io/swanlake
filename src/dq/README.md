@@ -1,6 +1,6 @@
 # Duckling Queue (DQ) – Server-Side Buffering
 
-Duckling Queue prevents clients from flooding DuckLake/Postgres/S3 with many tiny files. Instead of attaching a DuckDB database per session, SwanLake now captures `INSERT INTO duckling_queue.*` statements, materializes the source query once, and buffers the resulting Arrow record batches in memory per target table. Background workers aggregate those batches and flush them to DuckLake when thresholds are met.
+Duckling Queue prevents clients from flooding DuckLake/Postgres/S3 with many tiny files. Instead of attaching a DuckDB database per session, SwanLake now captures `INSERT INTO duckling_queue.*` statements, materializes the source query once, and buffers the resulting Arrow record batches per target table. Each enqueue is also written to disk under `DUCKLING_QUEUE_ROOT` so queued data survives process crashes. Background workers aggregate those batches and flush them to DuckLake when thresholds are met.
 
 ## Why the redesign?
 
@@ -39,6 +39,9 @@ coalesced data into {target_catalog}.{table}
   - flush workers (bounded by `max_parallel_flushes`) that write payloads via DuckDB’s appender API
   - age sweeper that asks the coordinator to flush stale buffers
 
+- **Durable storage (`src/dq/storage.rs`)**  
+  Persists every buffered chunk as an Arrow IPC file so crash recovery simply replays the surviving files. Flush workers delete chunk files after a successful write.
+
 - **`Session` integration (`src/session/mod.rs`)**  
   Uses `sqlparser` to detect `INSERT INTO duckling_queue.*`, rewrites them into plain SELECT queries, and hands the resulting Arrow batches to the coordinator. `PRAGMA duckling_queue.flush` now just asks the coordinator to flush every buffer.
 
@@ -49,7 +52,7 @@ coalesced data into {target_catalog}.{table}
 
 | Config key | Purpose | Default |
 | --- | --- | --- |
-| `DUCKLING_QUEUE_ROOT` | Reserved directory for future persistence/metrics | `target/ducklake-tests/duckling_queue` |
+| `DUCKLING_QUEUE_ROOT` | Directory where buffered batches are persisted between flushes | `target/duckling_queue` |
 | `DUCKLING_QUEUE_BUFFER_MAX_ROWS` | Flush once a table accumulates this many rows | `50_000` |
 | `DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Flush when buffered bytes exceed this value | `100_000_000` |
 | `DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Maximum age of buffered data before a sweep flushes it | `300` |
@@ -62,7 +65,7 @@ All settings map directly to `ServerConfig` fields.
 ## Operational Notes
 
 - `PRAGMA duckling_queue.flush`/`CALL duckling_queue_flush()` – force all buffers to flush immediately.
-- In-flight batches live only in memory right now; if SwanLake crashes, those batches are lost. Clients should treat DQ as an at-least-once best-effort buffer.
+- Buffered batches are persisted under `DUCKLING_QUEUE_ROOT`, so pending data is replayed automatically after a crash. Flushes remain at-least-once: data that was already written to DuckLake may be retried after a failure.
 - If DuckLake is unreachable, flush failures are logged and the payload is requeued, applying natural back-pressure on new inserts for that table.
 
 This new design keeps the user-facing SQL surface unchanged while drastically simplifying the implementation and avoiding the pathological file explosion observed previously.

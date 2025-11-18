@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::config::ServerConfig;
 use crate::service::SwanFlightSqlService;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tonic::transport::Server;
 
 use tracing::info;
@@ -36,7 +36,8 @@ async fn main() -> Result<()> {
     ));
 
     let dq_settings = crate::dq::config::Settings::from_config(&config);
-    let (dq_coordinator, dq_runtime) = dq::QueueRuntime::bootstrap(factory.clone(), dq_settings);
+    let (dq_coordinator, dq_runtime) = dq::QueueRuntime::bootstrap(factory.clone(), dq_settings)
+        .map_err(|err| anyhow!("failed to start duckling queue runtime: {err}"))?;
 
     // Create session registry (Phase 2: connection-based session persistence)
     let registry = Arc::new(
