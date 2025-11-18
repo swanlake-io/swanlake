@@ -326,6 +326,9 @@ pub(crate) async fn do_put_prepared_statement_update(
             } else {
                 let table_sql_name = table_ref.sql_name().to_string();
                 let table_logical_name = table_ref.logical_name().to_string();
+                let parts = table_ref.parts();
+                let catalog_name = parts[0].to_string();
+                let table_name = parts[1].to_string();
                 let insert_columns = parsed.get_insert_columns();
 
                 info!(
@@ -353,7 +356,7 @@ pub(crate) async fn do_put_prepared_statement_update(
                         batches
                     };
                     let total_rows = session_clone
-                        .insert_with_appender(&table_logical_name, batches_to_use)
+                        .insert_with_appender(&catalog_name, &table_name, batches_to_use)
                         .map_err(|e| {
                             error!(
                                 %e,

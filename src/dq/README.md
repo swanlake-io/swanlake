@@ -26,7 +26,7 @@ DQ coordinator buffers RecordBatches per table
              └─ periodic sweeper flushes buffers that sat for too long
              ▼
 Flush workers use dedicated DuckDB connections to insert the
-coalesced data into {target_schema}.{table}
+coalesced data into {target_catalog}.{table}
 ```
 
 ### Key Components
@@ -55,7 +55,7 @@ coalesced data into {target_schema}.{table}
 | `DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Maximum age of buffered data before a sweep flushes it | `300` |
 | `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the sweeper runs | `60` |
 | `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
-| `DUCKLING_QUEUE_TARGET_SCHEMA` | Destination schema for flushed tables | `swanlake` |
+| `DUCKLING_QUEUE_TARGET_CATALOG` | Destination catalog for flushed tables | `swanlake` |
 
 All settings map directly to `ServerConfig` fields.
 

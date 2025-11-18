@@ -15,8 +15,8 @@ pub struct Settings {
     pub flush_interval: Duration,
     /// Maximum number of concurrent flush tasks.
     pub max_parallel_flushes: usize,
-    /// Target schema in DuckLake that receives flushed data.
-    pub target_schema: String,
+    /// Target catalog in DuckLake that receives flushed data.
+    pub target_catalog: String,
 }
 
 impl Settings {
@@ -27,7 +27,7 @@ impl Settings {
             buffer_max_age: Duration::from_secs(config.duckling_queue_rotate_interval_seconds),
             flush_interval: Duration::from_secs(config.duckling_queue_flush_interval_seconds),
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes.max(1),
-            target_schema: config.duckling_queue_target_schema.clone(),
+            target_catalog: config.duckling_queue_target_catalog.clone(),
         }
     }
 }

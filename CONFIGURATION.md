@@ -89,7 +89,7 @@ settings control when flushes happen and how aggressive the runtime should be.
 | `SWANLAKE_DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Maximum age (seconds) to hold buffered data before the sweeper flushes it | `300` |
 | `SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the sweeper checks for stale buffers | `60` |
 | `SWANLAKE_DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
-| `SWANLAKE_DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema for flushed tables | `swanlake` |
+| `SWANLAKE_DUCKLING_QUEUE_TARGET_CATALOG` | Target catalog for flushed tables | `swanlake` |
 
 Admin commands:
 

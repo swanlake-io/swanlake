@@ -312,14 +312,16 @@ impl Session {
     ///
     /// This is an optimized path for INSERT statements that avoids
     /// converting RecordBatches to individual parameter values.
-    #[instrument(skip(self, batches), fields(session_id = %self.id, table_name = %table_name, rows = batches.iter().map(|b| b.num_rows()).sum::<usize>()))]
+    #[instrument(skip(self, batches), fields(session_id = %self.id, catalog_name = %catalog_name, table_name = %table_name, rows = batches.iter().map(|b| b.num_rows()).sum::<usize>()))]
     pub fn insert_with_appender(
         &self,
+        catalog_name: &str,
         table_name: &str,
         batches: Vec<arrow_array::RecordBatch>,
     ) -> Result<usize, ServerError> {
         self.touch();
-        self.connection.insert_with_appender(table_name, batches)
+        self.connection
+            .insert_with_appender(catalog_name, table_name, batches)
     }
 
     /// Get the schema of a table

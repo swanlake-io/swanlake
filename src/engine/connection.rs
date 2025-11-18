@@ -13,26 +13,6 @@ use tracing::{debug, info, instrument};
 
 use crate::error::ServerError;
 
-fn parse_fully_qualified_table(table_name: &str) -> Result<(&str, &str), ServerError> {
-    let mut parts = table_name.split('.');
-    let schema = parts
-        .next()
-        .ok_or_else(|| ServerError::Internal("table name missing schema".into()))?;
-    let table = parts
-        .next()
-        .ok_or_else(|| ServerError::Internal("table name missing table component".into()))?;
-    if parts.next().is_some() {
-        return Err(ServerError::Internal(
-            "table name must be in the form schema.table".into(),
-        ));
-    }
-    if schema.is_empty() || table.is_empty() {
-        return Err(ServerError::Internal(
-            "table name must not contain empty schema or table".into(),
-        ));
-    }
-    Ok((schema, table))
-}
 use crate::types::duckdb_type_to_arrow;
 
 /// Result of a query execution
@@ -230,24 +210,25 @@ impl DuckDbConnection {
     ///
     /// # Arguments
     ///
+    /// * `catalog_name` - The name of the catalog
     /// * `table_name` - The name of the table to insert into
     /// * `batches` - The RecordBatches containing data to insert
     ///
     /// # Returns
     ///
     /// The number of rows inserted
-    #[instrument(skip(self, batches), fields(table_name = %table_name, rows = batches.iter().map(|b| b.num_rows()).sum::<usize>()))]
+    #[instrument(skip(self, batches), fields(catalog_name = %catalog_name, table_name = %table_name, rows = batches.iter().map(|b| b.num_rows()).sum::<usize>()))]
     pub fn insert_with_appender(
         &self,
+        catalog_name: &str,
         table_name: &str,
         batches: Vec<RecordBatch>,
     ) -> Result<usize, ServerError> {
-        let (catalog, table) = parse_fully_qualified_table(table_name)?;
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         info!(
             "appender to {}.{} with total rows {} and column {}",
-            catalog,
-            table,
+            catalog_name,
+            table_name,
             total_rows,
             batches.first().map(|b| b.num_columns()).unwrap_or(0)
         );
@@ -256,8 +237,8 @@ impl DuckDbConnection {
             .conn
             .lock()
             .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
-        conn.execute(&format!("USE {};", catalog), [])?;
-        let mut appender = conn.appender(table)?;
+        conn.execute(&format!("USE {};", catalog_name), [])?;
+        let mut appender = conn.appender(table_name)?;
         for batch in batches {
             appender.append_record_batch(batch)?;
         }
@@ -265,7 +246,7 @@ impl DuckDbConnection {
 
         debug!(
             rows = total_rows,
-            table = %table,
+            table = %table_name,
             "inserted data using appender"
         );
 

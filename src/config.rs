@@ -27,8 +27,8 @@ pub struct ServerConfig {
     pub duckling_queue_max_parallel_flushes: usize,
     /// Maximum number of buffered rows per target table before forcing a flush.
     pub duckling_queue_buffer_max_rows: usize,
-    /// Target schema name for flushing Duckling Queue data.
-    pub duckling_queue_target_schema: String,
+    /// Target catalog name for flushing Duckling Queue data.
+    pub duckling_queue_target_catalog: String,
 }
 
 impl Default for ServerConfig {
@@ -47,7 +47,7 @@ impl Default for ServerConfig {
             duckling_queue_max_parallel_flushes: 2,
             duckling_queue_buffer_max_rows: 50_000,
 
-            duckling_queue_target_schema: "swanlake".to_string(),
+            duckling_queue_target_catalog: "swanlake".to_string(),
         }
     }
 }

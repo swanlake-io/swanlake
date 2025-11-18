@@ -93,7 +93,6 @@ fn flush_payload(
     );
 
     let conn = factory.lock().unwrap().create_connection()?;
-    let target = format!("{}.{}", &settings.target_schema, &payload.table);
-    conn.insert_with_appender(&target, payload.batches)?;
+    conn.insert_with_appender(&settings.target_catalog, &payload.table, payload.batches)?;
     Ok(())
 }
