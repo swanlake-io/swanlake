@@ -11,6 +11,7 @@ pub async fn run(args: &CliArgs) -> Result<()> {
 
     let mut client = FlightSQLClient::connect(args.endpoint())
         .context("failed to connect to FlightSQL server")?;
+    client.exec("use swanlake")?;
 
     basic_appender_insert(&mut client)?;
     column_order_with_quoted_table(&mut client)?;

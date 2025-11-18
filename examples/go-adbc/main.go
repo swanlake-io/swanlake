@@ -14,6 +14,8 @@ import (
 )
 
 var schema = `
+use swanlake;
+
 CREATE TABLE IF NOT EXISTS person (
     first_name VARCHAR,
     last_name VARCHAR,

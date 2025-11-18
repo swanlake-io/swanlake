@@ -327,8 +327,14 @@ pub(crate) async fn do_put_prepared_statement_update(
                 let table_sql_name = table_ref.sql_name().to_string();
                 let table_logical_name = table_ref.logical_name().to_string();
                 let parts = table_ref.parts();
-                let catalog_name = parts[0].to_string();
-                let table_name = parts[1].to_string();
+                let (catalog_name, table_name) = if parts.len() == 1 {
+                    (
+                        service.registry.target_catalog().to_string(),
+                        parts[0].to_string(),
+                    )
+                } else {
+                    (parts[0].to_string(), parts[1].to_string())
+                };
                 let insert_columns = parsed.get_insert_columns();
 
                 info!(

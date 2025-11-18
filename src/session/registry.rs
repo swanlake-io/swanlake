@@ -28,6 +28,7 @@ pub struct SessionRegistry {
     factory: Arc<Mutex<EngineFactory>>,
     max_sessions: usize,
     session_timeout: Duration,
+    target_catalog: String,
 }
 
 struct RegistryInner {
@@ -60,11 +61,16 @@ impl SessionRegistry {
             factory,
             max_sessions,
             session_timeout,
+            target_catalog: config.duckling_queue_target_catalog.clone(),
         })
     }
 
     pub fn engine_factory(&self) -> Arc<Mutex<EngineFactory>> {
         self.factory.clone()
+    }
+
+    pub fn target_catalog(&self) -> &str {
+        &self.target_catalog
     }
 
     /// Clean up idle sessions that have exceeded the timeout
