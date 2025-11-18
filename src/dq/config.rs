@@ -17,8 +17,6 @@ pub struct Settings {
     pub max_parallel_flushes: usize,
     /// Target schema in DuckLake that receives flushed data.
     pub target_schema: String,
-    /// Whether the runtime should attempt to auto-create target tables.
-    pub auto_create_tables: bool,
 }
 
 impl Settings {
@@ -30,7 +28,6 @@ impl Settings {
             flush_interval: Duration::from_secs(config.duckling_queue_flush_interval_seconds),
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes.max(1),
             target_schema: config.duckling_queue_target_schema.clone(),
-            auto_create_tables: config.duckling_queue_auto_create_tables,
         }
     }
 }

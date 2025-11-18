@@ -12,6 +12,27 @@ use duckdb::{params_from_iter, Connection};
 use tracing::{debug, info, instrument};
 
 use crate::error::ServerError;
+
+fn parse_fully_qualified_table(table_name: &str) -> Result<(&str, &str), ServerError> {
+    let mut parts = table_name.split('.');
+    let schema = parts
+        .next()
+        .ok_or_else(|| ServerError::Internal("table name missing schema".into()))?;
+    let table = parts
+        .next()
+        .ok_or_else(|| ServerError::Internal("table name missing table component".into()))?;
+    if parts.next().is_some() {
+        return Err(ServerError::Internal(
+            "table name must be in the form schema.table".into(),
+        ));
+    }
+    if schema.is_empty() || table.is_empty() {
+        return Err(ServerError::Internal(
+            "table name must not contain empty schema or table".into(),
+        ));
+    }
+    Ok((schema, table))
+}
 use crate::types::duckdb_type_to_arrow;
 
 /// Result of a query execution
@@ -221,10 +242,12 @@ impl DuckDbConnection {
         table_name: &str,
         batch: RecordBatch,
     ) -> Result<usize, ServerError> {
+        let (schema, table) = parse_fully_qualified_table(table_name)?;
         let row_count = batch.num_rows();
         info!(
-            "appender to {} with row {} and column {}",
-            table_name,
+            "appender to {}.{} with row {} and column {}",
+            schema,
+            table,
             row_count,
             batch.num_columns()
         );
@@ -233,13 +256,14 @@ impl DuckDbConnection {
             .conn
             .lock()
             .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
+        // let mut appender = conn.appender_to_db(table, schema)?;
         let mut appender = conn.appender(table_name)?;
         appender.append_record_batch(batch)?;
         appender.flush()?;
 
         debug!(
             rows = row_count,
-            table = %table_name,
+            table = %table,
             "inserted data using appender"
         );
 

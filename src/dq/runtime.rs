@@ -1,13 +1,14 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use arrow_array::Array;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
 use crate::dq::config::Settings;
 use crate::dq::coordinator::{DqCoordinator, FlushPayload};
-use crate::dq::schema::{duckdb_columns, quote_ident};
+use crate::dq::schema::quote_ident;
 use crate::engine::EngineFactory;
 use crate::error::ServerError;
 
@@ -94,41 +95,45 @@ fn flush_payload(
     );
 
     let conn = factory.lock().unwrap().create_connection()?;
-    create_schema_if_needed(&conn, &settings.target_schema)?;
-    if settings.auto_create_tables {
-        create_table_if_needed(&conn, &settings.target_schema, &payload)?;
+
+    // Log all tables in the target schema
+    let query = format!(
+        "SELECT table_name FROM information_schema.tables WHERE table_catalog = '{}'",
+        settings.target_schema
+    );
+    match conn.execute_query(&query) {
+        Ok(result) => {
+            let tables: Vec<String> = result
+                .batches
+                .iter()
+                .flat_map(|batch| {
+                    if let Some(array) = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<arrow_array::StringArray>()
+                    {
+                        (0..array.len())
+                            .filter_map(|i| array.value(i).to_string().into())
+                            .collect()
+                    } else {
+                        vec![]
+                    }
+                })
+                .collect();
+            info!(schema = %settings.target_schema, tables = ?tables, "tables in target schema");
+        }
+        Err(e) => {
+            debug!(error = %e, "failed to query tables in target schema");
+        }
     }
 
-    let target = format!(
-        "{}.{}",
-        quote_ident(&settings.target_schema),
-        quote_ident(&payload.table)
-    );
+    let target = fully_qualified_table(&settings.target_schema, &payload.table);
     for batch in payload.batches {
         conn.insert_with_appender(&target, batch)?;
     }
     Ok(())
 }
 
-fn create_schema_if_needed(
-    conn: &crate::engine::DuckDbConnection,
-    schema: &str,
-) -> Result<(), ServerError> {
-    let sql = format!("CREATE SCHEMA IF NOT EXISTS {};", quote_ident(schema));
-    conn.execute_batch(&sql)
-}
-
-fn create_table_if_needed(
-    conn: &crate::engine::DuckDbConnection,
-    schema: &str,
-    payload: &FlushPayload,
-) -> Result<(), ServerError> {
-    let cols = duckdb_columns(&payload.schema)?;
-    let statement = format!(
-        "CREATE TABLE IF NOT EXISTS {}.{} ({});",
-        quote_ident(schema),
-        quote_ident(&payload.table),
-        cols.join(", ")
-    );
-    conn.execute_batch(&statement)
+fn fully_qualified_table(schema: &str, table: &str) -> String {
+    format!("{}.{}", quote_ident(schema), quote_ident(table))
 }

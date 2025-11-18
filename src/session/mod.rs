@@ -247,7 +247,7 @@ impl Session {
         };
 
         let parts = table_ref.parts();
-        if parts.len() != 2 || parts[0].to_ascii_lowercase() != "duckling_queue" {
+        if parts.len() != 2 || !parts[0].eq_ignore_ascii_case("duckling_queue") {
             return Ok(None);
         }
 

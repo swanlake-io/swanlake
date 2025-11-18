@@ -90,7 +90,6 @@ settings control when flushes happen and how aggressive the runtime should be.
 | `SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the sweeper checks for stale buffers | `60` |
 | `SWANLAKE_DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
 | `SWANLAKE_DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema for flushed tables | `swanlake` |
-| `SWANLAKE_DUCKLING_QUEUE_AUTO_CREATE_TABLES` | Create destination tables from the buffered schema if missing | `false` |
 
 Admin commands:
 

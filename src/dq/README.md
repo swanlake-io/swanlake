@@ -56,7 +56,6 @@ coalesced data into {target_schema}.{table}
 | `DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the sweeper runs | `60` |
 | `DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
 | `DUCKLING_QUEUE_TARGET_SCHEMA` | Destination schema for flushed tables | `swanlake` |
-| `DUCKLING_QUEUE_AUTO_CREATE_TABLES` | Create destination tables from the buffered schema if missing | `false` |
 
 All settings map directly to `ServerConfig` fields.
 
