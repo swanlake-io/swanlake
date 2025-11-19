@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # Common base with toolchain deps and cargo-chef
 FROM rust:slim AS base
 
@@ -17,9 +19,15 @@ RUN cargo chef prepare --recipe-path recipe.json
 # Build stage
 FROM base AS builder
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json --locked
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo chef cook --release --recipe-path recipe.json --locked
 COPY . .
-RUN cargo build --release --locked
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --locked
 
 # Runtime stage
 FROM debian:trixie-slim
