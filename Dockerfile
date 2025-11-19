@@ -27,7 +27,8 @@ COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --release --locked
+    cargo build --release --locked \
+    && cp target/release/swanlake /app/swanlake
 
 # Runtime stage
 FROM debian:trixie-slim
@@ -44,7 +45,7 @@ COPY --from=ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.41 /ko-app/grpc-health
 COPY --from=builder /app/.duckdb .duckdb
 
 # Copy built binary
-COPY --from=builder /app/target/release/swanlake swanlake
+COPY --from=builder /app/swanlake swanlake
 
 # Copy scripts for tests
 COPY --from=builder /app/scripts scripts/
