@@ -17,8 +17,7 @@ RUN --mount=type=cache,id=swanlake-apt-cache,target=/var/cache/apt \
         git \
         pkg-config \
         libssl-dev \
-        binutils \
-    && rm -rf /var/lib/apt/lists/*
+        binutils
 
 # Install cargo-chef once so later edits don't invalidate the toolchain layer
 FROM toolchain AS chef-installer
@@ -61,7 +60,6 @@ WORKDIR /app
 RUN --mount=type=cache,id=swanlake-runtime-apt-cache,target=/var/cache/apt \
     --mount=type=cache,id=swanlake-runtime-apt-lists,target=/var/lib/apt/lists \
     apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
 
 # Install grpc-health-probe for health checks
 COPY --from=ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.41 /ko-app/grpc-health-probe /usr/local/bin/grpc-health-probe
