@@ -115,7 +115,6 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
@@ -136,6 +135,7 @@ jobs:
         run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} sh -c './swanlake & sleep 5 && grpc-health-probe -addr=localhost:4214'
 
       - name: Push Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           docker tag ghcr.io/${{ github.repository }}:${{ github.sha }} ghcr.io/${{ github.repository }}:latest
           docker push ghcr.io/${{ github.repository }} --all-tags
