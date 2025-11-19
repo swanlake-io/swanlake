@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
@@ -131,20 +132,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Docker image
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          load: true
+          push: true
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
-          cache-from: type=gha,scope=swanlake-docker
-          cache-to: type=gha,mode=max,scope=swanlake-docker
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
 
       - name: Run health check in Docker
         run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} sh -c './swanlake & sleep 5 && grpc-health-probe -addr=localhost:4214'
 
-      - name: Push Docker image
+      - name: Tag and push latest
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           docker tag ghcr.io/${{ github.repository }}:${{ github.sha }} ghcr.io/${{ github.repository }}:latest
-          docker push ghcr.io/${{ github.repository }} --all-tags
+          docker push ghcr.io/${{ github.repository }}:latest
