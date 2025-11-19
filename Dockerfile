@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # Common base with toolchain deps
-FROM rust:slim AS toolchain
+FROM rust:1.91.1-slim AS toolchain
 ARG DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
