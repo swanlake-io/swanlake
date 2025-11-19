@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
-# Common base with toolchain deps and cargo-chef
-FROM rust:slim AS base
+# Common base with toolchain deps
+FROM rust:slim AS toolchain
 ARG DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
@@ -13,14 +13,22 @@ ENV CARGO_HOME=/usr/local/cargo \
 
 RUN --mount=type=cache,id=swanlake-apt-cache,target=/var/cache/apt \
     --mount=type=cache,id=swanlake-apt-lists,target=/var/lib/apt/lists \
-    --mount=type=cache,id=swanlake-cargo-registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=swanlake-cargo-git,target=/usr/local/cargo/git \
     apt-get update && apt-get install -y --no-install-recommends \
+        git \
         pkg-config \
         libssl-dev \
         binutils \
-    && rm -rf /var/lib/apt/lists/* \
-    && cargo install --locked cargo-chef
+    && rm -rf /var/lib/apt/lists/*
+
+# Install cargo-chef once so later edits don't invalidate the toolchain layer
+FROM toolchain AS chef-installer
+RUN --mount=type=cache,id=swanlake-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=swanlake-cargo-git,target=/usr/local/cargo/git \
+    cargo install --locked cargo-chef
+
+# Common base with cargo-chef available
+FROM toolchain AS base
+COPY --from=chef-installer /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/
 
 # Plan dependencies (only reruns when lockfiles/manifests change)
 FROM base AS planner
