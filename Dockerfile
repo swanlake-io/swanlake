@@ -59,7 +59,7 @@ WORKDIR /app
 # Install runtime deps (if needed, e.g., for DuckDB)
 RUN --mount=type=cache,id=swanlake-runtime-apt-cache,target=/var/cache/apt \
     --mount=type=cache,id=swanlake-runtime-apt-lists,target=/var/lib/apt/lists \
-    apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 # Install grpc-health-probe for health checks
 COPY --from=ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.41 /ko-app/grpc-health-probe /usr/local/bin/grpc-health-probe
