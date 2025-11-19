@@ -19,7 +19,7 @@ arrow-schema = "57"
 arrow-cast = "57"
 dotenvy = "0.15.7"
 duckdb = { git = "https://github.com/swanlake-io/duckdb-rs", branch = "wfj/cargo-version", default-features = false, features = ["appender-arrow"] }
-sqlparser = "0.59.0"
+sqlparser = { version = "0.59.0", features = ["visitor"] }
 futures = "0.3.31"
 prost = "0.14.1"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -41,3 +41,6 @@ siphasher = "1.0"
 [build-dependencies]
 reqwest = { version = "0.12", features = ["blocking"] }
 zip = "6"
+
+[dev-dependencies]
+tempfile = "3"

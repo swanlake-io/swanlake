@@ -98,6 +98,7 @@ jobs:
         env:
           PGPASSWORD: postgres
           PGHOST: 127.0.0.1
+          PGPORT: 5442
           PGUSER: postgres
           SWANLAKE_DUCKDB_UI_SERVER_ENABLED: true
 

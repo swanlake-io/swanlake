@@ -17,22 +17,22 @@ pub use id::SessionId;
 // - A dedicated DuckDB connection (persistent state)
 // - Transaction state
 // - Prepared statements
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use arrow_schema::Schema;
 use duckdb::types::Value;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, instrument};
 
-use crate::dq::{QueueManager, QueueSession};
+use crate::dq::DqCoordinator;
 use crate::engine::{DuckDbConnection, QueryResult};
 use crate::error::ServerError;
-use crate::lock::{DistributedLock, PostgresLock};
 use crate::session::id::{
     StatementHandle, StatementHandleGenerator, TransactionId, TransactionIdGenerator,
 };
+use crate::sql_parser::ParsedStatement;
 
 /// Metadata persisted alongside each prepared/ephemeral handle.
 ///
@@ -44,6 +44,33 @@ pub struct PreparedStatementMeta {
     pub is_query: bool,
     pub schema: Option<Schema>,
     pub ephemeral: bool,
+}
+
+fn contains_duckling_queue_keyword(sql: &str) -> bool {
+    contains_case_insensitive(sql, "duckling_queue")
+}
+
+fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    if haystack_bytes.len() < needle_bytes.len() {
+        return false;
+    }
+
+    'outer: for window in haystack_bytes.windows(needle_bytes.len()) {
+        for (candidate, target) in window.iter().zip(needle_bytes.iter()) {
+            if !candidate.eq_ignore_ascii_case(target) {
+                continue 'outer;
+            }
+        }
+        return true;
+    }
+
+    false
 }
 
 /// Builder-style options passed in when *creating* a prepared statement.
@@ -116,10 +143,7 @@ pub struct Session {
     transaction_id_gen: Arc<TransactionIdGenerator>,
     statement_handle_gen: Arc<StatementHandleGenerator>,
     last_activity: Arc<Mutex<Instant>>,
-    // Duckling Queue support
-    dq_manager: Option<Arc<QueueManager>>,
-    dq_queue: Arc<Mutex<Option<QueueSession>>>,
-    dq_tables_ready: Arc<Mutex<HashSet<String>>>,
+    dq_coordinator: Option<Arc<DqCoordinator>>,
 }
 
 impl Session {
@@ -136,41 +160,19 @@ impl Session {
             transaction_id_gen: Arc::new(TransactionIdGenerator::new()),
             statement_handle_gen: Arc::new(StatementHandleGenerator::new()),
             last_activity: Arc::new(Mutex::new(Instant::now())),
-            dq_manager: None,
-            dq_queue: Arc::new(Mutex::new(None)),
-            dq_tables_ready: Arc::new(Mutex::new(HashSet::new())),
+            dq_coordinator: None,
         }
     }
 
     /// Create a new session with duckling queue support.
     /// The queue is attached immediately on session creation.
-    #[instrument(skip(connection, dq_manager))]
-    pub async fn new_with_id_and_dq(
+    #[instrument(skip(connection, dq_coordinator))]
+    pub fn new_with_id_and_dq(
         id: SessionId,
         connection: DuckDbConnection,
-        dq_manager: Arc<QueueManager>,
+        dq_coordinator: Arc<DqCoordinator>,
     ) -> Result<Self, ServerError> {
         debug!(session_id = %id, "creating new session with duckling queue support");
-
-        // Create and attach queue immediately
-        let sq = dq_manager
-            .open_session_queue(id.clone())
-            .await
-            .map_err(|e| {
-                error!(
-                    session_id = %id,
-                    queue_active_dir = %dq_manager.dirs().active.display(),
-                    error = %e,
-                    "failed to create session queue"
-                );
-                ServerError::Internal(format!("failed to create session queue: {}", e))
-            })?;
-
-        let sql = sq.attach_sql();
-        connection
-            .execute_batch(&sql)
-            .map_err(|e| ServerError::Internal(format!("failed to attach session queue: {}", e)))?;
-
         Ok(Self {
             id,
             connection,
@@ -179,9 +181,7 @@ impl Session {
             transaction_id_gen: Arc::new(TransactionIdGenerator::new()),
             statement_handle_gen: Arc::new(StatementHandleGenerator::new()),
             last_activity: Arc::new(Mutex::new(Instant::now())),
-            dq_manager: Some(dq_manager),
-            dq_queue: Arc::new(Mutex::new(Some(sq))),
-            dq_tables_ready: Arc::new(Mutex::new(HashSet::new())),
+            dq_coordinator: Some(dq_coordinator),
         })
     }
 
@@ -206,6 +206,7 @@ impl Session {
     /// Execute a SELECT query
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn execute_query(&self, sql: &str) -> Result<QueryResult, ServerError> {
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.execute_query(sql)
     }
@@ -217,6 +218,7 @@ impl Session {
         sql: &str,
         params: &[Value],
     ) -> Result<QueryResult, ServerError> {
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.execute_query_with_params(sql, params)
     }
@@ -228,16 +230,13 @@ impl Session {
         if let Some(result) = self.try_handle_dq_command(sql)? {
             return Ok(result);
         }
-
-        self.touch();
-        match self.connection.execute_statement(sql) {
-            Ok(result) => Ok(result),
-            // TODO: logic here is very tricky, needs better design
-            // maybe introduce a sql parser layer to identify DQ table usage
-            Err(err) => self.maybe_create_queue_table_and_retry(sql, err, || {
-                self.connection.execute_statement(sql)
-            }),
+        if let Some(result) = self.try_handle_dq_insert(sql, None)? {
+            return Ok(result);
         }
+
+        self.ensure_duckling_queue_usage_allowed(sql)?;
+        self.touch();
+        self.connection.execute_statement(sql)
     }
 
     /// Try to handle duckling queue administrative commands.
@@ -248,70 +247,81 @@ impl Session {
 
         if normalized == "pragma duckling_queue.flush"
             || normalized == "call duckling_queue_flush()"
-        {
-            self.force_flush_own_queue()?;
-            Ok(Some(0))
-        } else if normalized == "pragma duckling_queue.cleanup"
+            || normalized == "pragma duckling_queue.cleanup"
             || normalized == "call duckling_queue_cleanup()"
         {
-            let dq_manager = self
-                .dq_manager
+            let dq = self
+                .dq_coordinator
                 .as_ref()
-                .ok_or_else(|| ServerError::Internal("no duckling queue manager".into()))?;
-            dq_manager.cleanup_flushed_files().map_err(|e| {
-                ServerError::Internal(format!("failed to cleanup flushed files: {}", e))
-            })?;
+                .ok_or(ServerError::DucklingQueueDisabled)?;
+            dq.force_flush_all();
             Ok(Some(0))
         } else {
             Ok(None)
         }
     }
 
-    /// Force flush: rotate this session's queue and flush the sealed file immediately.
-    fn force_flush_own_queue(&self) -> Result<(), ServerError> {
-        // Rotate the current session's queue file (this runs inside spawn_blocking)
-        let sealed_path = tokio::runtime::Handle::current()
-            .block_on(async { self.force_rotate_queue().await })
-            .map_err(|e| ServerError::Internal(format!("failed to rotate queue: {}", e)))?;
+    fn try_handle_dq_insert(
+        &self,
+        sql: &str,
+        params: Option<&[Value]>,
+    ) -> Result<Option<i64>, ServerError> {
+        let parsed = match ParsedStatement::parse(sql) {
+            Some(stmt) if stmt.is_insert() => stmt,
+            _ => return Ok(None),
+        };
 
-        // Flush only this session's sealed file synchronously
-        let dq_manager = self
-            .dq_manager
+        let table_ref = match parsed.get_insert_table() {
+            Some(table) => table,
+            None => return Ok(None),
+        };
+
+        let parts = table_ref.parts();
+        if parts.len() != 2 || !parts[0].eq_ignore_ascii_case("duckling_queue") {
+            return Ok(None);
+        }
+
+        let source_sql = match parsed.insert_source_sql() {
+            Some(sql) => sql,
+            None => return Ok(None),
+        };
+
+        let dq = self
+            .dq_coordinator
             .as_ref()
-            .ok_or_else(|| ServerError::Internal("no duckling queue manager".into()))?
-            .clone();
+            .ok_or(ServerError::DucklingQueueDisabled)?;
 
-        // Acquire distributed lock before flushing to avoid double-processing.
-        let _lock = tokio::runtime::Handle::current()
-            .block_on(async {
-                PostgresLock::try_acquire(
-                    &sealed_path,
-                    dq_manager.settings().lock_ttl,
-                    Some(self.id.as_ref()),
-                )
-                .await
-            })
-            .map_err(|e| ServerError::Internal(format!("failed to acquire lock: {}", e)))?
-            .ok_or_else(|| ServerError::Internal("failed to acquire lock for flush".into()))?;
-
-        // Use session's own connection to flush (execute_statement already runs inside spawn_blocking)
-        let flush_result = self
-            .connection
-            .with_inner(|conn| {
-                crate::dq::runtime::flush_sealed_file_sync(&dq_manager, conn, &sealed_path)
-            })
-            .map_err(|e| ServerError::Internal(format!("failed to flush queue file: {}", e)))?;
-
-        let _ = flush_result
-            .map_err(|e| ServerError::Internal(format!("failed to flush queue file: {}", e)))?;
-
-        // Re-attach the active queue to ensure duckling_queue is always available
-        if let Some(sq) = &*self.dq_queue.lock().unwrap() {
+        let result = if let Some(values) = params {
             self.connection
-                .execute_batch(&sq.attach_sql())
-                .map_err(|e| {
-                    ServerError::Internal(format!("failed to re-attach active queue: {}", e))
-                })?;
+                .execute_query_with_params(&source_sql, values)?
+        } else {
+            self.connection.execute_query(&source_sql)?
+        };
+
+        if result.total_rows == 0 {
+            return Ok(Some(0));
+        }
+
+        let target_table = parts[1].clone();
+        let QueryResult {
+            schema,
+            batches,
+            total_rows,
+            ..
+        } = result;
+        dq.enqueue(&target_table, schema, batches)?;
+        Ok(Some(total_rows as i64))
+    }
+
+    fn ensure_duckling_queue_usage_allowed(&self, sql: &str) -> Result<(), ServerError> {
+        if !contains_duckling_queue_keyword(sql) {
+            return Ok(());
+        }
+
+        if let Some(parsed) = ParsedStatement::parse(sql) {
+            if parsed.references_duckling_queue_relation() {
+                return Err(ServerError::DucklingQueueWriteOnly);
+            }
         }
 
         Ok(())
@@ -324,49 +334,40 @@ impl Session {
         sql: &str,
         params: &[Value],
     ) -> Result<usize, ServerError> {
-        self.touch();
-        match self.connection.execute_statement_with_params(sql, params) {
-            Ok(result) => Ok(result),
-            Err(err) => self.maybe_create_queue_table_and_retry(sql, err, || {
-                self.connection.execute_statement_with_params(sql, params)
-            }),
+        if let Some(result) = self.try_handle_dq_command(sql)? {
+            return Ok(result as usize);
         }
+        if let Some(result) = self.try_handle_dq_insert(sql, Some(params))? {
+            return Ok(result as usize);
+        }
+
+        self.ensure_duckling_queue_usage_allowed(sql)?;
+        self.touch();
+        self.connection.execute_statement_with_params(sql, params)
     }
 
     /// Get schema for a query
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn schema_for_query(&self, sql: &str) -> Result<arrow_schema::Schema, ServerError> {
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.schema_for_query(sql)
     }
 
-    /// Insert data using appender API with RecordBatch.
+    /// Insert data using appender API with RecordBatches.
     ///
     /// This is an optimized path for INSERT statements that avoids
-    /// converting RecordBatch to individual parameter values.
-    #[instrument(skip(self, batch), fields(session_id = %self.id, table_name = %table_name, rows = batch.num_rows()))]
+    /// converting RecordBatches to individual parameter values.
+    #[instrument(skip(self, batches), fields(session_id = %self.id, catalog_name = %catalog_name, table_name = %table_name, rows = batches.iter().map(|b| b.num_rows()).sum::<usize>()))]
     pub fn insert_with_appender(
         &self,
+        catalog_name: &str,
         table_name: &str,
-        batch: arrow_array::RecordBatch,
+        batches: Vec<arrow_array::RecordBatch>,
     ) -> Result<usize, ServerError> {
         self.touch();
-        // Clone batch once for potential retry (RecordBatch uses Arc internally, so clone is cheap)
-        let batch_for_retry = batch.clone();
-        match self.connection.insert_with_appender(table_name, batch) {
-            Ok(result) => Ok(result),
-            Err(err) => {
-                let table_name_owned = table_name.to_string();
-                self.maybe_create_queue_table_and_retry(
-                    &format!("INSERT INTO {}", table_name),
-                    err,
-                    || {
-                        self.connection
-                            .insert_with_appender(&table_name_owned, batch_for_retry)
-                    },
-                )
-            }
-        }
+        self.connection
+            .insert_with_appender(catalog_name, table_name, batches)
     }
 
     /// Get the schema of a table
@@ -544,232 +545,4 @@ impl Session {
         debug!("rolled back transaction");
         Ok(())
     }
-
-    // === Duckling Queue ===
-
-    /// Check if rotation is needed and rotate if necessary.
-    pub async fn maybe_rotate_queue(&self) -> Result<(), ServerError> {
-        // Check if rotation is needed without holding the mutex during awaits
-        let should_rotate = {
-            let queue = self.dq_queue.lock().unwrap();
-            if let Some(ref sq) = *queue {
-                sq.should_rotate().map_err(|e| {
-                    ServerError::Internal(format!("failed to check rotation: {}", e))
-                })?
-            } else {
-                false
-            }
-        };
-
-        if !should_rotate {
-            return Ok(());
-        }
-
-        // Temporarily take ownership of the queue session so we can await safely.
-        let mut queue_session = {
-            let mut guard = self.dq_queue.lock().unwrap();
-            guard.take()
-        };
-
-        if let Some(ref mut sq) = queue_session {
-            let rotate_result = sq.rotate(&self.connection).await;
-
-            // Always put the queue session back before returning.
-            let mut guard = self.dq_queue.lock().unwrap();
-            *guard = queue_session;
-
-            match rotate_result {
-                Ok(sealed) => {
-                    debug!(session_id = %self.id, sealed_file = %sealed.display(), "session queue rotated");
-                    Ok(())
-                }
-                Err(e) => Err(ServerError::Internal(format!(
-                    "failed to rotate queue: {}",
-                    e
-                ))),
-            }
-        } else {
-            // No queue session, nothing to rotate.
-            let mut guard = self.dq_queue.lock().unwrap();
-            *guard = queue_session;
-            Ok(())
-        }
-    }
-
-    /// Force flush: rotate queue and return sealed file path.
-    pub async fn force_rotate_queue(&self) -> Result<std::path::PathBuf, ServerError> {
-        let mut sq = {
-            let mut guard = self.dq_queue.lock().unwrap();
-            guard
-                .take()
-                .ok_or_else(|| ServerError::Internal("no active queue to flush".into()))?
-        };
-
-        let result = sq.force_flush(&self.connection).await;
-
-        let mut queue = self.dq_queue.lock().unwrap();
-        *queue = Some(sq);
-
-        result.map_err(|e| ServerError::Internal(format!("failed to force flush: {}", e)))
-    }
-
-    /// Seal queue file before session cleanup.
-    pub fn cleanup_queue(&self) -> Result<(), ServerError> {
-        let queue = self
-            .dq_queue
-            .lock()
-            .expect("dq_queue mutex poisoned")
-            .take();
-
-        if let Some(sq) = queue {
-            sq.seal_on_cleanup().map_err(|e| {
-                ServerError::Internal(format!("failed to seal queue on cleanup: {}", e))
-            })?;
-            debug!(session_id = %self.id, "session queue sealed on cleanup");
-        }
-
-        Ok(())
-    }
-
-    fn maybe_create_queue_table_and_retry<T, F>(
-        &self,
-        sql: &str,
-        err: ServerError,
-        retry: F,
-    ) -> Result<T, ServerError>
-    where
-        F: FnOnce() -> Result<T, ServerError>,
-    {
-        if self.dq_manager.is_none() {
-            error!("dq_manager is none");
-            return Err(err);
-        }
-
-        let Some(table) = Self::extract_missing_queue_table(sql, &err) else {
-            error!("error is not missing duckling_queue table");
-            return Err(err);
-        };
-
-        self.ensure_queue_table(&table)?;
-        info!(
-            table = %table,
-            "duckling_queue table auto-created after missing table error"
-        );
-
-        retry()
-    }
-
-    fn ensure_queue_table(&self, table: &str) -> Result<(), ServerError> {
-        let normalized = table.to_ascii_lowercase();
-        {
-            let ready = self
-                .dq_tables_ready
-                .lock()
-                .expect("dq_tables_ready mutex poisoned");
-            if ready.contains(&normalized) {
-                return Ok(());
-            }
-        }
-
-        let dq_manager = self
-            .dq_manager
-            .as_ref()
-            .ok_or_else(|| ServerError::Internal("no duckling queue manager".into()))?;
-        let target_schema = dq_manager.settings().target_schema.clone();
-
-        let quoted_table = quote_identifier(table);
-        let quoted_target_schema = quote_identifier(&target_schema);
-
-        let create_sql = format!(
-            "CREATE TABLE IF NOT EXISTS duckling_queue.{dq_table} AS \
-             SELECT * FROM {target_schema}.{dq_table} LIMIT 0;",
-            dq_table = quoted_table,
-            target_schema = quoted_target_schema,
-        );
-
-        debug!(table = %table, "ensuring duckling_queue table exists");
-        self.connection.execute_batch(&create_sql)?;
-
-        let mut ready = self
-            .dq_tables_ready
-            .lock()
-            .expect("dq_tables_ready mutex poisoned");
-        ready.insert(normalized);
-        Ok(())
-    }
-
-    fn extract_missing_queue_table(sql: &str, err: &ServerError) -> Option<String> {
-        let ServerError::DuckDb(inner) = err else {
-            info!("error is duckdb inner {}, not missing queue table", err);
-            return None;
-        };
-        let message = inner.to_string();
-        let lower = message.to_ascii_lowercase();
-        if !sql.to_ascii_lowercase().contains("duckling_queue.")
-            && !lower.contains("duckling_queue.")
-        {
-            info!("sql {} and msg {} don't have duckling_queue.", sql, message);
-            return None;
-        }
-        if !(lower.contains("does not exist")
-            || lower.contains("not found")
-            || lower.contains("no such table"))
-        {
-            info!("error message {} is not missing table error", message);
-            return None;
-        }
-
-        let table = extract_table_from_error_message(&message);
-        info!("extract table {:?} from message {}", table, message);
-        table
-    }
-
-    /// Get session ID (for use by registry).
-    pub fn id(&self) -> SessionId {
-        self.id.clone()
-    }
-}
-
-fn extract_table_from_error_message(message: &str) -> Option<String> {
-    let needle = "Table with name ";
-    let idx = message.find(needle)?;
-    let mut start = idx + needle.len();
-    let bytes = message.as_bytes();
-
-    while start < bytes.len() && (bytes[start] == b'"' || bytes[start] == b'\'') {
-        start += 1;
-    }
-
-    if start >= bytes.len() {
-        return None;
-    }
-
-    let mut end = start;
-    while end < bytes.len() {
-        let b = bytes[end];
-        if b == b'_' || b.is_ascii_alphanumeric() {
-            end += 1;
-        } else {
-            break;
-        }
-    }
-
-    if end == start {
-        return None;
-    }
-
-    Some(message[start..end].to_string())
-}
-
-fn quote_identifier(ident: &str) -> String {
-    let mut quoted = String::with_capacity(ident.len() + 2);
-    quoted.push('"');
-    for ch in ident.chars() {
-        if ch == '"' {
-            quoted.push('"');
-        }
-        quoted.push(ch);
-    }
-    quoted.push('"');
-    quoted
 }

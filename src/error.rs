@@ -14,6 +14,12 @@ pub enum ServerError {
     MaxSessionsReached,
     #[error("unsupported parameter type: {0}")]
     UnsupportedParameter(String),
+    #[error(
+        "duckling queue runtime is disabled; enable it via SWANLAKE_DUCKLING_QUEUE_ENABLED=true"
+    )]
+    DucklingQueueDisabled,
+    #[error("duckling queue tables are write-only; only INSERT INTO duckling_queue.* is allowed")]
+    DucklingQueueWriteOnly,
     #[error("internal error: {0}")]
     Internal(String),
 }

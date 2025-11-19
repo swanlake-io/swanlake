@@ -17,6 +17,7 @@ use flight_sql_client::FlightSQLClient;
 pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     let endpoint = args.endpoint();
     let mut client = FlightSQLClient::connect(endpoint)?;
+    client.exec("use swanlake")?;
 
     // Create test table with various supported types
     client.exec(

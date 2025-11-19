@@ -3,7 +3,9 @@
 //! This module provides lightweight SQL parsing to extract information
 //! needed for optimizations, such as the table name from INSERT statements.
 
-use sqlparser::ast::{ObjectName, Statement, TableObject};
+use std::ops::ControlFlow;
+
+use sqlparser::ast::{visit_relations, ObjectName, ObjectNamePart, Statement, TableObject};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
@@ -18,6 +20,7 @@ pub struct ParsedStatement {
 pub struct TableReference {
     sql_name: String,
     logical_name: String,
+    parts: Vec<String>,
 }
 
 impl TableReference {
@@ -27,6 +30,10 @@ impl TableReference {
 
     pub fn logical_name(&self) -> &str {
         &self.logical_name
+    }
+
+    pub fn parts(&self) -> &[String] {
+        &self.parts
     }
 }
 
@@ -82,6 +89,14 @@ impl ParsedStatement {
         }
     }
 
+    /// Return the SQL for the INSERT source (VALUES/SELECT).
+    pub fn insert_source_sql(&self) -> Option<String> {
+        match &self.statement {
+            Statement::Insert(insert) => insert.source.as_ref().map(|query| query.to_string()),
+            _ => None,
+        }
+    }
+
     /// Convenience wrapper returning the unquoted, dot-separated table name.
     #[allow(dead_code)]
     pub fn get_insert_table_name(&self) -> Option<String> {
@@ -114,25 +129,16 @@ impl ParsedStatement {
         }
     }
 
-    /// Check if this is a DQ-related statement.
-    ///
-    /// This can be extended to detect PRAGMA duckling_queue statements,
-    /// duckling_queue schema references, etc.
-    #[allow(dead_code)]
-    pub fn is_dq_statement(&self) -> bool {
-        // Placeholder for future DQ statement detection
-        // Can be extended to parse:
-        // - PRAGMA duckling_queue.flush
-        // - CALL duckling_queue_flush()
-        // - INSERT INTO duckling_queue.table_name
-        false
+    /// Returns true if any relation in the statement references the duckling_queue schema.
+    pub fn references_duckling_queue_relation(&self) -> bool {
+        statement_references_duckling_queue(&self.statement)
     }
 }
 
 impl TableReference {
     fn from_object_name(name: &ObjectName) -> Self {
         let sql_name = name.to_string();
-        let logical_name = name
+        let parts = name
             .0
             .iter()
             .map(|part| {
@@ -140,13 +146,32 @@ impl TableReference {
                     .map(|ident| ident.value.clone())
                     .unwrap_or_else(|| part.to_string())
             })
-            .collect::<Vec<_>>()
-            .join(".");
+            .collect::<Vec<_>>();
+        let logical_name = parts.join(".");
         Self {
             sql_name,
             logical_name,
+            parts,
         }
     }
+}
+
+fn statement_references_duckling_queue(statement: &Statement) -> bool {
+    let mut found = false;
+    let _ = visit_relations(statement, |relation| {
+        if relation
+            .0
+            .first()
+            .and_then(ObjectNamePart::as_ident)
+            .is_some_and(|ident| ident.value.eq_ignore_ascii_case("duckling_queue"))
+        {
+            found = true;
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    });
+    found
 }
 
 #[cfg(test)]
@@ -238,5 +263,26 @@ mod tests {
         let sql = "INSERT INTO users VALUES (1, 'Alice'); INSERT INTO users VALUES (2, 'Bob');";
         // Should reject multiple statements
         assert!(ParsedStatement::parse(sql).is_none());
+    }
+
+    #[test]
+    fn test_detects_duckling_queue_in_select() {
+        let sql = "SELECT * FROM duckling_queue.events";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        assert!(parsed.references_duckling_queue_relation());
+    }
+
+    #[test]
+    fn test_detects_duckling_queue_in_insert_source() {
+        let sql = "INSERT INTO analytics.events SELECT * FROM duckling_queue.buffer";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        assert!(parsed.references_duckling_queue_relation());
+    }
+
+    #[test]
+    fn test_duckling_queue_not_detected_in_literals() {
+        let sql = "SELECT 'duckling_queue' AS label";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        assert!(!parsed.references_duckling_queue_relation());
     }
 }

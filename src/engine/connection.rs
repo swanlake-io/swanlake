@@ -12,6 +12,7 @@ use duckdb::{params_from_iter, Connection};
 use tracing::{debug, info, instrument};
 
 use crate::error::ServerError;
+
 use crate::types::duckdb_type_to_arrow;
 
 /// Result of a query execution
@@ -202,60 +203,54 @@ impl DuckDbConnection {
         Ok(())
     }
 
-    /// Execute a closure with access to the inner duckdb::Connection
-    pub fn with_inner<F, R>(&self, f: F) -> Result<R, ServerError>
-    where
-        F: FnOnce(&duckdb::Connection) -> R,
-    {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
-        Ok(f(&conn))
-    }
-
-    /// Insert data using DuckDB's appender API with a RecordBatch.
+    /// Insert data using DuckDB's appender API with RecordBatches.
     ///
     /// This method is optimized for bulk inserts as it avoids converting
     /// RecordBatch to individual parameter values, reducing memory copies.
     ///
     /// # Arguments
     ///
+    /// * `catalog_name` - The name of the catalog
     /// * `table_name` - The name of the table to insert into
-    /// * `batch` - The RecordBatch containing data to insert
+    /// * `batches` - The RecordBatches containing data to insert
     ///
     /// # Returns
     ///
     /// The number of rows inserted
-    #[instrument(skip(self, batch), fields(table_name = %table_name, rows = batch.num_rows()))]
+    #[instrument(skip(self, batches), fields(catalog_name = %catalog_name, table_name = %table_name, rows = batches.iter().map(|b| b.num_rows()).sum::<usize>()))]
     pub fn insert_with_appender(
         &self,
+        catalog_name: &str,
         table_name: &str,
-        batch: RecordBatch,
+        batches: Vec<RecordBatch>,
     ) -> Result<usize, ServerError> {
-        let row_count = batch.num_rows();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         info!(
-            "appender to {} with row {} and column {}",
+            "appender to {}.{} with total rows {} and column {}",
+            catalog_name,
             table_name,
-            row_count,
-            batch.num_columns()
+            total_rows,
+            batches.first().map(|b| b.num_columns()).unwrap_or(0)
         );
 
         let conn = self
             .conn
             .lock()
             .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
+        conn.execute(&format!("USE {};", catalog_name), [])?;
         let mut appender = conn.appender(table_name)?;
-        appender.append_record_batch(batch)?;
+        for batch in batches {
+            appender.append_record_batch(batch)?;
+        }
         appender.flush()?;
 
         debug!(
-            rows = row_count,
+            rows = total_rows,
             table = %table_name,
             "inserted data using appender"
         );
 
-        Ok(row_count)
+        Ok(total_rows)
     }
 
     /// Get the schema of a table using DESC SELECT

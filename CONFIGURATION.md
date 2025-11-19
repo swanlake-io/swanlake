@@ -4,8 +4,8 @@ SwanLake reads all settings from environment variables using the `SWANLAKE_` pre
 `ServerConfig::load()` merges sources in the following order:
 
 1. Built-in defaults (see `src/config.rs`)
-2. Values from a configuration file passed via CLI (`--config`, if provided)
-3. Environment variables (`SWANLAKE_*`)
+2. Environment variables (`SWANLAKE_*`) – values from a local `.env` file are also picked up
+   because the server calls `dotenvy::dotenv()` before loading the configuration.
 
 Unset options fall back to their defaults. All numeric values are expressed in base-10,
 and boolean flags accept `true/false` (case-insensitive).
@@ -76,39 +76,34 @@ Configuration is loaded once at startup and reused for the lifetime of the proce
 
 See `src/lock/README.md` for detailed documentation on the distributed lock implementation.
 
-## Queueing & Flush Runtime
+## Duckling Queue Buffering
+
+SwanLake’s Duckling Queue buffers `INSERT INTO duckling_queue.*` statements in memory per target
+table and flushes the accumulated batches into DuckLake/Postgres when thresholds are exceeded. These
+settings control when flushes happen and how aggressive the runtime should be.
 
 | Env Var | Description | Default |
 | --- | --- | --- |
-| `SWANLAKE_DUCKLING_QUEUE_ROOT` | Persistent directory for queue files | `target/ducklake-tests/duckling_queue` |
-| `SWANLAKE_DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Time-based rotation threshold | `300` |
-| `SWANLAKE_DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Size-based rotation threshold (bytes) | `100_000_000` |
-| `SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often sealed files are scanned | `60` |
+| `SWANLAKE_DUCKLING_QUEUE_BUFFER_MAX_ROWS` | Flush once a table buffers this many rows | `50_000` |
+| `SWANLAKE_DUCKLING_QUEUE_ENABLED` | Start the Duckling Queue runtime and intercept `INSERT INTO duckling_queue.*` statements | `false` |
+| `SWANLAKE_DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Flush when buffered bytes exceed this value | `100_000_000` |
+| `SWANLAKE_DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Maximum age (seconds) to hold buffered data before the sweeper flushes it | `300` |
+| `SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the sweeper checks for stale buffers | `60` |
 | `SWANLAKE_DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
-| `SWANLAKE_DUCKLING_QUEUE_TARGET_SCHEMA` | Target schema for flushed tables | `swanlake` |
-| `SWANLAKE_DUCKLING_QUEUE_AUTO_CREATE_TABLES` | Automatically create missing destination tables | `false` |
+| `SWANLAKE_DUCKLING_QUEUE_TARGET_CATALOG` | Target catalog for flushed tables | `swanlake` |
+| `SWANLAKE_DUCKLING_QUEUE_ROOT` | Directory used to persist buffered batches so they survive crashes | `target/duckling_queue` |
 
-The root directory is created automatically if it does not exist. Within that root the manager
-expects three child directories: `active/`, `sealed/`, and `flushed/`.
+Admin commands:
 
-## Troubleshooting Session Queue Creation
+- `PRAGMA duckling_queue.flush;` / `CALL duckling_queue_flush()` — force every buffer to flush
+  immediately.
+- `PRAGMA duckling_queue.cleanup;` — alias for the same flush command (legacy compatibility).
 
-If the server logs `failed to create session queue: ...` it means one of the early lifecycle steps
-failed before the per-session DuckDB queue was attached. The most common root causes are:
-
-- The `SWANLAKE_DUCKLING_QUEUE_ROOT` path is missing or not writable for the SwanLake process. The
-  log line includes `queue_active_dir`, which points at the exact directory that could not be used.
-- PostgreSQL advisory lock acquisition failed. Ensure `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
-  `PGPASSWORD`, and `PGSSLMODE` are set so SwanLake can reach the shared locking database. When the
-  lock connection cannot be created the log includes `session_id` and the queue file path it was
-  trying to lock.
-
-With full tracing enabled (`RUST_LOG=debug`), SwanLake additionally emits debug lines when it starts
-creating the queue file and immediately before trying to acquire the advisory lock, which helps
-pinpoint which phase failed on remote deployments.
+If the server logs that a flush failed, check DuckLake connectivity (the runtime retries and
+requeues the payload). When clients receive “duckling queue runtime is disabled…”, set
+`SWANLAKE_DUCKLING_QUEUE_ENABLED=true` and restart the service.
 
 ## Validation
 
-During startup `ServerConfig::validate()` ensures `DUCKLING_QUEUE_ROOT` exists (creating it when
-necessary) and that it is a directory. All other options are validated when they are consumed
-(e.g. parsing socket addresses or attaching schemas).
+`ServerConfig::validate()` currently performs only lightweight checks; the remaining options are
+validated as they are consumed (e.g. parsing socket addresses or attaching schemas).
