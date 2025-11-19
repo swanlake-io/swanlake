@@ -12,6 +12,7 @@ mod config;
 mod dq;
 mod engine;
 mod error;
+#[cfg(feature = "distributed-locks")]
 mod lock;
 mod service;
 mod session;

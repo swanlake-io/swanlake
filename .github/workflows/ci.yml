@@ -137,8 +137,8 @@ jobs:
           context: .
           load: true
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=swanlake-docker
+          cache-to: type=gha,mode=max,scope=swanlake-docker
 
       - name: Run health check in Docker
         run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} sh -c './swanlake & sleep 5 && grpc-health-probe -addr=localhost:4214'

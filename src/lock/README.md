@@ -2,6 +2,10 @@
 
 Provides PostgreSQL-based distributed locking for coordinating access across multiple SwanLake hosts using PostgreSQL advisory locks.
 
+> **Note:** The lock subsystem is experimental and gated behind the `distributed-locks` Cargo
+> feature. Enable it with `cargo build --features distributed-locks` once you are ready to
+> integrate it; it is disabled by default to keep unused code out of coverage reports.
+
 ## Overview
 
 - Locks reuse a single shared PostgreSQL session per SwanLake process, so acquiring a lock does **not** create a new long-lived database connection.
