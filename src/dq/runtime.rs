@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 use crate::dq::config::Settings;
 use crate::dq::coordinator::{DqCoordinator, FlushPayload, FlushTracker};
 use crate::dq::storage::DurableStorage;
-use crate::engine::EngineFactory;
+use crate::engine::{batch::align_batch_to_table_schema, EngineFactory};
 use crate::error::ServerError;
 
 /// Background runtime that receives flush payloads and writes them into DuckLake.
@@ -118,7 +118,13 @@ fn flush_payload(
     );
 
     let conn = factory.lock().unwrap().create_connection()?;
-    conn.insert_with_appender(&settings.target_catalog, &table, batches)?;
+    let qualified_table = format!("{}.{}", settings.target_catalog, table);
+    let table_schema = Arc::new(conn.table_schema(&qualified_table)?);
+    let aligned_batches = batches
+        .iter()
+        .map(|batch| align_batch_to_table_schema(batch, &table_schema, None))
+        .collect::<Result<Vec<_>, ServerError>>()?;
+    conn.insert_with_appender(&settings.target_catalog, &table, aligned_batches)?;
     storage.remove_chunks(chunk_handles)?;
     Ok(())
 }

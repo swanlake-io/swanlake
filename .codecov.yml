@@ -1,0 +1,4 @@
+# Lock subsystem is gated behind the `distributed-locks` feature and intentionally
+# excluded from regular CI builds, so drop it from Codecov calculations.
+ignore:
+  - "src/lock/**/*"

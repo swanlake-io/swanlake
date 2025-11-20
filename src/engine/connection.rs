@@ -283,4 +283,19 @@ impl DuckDbConnection {
 
         Ok(Schema::new(fields))
     }
+
+    /// Return the currently selected catalog (database) for this connection.
+    pub fn current_catalog(&self) -> Result<String, ServerError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT current_database()")
+            .map_err(ServerError::DuckDb)?;
+        let catalog: String = stmt
+            .query_row([], |row| row.get(0))
+            .map_err(ServerError::DuckDb)?;
+        Ok(catalog)
+    }
 }
