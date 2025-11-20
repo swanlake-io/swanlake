@@ -2794,6 +2794,7 @@ dependencies = [
  "arrow-flight",
  "arrow-ipc",
  "arrow-schema",
+ "arrow-select",
  "chrono",
  "config",
  "dotenvy",
