@@ -30,6 +30,10 @@ pub async fn run_prepared_statements(args: &CliArgs) -> Result<()> {
     tester.test_insert_with_column_alignment()?;
     tester.test_duckling_queue_prepared_insert()?;
     tester.test_duckling_queue_batch_optimization()?;
+    tester.test_duckling_queue_positional_multirow()?;
+    tester.test_duckling_queue_empty_and_multiple_batches()?;
+    tester.test_current_catalog_unqualified_insert()?;
+    tester.test_default_catalog_unqualified_insert()?;
     Ok(())
 }
 
@@ -601,6 +605,303 @@ impl<'a> PreparedStatementTester<'a> {
 
             // Cleanup reorder table
             self.drop_table_if_exists(REORDER_TABLE)?;
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
+    }
+
+    /// Verify positional parameter batches (Go-style $1, $2, $3) are reshaped and aligned before enqueue.
+    fn test_duckling_queue_positional_multirow(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.dq_positional_multi";
+        self.drop_table_if_exists(TABLE)?;
+        let test_result = (|| -> Result<()> {
+            self.execute_update("CREATE TABLE swanlake.dq_positional_multi (id INTEGER, label VARCHAR)")?;
+
+            // Simulate Go driver sending a single-row batch with positional field names ("1", "2", ...)
+            // for a multi-row VALUES clause.
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("1", DataType::Int32, false),
+                Field::new("2", DataType::Utf8, false),
+                Field::new("3", DataType::Int32, false),
+                Field::new("4", DataType::Utf8, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![3001])) as ArrayRef,
+                    Arc::new(StringArray::from(vec!["pos-a"])),
+                    Arc::new(Int32Array::from(vec![3002])),
+                    Arc::new(StringArray::from(vec!["pos-b"])),
+                ],
+            )?;
+
+            self.client.execute_batch_update(
+                "INSERT INTO duckling_queue.dq_positional_multi (id, label) VALUES (?, ?), (?, ?)",
+                batch,
+            )?;
+
+            // Data is queued, not yet flushed
+            let queued_rows = self
+                .client
+                .query_scalar_i64("SELECT COUNT(*) FROM swanlake.dq_positional_multi")?;
+            ensure!(queued_rows == 0, "queued inserts should not be visible before flush");
+
+            self.execute_update("PRAGMA duckling_queue.flush")?;
+
+            let result = self
+                .client
+                .execute("SELECT id, label FROM swanlake.dq_positional_multi ORDER BY id")?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected rows after positional multi-row flush")?;
+
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected ids after flush")?;
+            let labels = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("expected labels after flush")?;
+
+            ensure!(
+                ids.value(0) == 3001 && ids.value(1) == 3002,
+                "positional multi-row values not reshaped correctly"
+            );
+            ensure!(
+                labels.value(0) == "pos-a" && labels.value(1) == "pos-b",
+                "positional labels not aligned correctly"
+            );
+
+            let read_attempt = self
+                .client
+                .execute("SELECT * FROM duckling_queue.dq_positional_multi");
+            ensure!(read_attempt.is_err(), "duckling_queue should stay write-only");
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
+    }
+
+    /// Ensure empty batches no-op and multiple batches enqueue correctly before a single flush.
+    fn test_duckling_queue_empty_and_multiple_batches(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.dq_multi_batch_sink";
+        self.drop_table_if_exists(TABLE)?;
+        let test_result = (|| -> Result<()> {
+            self.execute_update(
+                "CREATE TABLE swanlake.dq_multi_batch_sink (id INTEGER, name VARCHAR)",
+            )?;
+
+            // Empty batch should be accepted and produce no rows
+            let empty_schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("name", DataType::Utf8, true),
+            ]));
+            let empty_batch = RecordBatch::try_new(
+                empty_schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef,
+                    Arc::new(StringArray::from(Vec::<&str>::new())),
+                ],
+            )?;
+            self.client.execute_batch_update(
+                "INSERT INTO duckling_queue.dq_multi_batch_sink (id, name) VALUES (?, ?)",
+                empty_batch,
+            )?;
+
+            let count_after_empty = self
+                .client
+                .query_scalar_i64("SELECT COUNT(*) FROM swanlake.dq_multi_batch_sink")?;
+            ensure!(
+                count_after_empty == 0,
+                "empty batch should not write rows before flush"
+            );
+
+            // Enqueue two additional batches before flushing
+            let batch_one = RecordBatch::try_new(
+                empty_schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![11, 12])) as ArrayRef,
+                    Arc::new(StringArray::from(vec!["first-a", "first-b"])),
+                ],
+            )?;
+            let batch_two = RecordBatch::try_new(
+                empty_schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![13])) as ArrayRef,
+                    Arc::new(StringArray::from(vec!["first-c"])),
+                ],
+            )?;
+
+            self.client.execute_batch_update(
+                "INSERT INTO duckling_queue.dq_multi_batch_sink (id, name) VALUES (?, ?)",
+                batch_one,
+            )?;
+            self.client.execute_batch_update(
+                "INSERT INTO duckling_queue.dq_multi_batch_sink (id, name) VALUES (?, ?)",
+                batch_two,
+            )?;
+
+            self.execute_update("PRAGMA duckling_queue.flush")?;
+
+            let result = self.client.execute(
+                "SELECT id, name FROM swanlake.dq_multi_batch_sink ORDER BY id",
+            )?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected rows after multi-batch flush")?;
+
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected ids after multi-batch flush")?;
+            let names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("expected names after multi-batch flush")?;
+
+            ensure!(ids.len() == 3, "expected three rows after multi-batch flush");
+            ensure!(
+                ids.value(0) == 11 && ids.value(1) == 12 && ids.value(2) == 13,
+                "ids not preserved across multiple batches"
+            );
+            ensure!(
+                names.value(0) == "first-a"
+                    && names.value(1) == "first-b"
+                    && names.value(2) == "first-c",
+                "names not preserved across multiple batches"
+            );
+
+            let read_attempt = self
+                .client
+                .execute("SELECT * FROM duckling_queue.dq_multi_batch_sink");
+            ensure!(read_attempt.is_err(), "duckling_queue should remain write-only");
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
+    }
+
+    /// Verify unqualified INSERTs honor the session's current catalog (after USE).
+    fn test_current_catalog_unqualified_insert(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.current_catalog_test";
+        self.drop_table_if_exists(TABLE)?;
+        let test_result = (|| -> Result<()> {
+            // Establish schema in swanlake and switch session to that catalog.
+            self.execute_update(
+                "CREATE TABLE swanlake.current_catalog_test (id INTEGER, name VARCHAR)",
+            )?;
+            self.execute_update("USE swanlake")?;
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![7, 8])) as ArrayRef,
+                    Arc::new(StringArray::from(vec!["cat-a", "cat-b"])),
+                ],
+            )?;
+
+            // Unqualified table name should resolve to the current catalog, not default fallback.
+            self.client.execute_batch_update(
+                "INSERT INTO current_catalog_test (id, name) VALUES (?, ?)",
+                batch,
+            )?;
+
+            let result = self.client.execute(
+                "SELECT id, name FROM swanlake.current_catalog_test ORDER BY id",
+            )?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected rows after current catalog insert")?;
+
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected ids in current catalog test")?;
+            let names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("expected names in current catalog test")?;
+
+            ensure!(
+                ids.value(0) == 7 && ids.value(1) == 8,
+                "unexpected ids in current catalog test"
+            );
+            ensure!(
+                names.value(0) == "cat-a" && names.value(1) == "cat-b",
+                "unexpected names in current catalog test"
+            );
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
+    }
+
+    /// Verify unqualified INSERTs fall back to the target catalog when no USE has been issued.
+    fn test_default_catalog_unqualified_insert(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.default_catalog_test";
+        self.drop_table_if_exists(TABLE)?;
+        let test_result = (|| -> Result<()> {
+            self.execute_update(
+                "CREATE TABLE swanlake.default_catalog_test (id INTEGER, name VARCHAR)",
+            )?;
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                    Arc::new(StringArray::from(vec!["default-cat"])),
+                ],
+            )?;
+
+            // No USE issued; unqualified insert should pick configured target catalog.
+            self.client.execute_batch_update(
+                "INSERT INTO default_catalog_test (id, name) VALUES (?, ?)",
+                batch,
+            )?;
+
+            let result = self.client.execute(
+                "SELECT id, name FROM swanlake.default_catalog_test ORDER BY id",
+            )?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected rows after default catalog insert")?;
+
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected ids in default catalog test")?;
+            let names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("expected names in default catalog test")?;
+
+            ensure!(ids.value(0) == 1, "unexpected id in default catalog test");
+            ensure!(
+                names.value(0) == "default-cat",
+                "unexpected name in default catalog test"
+            );
             Ok(())
         })();
 

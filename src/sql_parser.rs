@@ -19,20 +19,13 @@ pub struct ParsedStatement {
 
 /// Reference to a table in SQL with parsed components.
 ///
-/// - `sql_name`: Preserves original SQL quoting for use in queries
-///   (e.g., `"CamelCase"`, `analytics."Monthly Sales"`)
 /// - `parts`: Unquoted components split by dots for catalog/schema/table extraction
 ///   (e.g., `["analytics", "Monthly Sales"]`)
 pub struct TableReference {
-    sql_name: String,
     parts: Vec<String>,
 }
 
 impl TableReference {
-    pub fn sql_name(&self) -> &str {
-        &self.sql_name
-    }
-
     pub fn parts(&self) -> &[String] {
         &self.parts
     }
@@ -131,7 +124,6 @@ impl ParsedStatement {
 
 impl TableReference {
     fn from_object_name(name: &ObjectName) -> Self {
-        let sql_name = name.to_string();
         let parts = name
             .0
             .iter()
@@ -141,7 +133,7 @@ impl TableReference {
                     .unwrap_or_else(|| part.to_string())
             })
             .collect::<Vec<_>>();
-        Self { sql_name, parts }
+        Self { parts }
     }
 }
 
@@ -173,7 +165,6 @@ mod tests {
         let parsed = ParsedStatement::parse(sql).expect("should parse");
         assert!(parsed.is_insert());
         let table_ref = parsed.get_insert_table().expect("should have table");
-        assert_eq!(table_ref.sql_name(), "users");
         assert_eq!(table_ref.parts(), &["users"]);
     }
 
@@ -183,7 +174,6 @@ mod tests {
         let parsed = ParsedStatement::parse(sql).expect("should parse");
         assert!(parsed.is_insert());
         let table_ref = parsed.get_insert_table().expect("should have table");
-        assert_eq!(table_ref.sql_name(), "users");
         assert_eq!(table_ref.parts(), &["users"]);
     }
 
@@ -193,7 +183,6 @@ mod tests {
         let parsed = ParsedStatement::parse(sql).expect("should parse");
         assert!(parsed.is_insert());
         let table_ref = parsed.get_insert_table().expect("should have table");
-        assert_eq!(table_ref.sql_name(), "public.users");
         assert_eq!(table_ref.parts(), &["public", "users"]);
     }
 
@@ -203,7 +192,6 @@ mod tests {
         let parsed = ParsedStatement::parse(sql).expect("should parse");
         assert!(parsed.is_insert());
         let table_ref = parsed.get_insert_table().expect("should have table");
-        assert_eq!(table_ref.sql_name(), "duckling_queue.events");
         assert_eq!(table_ref.parts(), &["duckling_queue", "events"]);
     }
 
@@ -212,7 +200,6 @@ mod tests {
         let sql = r#"INSERT INTO "CamelCase" VALUES (1)"#;
         let parsed = ParsedStatement::parse(sql).expect("should parse");
         let table_ref = parsed.get_insert_table().expect("should have table");
-        assert_eq!(table_ref.sql_name(), r#""CamelCase""#);
         assert_eq!(table_ref.parts(), &["CamelCase"]);
     }
 
@@ -221,7 +208,6 @@ mod tests {
         let sql = r#"INSERT INTO analytics."Monthly Sales" VALUES (1)"#;
         let parsed = ParsedStatement::parse(sql).expect("should parse");
         let table_ref = parsed.get_insert_table().expect("should have table");
-        assert_eq!(table_ref.sql_name(), r#"analytics."Monthly Sales""#);
         assert_eq!(table_ref.parts(), &["analytics", "Monthly Sales"]);
     }
 

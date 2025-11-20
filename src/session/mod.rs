@@ -423,6 +423,33 @@ impl Session {
         self.connection.table_schema(table_name)
     }
 
+    /// Return the current catalog selected for this session.
+    pub fn current_catalog(&self) -> Result<String, ServerError> {
+        self.connection.current_catalog()
+    }
+
+    /// Resolve catalog/table for a parsed table reference, respecting the session's current catalog.
+    ///
+    /// - If the reference is unqualified (single part), use the current catalog when it is set
+    ///   to a real catalog (not DuckDB's default "memory"); otherwise fall back to `default_catalog`.
+    /// - If the reference is qualified, return the provided catalog and table parts.
+    pub fn resolve_catalog_and_table(
+        &self,
+        parts: &[String],
+        default_catalog: &str,
+    ) -> (String, String) {
+        if parts.len() == 1 {
+            let catalog = self
+                .current_catalog()
+                .ok()
+                .filter(|c| !c.eq_ignore_ascii_case("memory"))
+                .unwrap_or_else(|| default_catalog.to_string());
+            (catalog, parts[0].clone())
+        } else {
+            (parts[0].clone(), parts[1].clone())
+        }
+    }
+
     /// Directly enqueue Arrow batches to duckling_queue without conversion.
     ///
     /// This is an optimized path for DoPut operations where the client sends

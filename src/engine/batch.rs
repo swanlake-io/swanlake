@@ -93,48 +93,60 @@ fn reshape_batch_for_multi_row_insert(
 
 fn build_lookup(
     batch: &RecordBatch,
+    table_schema: &SchemaRef,
     column_override: Option<&[String]>,
 ) -> Result<HashMap<String, usize>, ServerError> {
-    match column_override {
-        Some(names) => {
-            if batch.num_columns() != names.len() {
-                return Err(ServerError::Internal(format!(
-                    "column count mismatch for INSERT: batch has {} columns but SQL specified {} columns",
-                    batch.num_columns(),
-                    names.len(),
-                )));
-            }
-            let mut map = HashMap::new();
+    let mut map = HashMap::new();
 
-            // If batch uses positional parameter names ("1", "2", "3"), map by position
-            // This handles Go drivers that send $1, $2, $3 which become field names "1", "2", "3"
-            if has_positional_field_names(batch) {
-                for (idx, name) in names.iter().enumerate() {
-                    map.insert(name.clone(), idx);
-                }
-            } else {
-                // Map each column name to its actual position in the batch schema
-                for name in names.iter() {
-                    let batch_idx = batch.schema().index_of(name).map_err(|_| {
-                        ServerError::Internal(format!(
-                            "Column '{}' not found in batch schema {}",
-                            name,
-                            batch.schema()
-                        ))
-                    })?;
-                    map.insert(name.clone(), batch_idx);
-                }
-            }
-            Ok(map)
+    if let Some(names) = column_override {
+        if batch.num_columns() != names.len() {
+            return Err(ServerError::Internal(format!(
+                "column count mismatch for INSERT: batch has {} columns but SQL specified {} columns",
+                batch.num_columns(),
+                names.len(),
+            )));
         }
-        None => {
-            let mut map = HashMap::new();
-            for (idx, field) in batch.schema().fields().iter().enumerate() {
-                map.insert(field.name().clone(), idx);
+
+        // If batch uses positional parameter names ("1", "2", "3"), map by position
+        // This handles Go drivers that send $1, $2, $3 which become field names "1", "2", "3"
+        if has_positional_field_names(batch) {
+            for (idx, name) in names.iter().enumerate() {
+                map.insert(name.clone(), idx);
             }
-            Ok(map)
+        } else {
+            // Map each column name to its actual position in the batch schema
+            for name in names.iter() {
+                let batch_idx = batch.schema().index_of(name).map_err(|_| {
+                    ServerError::Internal(format!(
+                        "Column '{}' not found in batch schema {}",
+                        name,
+                        batch.schema()
+                    ))
+                })?;
+                map.insert(name.clone(), batch_idx);
+            }
         }
+        return Ok(map);
     }
+
+    if has_positional_field_names(batch) {
+        if batch.num_columns() != table_schema.fields().len() {
+            return Err(ServerError::Internal(format!(
+                "column count mismatch for INSERT: batch has {} columns but table has {}",
+                batch.num_columns(),
+                table_schema.fields().len()
+            )));
+        }
+        for (idx, field) in table_schema.fields().iter().enumerate() {
+            map.insert(field.name().clone(), idx);
+        }
+        return Ok(map);
+    }
+
+    for (idx, field) in batch.schema().fields().iter().enumerate() {
+        map.insert(field.name().clone(), idx);
+    }
+    Ok(map)
 }
 
 /// Align a RecordBatch to the physical table schema.
@@ -147,6 +159,16 @@ pub fn align_batch_to_table_schema(
     table_schema: &SchemaRef,
     column_override: Option<&[String]>,
 ) -> Result<RecordBatch, ServerError> {
+    // Fast path for empty batches: preserve row count (0) with table-shaped empty columns.
+    if batch.num_rows() == 0 && batch.num_columns() == 0 {
+        let columns = table_schema
+            .fields()
+            .iter()
+            .map(|field| new_null_array(field.data_type(), 0))
+            .collect::<Vec<_>>();
+        return RecordBatch::try_new(table_schema.clone(), columns).map_err(ServerError::Arrow);
+    }
+
     // Handle Go driver's multi-row INSERT format:
     // Go drivers send VALUES (?, ?, ?),(?, ?, ?),(?, ?, ?) as 9 columns × 1 row
     // but we expect 3 columns × 3 rows. Detect and reshape if needed.
@@ -166,11 +188,25 @@ pub fn align_batch_to_table_schema(
         } else {
             batch.clone()
         }
+    } else if has_positional_field_names(batch)
+        && batch.num_columns() > table_schema.fields().len()
+        && batch
+            .num_columns()
+            .is_multiple_of(table_schema.fields().len())
+        && batch.num_rows() == 1
+    {
+        tracing::debug!(
+            "Detected positional multi-row INSERT format without column list: {} columns, reshaping to {} columns",
+            batch.num_columns(),
+            table_schema.fields().len()
+        );
+        reshape_batch_for_multi_row_insert(batch, table_schema.fields().len())?
     } else {
         batch.clone()
     };
 
-    let lookup = build_lookup(&batch_to_use, column_override)?;
+    // Build lookup for column mapping
+    let lookup = build_lookup(&batch_to_use, table_schema, column_override)?;
     let batch_schema = batch_to_use.schema();
     tracing::debug!(
         "Aligning batch schema {:?} to table schema {:?}, lookup: {:?}",

@@ -341,6 +341,7 @@ pub(crate) async fn do_put_prepared_statement_update(
             } else {
                 let parts = table_ref.parts();
                 let target_table = parts[1].to_string(); // Extract "events" from "duckling_queue.events"
+                let target_catalog = service.registry.target_catalog().to_string();
                 let insert_columns = parsed.get_insert_columns();
 
                 info!(
@@ -356,34 +357,22 @@ pub(crate) async fn do_put_prepared_statement_update(
                 tokio::task::spawn_blocking(move || {
                     // If INSERT specifies columns like "INSERT INTO t (id, name) VALUES (?)",
                     // we need to align the Arrow batch schema to match the column order
-                    let batches_to_enqueue = if let Some(cols) = insert_columns.as_ref() {
-                        // Get the table schema to validate and align columns
-                        let table_sql_name = format!("duckling_queue.{}", target_table);
-                        let table_schema = match session_clone.table_schema(&table_sql_name) {
-                            Ok(schema) => Arc::new(schema),
-                            Err(_) => {
-                                // Table doesn't exist yet, use batch schema as-is
-                                // The queue coordinator will create it on first write
-                                return session_clone
-                                    .enqueue_duckling_batches(&target_table, batches);
-                            }
-                        };
+                    // Get the destination table schema from the target catalog (duckling_queue is write-only envelope)
+                    let qualified_table = format!("{}.{}", target_catalog, target_table);
+                    let table_schema = Arc::new(session_clone.table_schema(&qualified_table)?);
 
-                        // Align each batch to match the INSERT column order
-                        batches
-                            .iter()
-                            .map(|batch| {
-                                align_batch_to_table_schema(
-                                    batch,
-                                    &table_schema,
-                                    Some(cols.as_slice()),
-                                )
-                            })
-                            .collect::<Result<Vec<_>, crate::error::ServerError>>()?
-                    } else {
-                        // No column list specified, use batches as-is
-                        batches
-                    };
+                    // Align each batch to match the destination schema; fail fast on mismatches so we
+                    // don't enqueue data that would later fail during async flush.
+                    let batches_to_enqueue = batches
+                        .iter()
+                        .map(|batch| {
+                            align_batch_to_table_schema(
+                                batch,
+                                &table_schema,
+                                insert_columns.as_deref(),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, crate::error::ServerError>>()?;
 
                     session_clone.enqueue_duckling_batches(&target_table, batches_to_enqueue)
                 })
@@ -410,24 +399,17 @@ pub(crate) async fn do_put_prepared_statement_update(
                 .map_err(SwanFlightSqlService::status_from_join)?
                 .map_err(SwanFlightSqlService::status_from_error)?
             } else {
-                let table_sql_name = table_ref.sql_name().to_string();
                 let parts = table_ref.parts();
 
                 // Extract catalog and table name from the parsed reference
                 // Format: "catalog.table" or just "table" (uses default catalog)
-                let (catalog_name, table_name) = if parts.len() == 1 {
-                    (
-                        service.registry.target_catalog().to_string(),
-                        parts[0].to_string(),
-                    )
-                } else {
-                    (parts[0].to_string(), parts[1].to_string())
-                };
+                let (catalog_name, table_name) =
+                    session.resolve_catalog_and_table(parts, service.registry.target_catalog());
                 let insert_columns = parsed.get_insert_columns();
 
                 info!(
                     handle = %handle,
-                    table_name = %table_sql_name,
+                    table_name = %table_name,
                     batch_count = batches.len(),
                     total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>(),
                     "using appender optimization for INSERT"
@@ -436,7 +418,8 @@ pub(crate) async fn do_put_prepared_statement_update(
                 let session_clone = Arc::clone(&session);
                 tokio::task::spawn_blocking(move || {
                     // Get the target table schema for validation and alignment
-                    let table_schema = Arc::new(session_clone.table_schema(&table_sql_name)?);
+                    let qualified_table = format!("{}.{}", catalog_name, table_name);
+                    let table_schema = Arc::new(session_clone.table_schema(&qualified_table)?);
 
                     // Align batches if INSERT specifies column list
                     // Example: "INSERT INTO t (col2, col1)" needs column reordering
@@ -461,9 +444,10 @@ pub(crate) async fn do_put_prepared_statement_update(
                         .map_err(|e| {
                             error!(
                                 %e,
-                                "appender insert failed sql {} for table {}",
+                                "appender insert failed sql {} for table {}.{}",
                                 sql,
-                                table_sql_name
+                                catalog_name,
+                                table_name
                             );
                             e
                         })?;
