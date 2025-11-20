@@ -20,8 +20,12 @@ fn build_lookup(
                 )));
             }
             let mut map = HashMap::new();
-            for (idx, name) in names.iter().enumerate() {
-                map.insert(name.clone(), idx);
+            // Map each column name to its actual position in the batch schema
+            for name in names.iter() {
+                let batch_idx = batch.schema().index_of(name).map_err(|_| {
+                    ServerError::Internal(format!("Column '{}' not found in batch schema", name))
+                })?;
+                map.insert(name.clone(), batch_idx);
             }
             Ok(map)
         }
@@ -47,6 +51,12 @@ pub fn align_batch_to_table_schema(
 ) -> Result<RecordBatch, ServerError> {
     let lookup = build_lookup(batch, column_override)?;
     let batch_schema = batch.schema();
+    tracing::info!(
+        "Aligning batch schema {:?} to table schema {:?}, lookup: {:?}",
+        batch_schema,
+        table_schema,
+        lookup
+    );
 
     let mut columns = Vec::with_capacity(table_schema.fields().len());
     for field in table_schema.fields() {

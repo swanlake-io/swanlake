@@ -226,7 +226,7 @@ impl Session {
     /// Execute a statement (DDL/DML)
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn execute_statement(&self, sql: &str) -> Result<i64, ServerError> {
-        // Check if this is a DQ admin command first
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         if let Some(result) = self.try_handle_dq_command(sql)? {
             return Ok(result);
         }
@@ -234,21 +234,21 @@ impl Session {
             return Ok(result);
         }
 
-        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.execute_statement(sql)
     }
 
     /// Try to handle duckling queue administrative commands.
     /// Returns Some(affected_rows) if it's a DQ command, None otherwise.
+    ///
+    /// Supported commands:
+    /// - `PRAGMA duckling_queue.flush` / `CALL duckling_queue_flush()` - Force flush all buffered data
     fn try_handle_dq_command(&self, sql: &str) -> Result<Option<i64>, ServerError> {
         let trimmed = sql.trim();
         let normalized = trimmed.trim_end_matches(';').trim().to_ascii_lowercase();
 
         if normalized == "pragma duckling_queue.flush"
             || normalized == "call duckling_queue_flush()"
-            || normalized == "pragma duckling_queue.cleanup"
-            || normalized == "call duckling_queue_cleanup()"
         {
             let dq = self
                 .dq_coordinator
@@ -261,14 +261,31 @@ impl Session {
         }
     }
 
+    /// Handle duckling_queue INSERT statements by executing the source query
+    /// and enqueuing the resulting Arrow batches.
+    ///
+    /// This method is used for SQL-based INSERTs like:
+    /// - `INSERT INTO duckling_queue.events SELECT ...`
+    /// - `INSERT INTO duckling_queue.events VALUES (42)`
+    /// - `INSERT INTO duckling_queue.events (id) VALUES (?)`
+    ///
+    /// For Arrow batch-based INSERTs (via DoPut), use `enqueue_duckling_batches` instead
+    /// to avoid unnecessary conversions.
+    ///
+    /// Flow:
+    /// 1. Parse the INSERT statement to extract table name
+    /// 2. Extract the source SQL (the SELECT or VALUES clause)
+    /// 3. Execute the source as a query to get Arrow batches
+    /// 4. Enqueue the batches to the duckling_queue coordinator
     fn try_handle_dq_insert(
         &self,
         sql: &str,
         params: Option<&[Value]>,
     ) -> Result<Option<i64>, ServerError> {
+        // Parse and validate this is an INSERT INTO duckling_queue.<table>
         let parsed = match ParsedStatement::parse(sql) {
             Some(stmt) if stmt.is_insert() => stmt,
-            _ => return Ok(None),
+            _ => return Ok(None), // Not an INSERT, let caller handle it
         };
 
         let table_ref = match parsed.get_insert_table() {
@@ -276,21 +293,28 @@ impl Session {
             None => return Ok(None),
         };
 
+        // Check if this is duckling_queue schema (format: duckling_queue.<table>)
         let parts = table_ref.parts();
         if parts.len() != 2 || !parts[0].eq_ignore_ascii_case("duckling_queue") {
-            return Ok(None);
+            return Ok(None); // Not a duckling_queue table
         }
 
+        // Extract the source SQL: the SELECT or VALUES clause
+        // Example: "INSERT INTO t SELECT ..." -> "SELECT ..."
+        // Example: "INSERT INTO t VALUES (1)" -> "VALUES (1)"
         let source_sql = match parsed.insert_source_sql() {
             Some(sql) => sql,
             None => return Ok(None),
         };
 
+        // Ensure duckling_queue coordinator is available
         let dq = self
             .dq_coordinator
             .as_ref()
             .ok_or(ServerError::DucklingQueueDisabled)?;
 
+        // Execute the source SQL as a query to get Arrow batches
+        // This converts "VALUES (?)" or "SELECT ..." into Arrow format
         let result = if let Some(values) = params {
             self.connection
                 .execute_query_with_params(&source_sql, values)?
@@ -302,6 +326,7 @@ impl Session {
             return Ok(Some(0));
         }
 
+        // Extract target table name (e.g., "events" from "duckling_queue.events")
         let target_table = parts[1].clone();
         let QueryResult {
             schema,
@@ -309,16 +334,39 @@ impl Session {
             total_rows,
             ..
         } = result;
+
+        // Enqueue the Arrow batches for async processing
         dq.enqueue(&target_table, schema, batches)?;
         Ok(Some(total_rows as i64))
     }
 
+    /// Ensure duckling_queue tables are only used for writes (INSERT), not reads (SELECT).
+    ///
+    /// This validation allows:
+    /// - `INSERT INTO duckling_queue.<table> ...` (write operations)
+    /// - `PRAGMA duckling_queue.flush` (admin commands)
+    ///
+    /// This rejects:
+    /// - `SELECT FROM duckling_queue.<table>` (read operations)
+    /// - `UPDATE/DELETE duckling_queue.<table>` (modification operations)
     fn ensure_duckling_queue_usage_allowed(&self, sql: &str) -> Result<(), ServerError> {
         if !contains_duckling_queue_keyword(sql) {
             return Ok(());
         }
 
         if let Some(parsed) = ParsedStatement::parse(sql) {
+            // Allow INSERT INTO duckling_queue.<table>
+            if parsed.is_insert() {
+                if let Some(table_ref) = parsed.get_insert_table() {
+                    let parts = table_ref.parts();
+                    if parts.len() == 2 && parts[0].eq_ignore_ascii_case("duckling_queue") {
+                        // This is INSERT INTO duckling_queue.<table>, allow it
+                        return Ok(());
+                    }
+                }
+            }
+
+            // Check if the statement references duckling_queue in other contexts (SELECT, UPDATE, etc.)
             if parsed.references_duckling_queue_relation() {
                 return Err(ServerError::DucklingQueueWriteOnly);
             }
@@ -334,6 +382,7 @@ impl Session {
         sql: &str,
         params: &[Value],
     ) -> Result<usize, ServerError> {
+        self.ensure_duckling_queue_usage_allowed(sql)?;
         if let Some(result) = self.try_handle_dq_command(sql)? {
             return Ok(result as usize);
         }
@@ -341,7 +390,6 @@ impl Session {
             return Ok(result as usize);
         }
 
-        self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
         self.connection.execute_statement_with_params(sql, params)
     }
@@ -373,6 +421,49 @@ impl Session {
     /// Get the schema of a table
     pub fn table_schema(&self, table_name: &str) -> Result<arrow_schema::Schema, ServerError> {
         self.connection.table_schema(table_name)
+    }
+
+    /// Directly enqueue Arrow batches to duckling_queue without conversion.
+    ///
+    /// This is an optimized path for DoPut operations where the client sends
+    /// Arrow batches for `INSERT INTO duckling_queue.<table>` prepared statements.
+    ///
+    /// Instead of converting Arrow → params → VALUES → Arrow (wasteful),
+    /// we directly enqueue the original Arrow batches.
+    ///
+    /// # Arguments
+    /// * `target_table` - The table name (without duckling_queue prefix)
+    /// * `batches` - Arrow batches to enqueue
+    ///
+    /// # Example
+    /// For `INSERT INTO duckling_queue.events (id, msg) VALUES (?, ?)`,
+    /// when client sends Arrow batches via DoPut, this method enqueues them directly.
+    #[instrument(skip(self, batches), fields(session_id = %self.id, target_table = %target_table, rows = batches.iter().map(|b| b.num_rows()).sum::<usize>()))]
+    pub fn enqueue_duckling_batches(
+        &self,
+        target_table: &str,
+        batches: Vec<arrow_array::RecordBatch>,
+    ) -> Result<i64, ServerError> {
+        // Ensure duckling_queue coordinator is available
+        let dq = self
+            .dq_coordinator
+            .as_ref()
+            .ok_or(ServerError::DucklingQueueDisabled)?;
+
+        if batches.is_empty() {
+            return Ok(0);
+        }
+
+        // Extract schema from the first batch
+        let schema = batches[0].schema();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+        // Enqueue the Arrow batches directly for async processing
+        // Note: dq.enqueue expects owned Schema, so we dereference the Arc
+        dq.enqueue(target_table, (*schema).clone(), batches)?;
+
+        self.touch();
+        Ok(total_rows as i64)
     }
 
     // === Prepared Statements ===
