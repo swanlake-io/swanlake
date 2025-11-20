@@ -1,8 +1,5 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{new_null_array, RecordBatch};
-use arrow_cast::cast;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::server::PeekableFlightDataStream;
 use arrow_flight::sql::{
@@ -12,13 +9,12 @@ use arrow_flight::sql::{
     TicketStatementQuery,
 };
 use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
-use arrow_schema::Schema;
-
 use prost::Message;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
 
 use super::ticket::{StatementTicketKind, TicketStatementPayload};
+use crate::engine::batch::align_batch_to_table_schema;
 use crate::service::SwanFlightSqlService;
 use crate::session::id::StatementHandle;
 use crate::session::{PreparedStatementMeta, PreparedStatementOptions};
@@ -325,7 +321,6 @@ pub(crate) async fn do_put_prepared_statement_update(
                 .map_err(SwanFlightSqlService::status_from_error)?
             } else {
                 let table_sql_name = table_ref.sql_name().to_string();
-                let table_logical_name = table_ref.logical_name().to_string();
                 let parts = table_ref.parts();
                 let (catalog_name, table_name) = if parts.len() == 1 {
                     (
@@ -346,15 +341,14 @@ pub(crate) async fn do_put_prepared_statement_update(
                 let session_clone = Arc::clone(&session);
                 tokio::task::spawn_blocking(move || {
                     let table_schema = Arc::new(session_clone.table_schema(&table_sql_name)?);
-                    let batches_to_use = if let Some(cols) = &insert_columns {
+                    let batches_to_use = if let Some(cols) = insert_columns.as_ref() {
                         batches
-                            .into_iter()
+                            .iter()
                             .map(|batch| {
-                                SwanFlightSqlService::align_batch_to_table_schema(
+                                align_batch_to_table_schema(
                                     batch,
                                     &table_schema,
-                                    cols,
-                                    &table_logical_name,
+                                    Some(cols.as_slice()),
                                 )
                             })
                             .collect::<Result<Vec<_>, crate::error::ServerError>>()?
@@ -402,50 +396,6 @@ pub(crate) async fn do_put_prepared_statement_update(
         "prepared statement update complete"
     );
     Ok(affected_rows)
-}
-
-impl SwanFlightSqlService {
-    fn align_batch_to_table_schema(
-        batch: RecordBatch,
-        table_schema: &Arc<Schema>,
-        column_order: &[String],
-        table_name: &str,
-    ) -> Result<RecordBatch, crate::error::ServerError> {
-        if batch.num_columns() != column_order.len() {
-            return Err(crate::error::ServerError::Internal(format!(
-                "column count mismatch for table {table_name}: got {} columns but SQL specified {}",
-                batch.num_columns(),
-                column_order.len()
-            )));
-        }
-
-        let index_lookup: HashMap<&str, usize> = column_order
-            .iter()
-            .enumerate()
-            .map(|(idx, name)| (name.as_str(), idx))
-            .collect();
-
-        let mut columns = Vec::with_capacity(table_schema.fields().len());
-        for field in table_schema.fields() {
-            if let Some(idx) = index_lookup.get(field.name().as_str()) {
-                let column = batch.column(*idx);
-                let batch_schema = batch.schema();
-                let source_field = batch_schema.field(*idx);
-                if source_field.data_type() == field.data_type() {
-                    columns.push(column.clone());
-                } else {
-                    let casted = cast(column.as_ref(), field.data_type())
-                        .map_err(crate::error::ServerError::Arrow)?;
-                    columns.push(casted);
-                }
-            } else {
-                columns.push(new_null_array(field.data_type(), batch.num_rows()));
-            }
-        }
-
-        RecordBatch::try_new(table_schema.clone(), columns)
-            .map_err(crate::error::ServerError::Arrow)
-    }
 }
 
 fn is_duckling_queue_table(table_ref: &TableReference) -> bool {

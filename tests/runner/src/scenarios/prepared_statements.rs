@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
 use arrow_array::{
-    ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-    RecordBatch, StringArray, Time32MillisecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, RecordBatch, StringArray, Time32MillisecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
@@ -27,6 +27,8 @@ pub async fn run_prepared_statements(args: &CliArgs) -> Result<()> {
     tester.test_update_with_parameters()?;
     tester.test_delete_with_parameters()?;
     tester.test_select_with_parameters()?;
+    tester.test_insert_with_column_alignment()?;
+    tester.test_duckling_queue_prepared_insert()?;
     Ok(())
 }
 
@@ -265,6 +267,158 @@ impl<'a> PreparedStatementTester<'a> {
         })();
 
         self.finalize_table(PREPARED_SELECT_TABLE, test_result)
+    }
+
+    fn test_insert_with_column_alignment(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.prepared_alignment_test";
+        self.drop_table_if_exists(TABLE)?;
+        let test_result = (|| -> Result<()> {
+            self.execute_update(
+                "CREATE TABLE IF NOT EXISTS swanlake.prepared_alignment_test (id INTEGER, name VARCHAR, active BOOLEAN)",
+            )?;
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("id", DataType::Int32, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(StringArray::from(vec!["alpha", "beta"])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![11, 12])),
+                ],
+            )?;
+
+            self.client.execute_batch_update(
+                "INSERT INTO swanlake.prepared_alignment_test (name, id) VALUES (?, ?)",
+                batch,
+            )?;
+
+            let result = self.client.execute(
+                "SELECT id, name, active FROM swanlake.prepared_alignment_test ORDER BY id",
+            )?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected rows after prepared insert")?;
+
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected Int32 array for id column")?;
+            let names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("expected Utf8 array for name column")?;
+            let flags = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .context("expected Boolean array for active column")?;
+
+            ensure!(
+                ids.value(0) == 11 && ids.value(1) == 12,
+                "ids not aligned correctly"
+            );
+            ensure!(
+                names.value(0) == "alpha" && names.value(1) == "beta",
+                "names not aligned correctly"
+            );
+            ensure!(
+                flags.is_null(0) && flags.is_null(1),
+                "missing active column should be NULL"
+            );
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
+    }
+
+    fn test_duckling_queue_prepared_insert(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.dq_prepared_sink";
+        self.drop_table_if_exists(TABLE)?;
+        let test_result = (|| -> Result<()> {
+            self.execute_update(
+                "CREATE TABLE swanlake.dq_prepared_sink (id INTEGER, label VARCHAR, processed BOOLEAN)",
+            )?;
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("label", DataType::Utf8, false),
+                Field::new("id", DataType::Int32, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(StringArray::from(vec!["queued-a", "queued-b"])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![101, 102])),
+                ],
+            )?;
+
+            self.client.execute_batch_update(
+                "INSERT INTO duckling_queue.dq_prepared_sink (label, id) VALUES (?, ?)",
+                batch,
+            )?;
+
+            let queued_rows = self
+                .client
+                .query_scalar_i64("SELECT COUNT(*) FROM swanlake.dq_prepared_sink")?;
+            ensure!(
+                queued_rows == 0,
+                "duckling queue inserts should not write directly to destination tables"
+            );
+
+            self.execute_update("PRAGMA duckling_queue.flush")?;
+
+            let result = self.client.execute(
+                "SELECT id, label, processed FROM swanlake.dq_prepared_sink ORDER BY id",
+            )?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected rows after duckling queue flush")?;
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected ids after flush")?;
+            let labels = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("expected labels after flush")?;
+            let processed = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .context("expected processed column")?;
+
+            ensure!(
+                ids.value(0) == 101 && ids.value(1) == 102,
+                "unexpected ids flushed"
+            );
+            ensure!(
+                labels.value(0) == "queued-a" && labels.value(1) == "queued-b",
+                "unexpected labels flushed"
+            );
+            ensure!(
+                processed.is_null(0) && processed.is_null(1),
+                "missing processed column should be NULL"
+            );
+            let read_attempt = self
+                .client
+                .execute("SELECT * FROM duckling_queue.dq_prepared_sink");
+            ensure!(
+                read_attempt.is_err(),
+                "duckling queue relations should remain write-only"
+            );
+
+            self.execute_update("PRAGMA duckling_queue.cleanup")?;
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
     }
 
     fn verify_select_result(&self, result: QueryResult) -> Result<()> {
