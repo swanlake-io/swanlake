@@ -326,6 +326,31 @@ pub(crate) async fn do_put_prepared_statement_update(
         .and_then(|p| p.get_insert_table().map(|t| (p, t)))
     {
         if is_duckling_queue_table(&table_ref) {
+            // If the INSERT contains server-side expressions/defaults in the VALUES list,
+            // fall back to executing the statement so those expressions are evaluated.
+            let values_all_placeholders = parsed.insert_values_all_placeholders();
+            if !values_all_placeholders {
+                let params = SwanFlightSqlService::collect_parameter_sets(request).await?;
+                info!(
+                    handle = %handle,
+                    sql = %sql,
+                    "falling back to parameter execution for duckling_queue (expressions/defaults present)"
+                );
+                let session_clone = Arc::clone(&session);
+                return Ok(
+                    tokio::task::spawn_blocking(move || {
+                        SwanFlightSqlService::execute_statement_batches(
+                            &sql,
+                            &params,
+                            &session_clone,
+                        )
+                    })
+                    .await
+                    .map_err(SwanFlightSqlService::status_from_join)?
+                    .map_err(SwanFlightSqlService::status_from_error)?,
+                );
+            }
+
             // Optimized path for duckling_queue: directly enqueue Arrow batches
             // instead of converting Arrow → params → VALUES → Arrow (wasteful)
             //

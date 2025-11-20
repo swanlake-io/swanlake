@@ -22,7 +22,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use arrow_schema::Schema;
+use arrow_array::RecordBatch;
+use arrow_schema::{Field, Schema};
 use duckdb::types::Value;
 use tracing::{debug, instrument};
 
@@ -306,6 +307,7 @@ impl Session {
             Some(sql) => sql,
             None => return Ok(None),
         };
+        let insert_columns = parsed.get_insert_columns();
 
         // Ensure duckling_queue coordinator is available
         let dq = self
@@ -334,6 +336,17 @@ impl Session {
             total_rows,
             ..
         } = result;
+
+        // If the INSERT specified column names, rename the produced batches so they align
+        // with the target table on flush (duckling_queue doesn't carry SQL, only Arrow).
+        let batches = if let Some(cols) = insert_columns.as_ref() {
+            batches
+                .into_iter()
+                .map(|batch| Self::rename_batch_columns(batch, cols))
+                .collect::<Result<Vec<_>, ServerError>>()?
+        } else {
+            batches
+        };
 
         // Enqueue the Arrow batches for async processing
         dq.enqueue(&target_table, schema, batches)?;
@@ -426,6 +439,28 @@ impl Session {
     /// Return the current catalog selected for this session.
     pub fn current_catalog(&self) -> Result<String, ServerError> {
         self.connection.current_catalog()
+    }
+
+    fn rename_batch_columns(
+        batch: RecordBatch,
+        columns: &[String],
+    ) -> Result<RecordBatch, ServerError> {
+        if batch.num_columns() != columns.len() {
+            return Err(ServerError::Internal(format!(
+                "column count mismatch: batch has {} columns but INSERT specified {} columns",
+                batch.num_columns(),
+                columns.len()
+            )));
+        }
+        let new_fields = batch
+            .schema()
+            .fields()
+            .iter()
+            .zip(columns.iter())
+            .map(|(field, name)| Field::new(name, field.data_type().clone(), field.is_nullable()))
+            .collect::<Vec<_>>();
+        let new_schema = Arc::new(arrow_schema::Schema::new(new_fields));
+        RecordBatch::try_new(new_schema, batch.columns().to_vec()).map_err(ServerError::Arrow)
     }
 
     /// Resolve catalog/table for a parsed table reference, respecting the session's current catalog.

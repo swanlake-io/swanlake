@@ -120,6 +120,33 @@ impl ParsedStatement {
     pub fn references_duckling_queue_relation(&self) -> bool {
         statement_references_duckling_queue(&self.statement)
     }
+
+    /// Returns true if INSERT uses plain VALUES and every value is a placeholder (e.g., ?, $1).
+    ///
+    /// Used to decide whether DoPut batches contain all data or whether server-side expressions/defaults
+    /// must be evaluated by executing the SQL.
+    pub fn insert_values_all_placeholders(&self) -> bool {
+        match &self.statement {
+            Statement::Insert(insert) => match &insert.source {
+                Some(query) => match &*query.body {
+                    sqlparser::ast::SetExpr::Values(values) => values.rows.iter().all(|row| {
+                        row.iter().all(|e| {
+                            matches!(
+                                e,
+                                sqlparser::ast::Expr::Value(sqlparser::ast::ValueWithSpan {
+                                    value: sqlparser::ast::Value::Placeholder(_),
+                                    ..
+                                })
+                            )
+                        })
+                    }),
+                    _ => false,
+                },
+                None => false,
+            },
+            _ => false,
+        }
+    }
 }
 
 impl TableReference {

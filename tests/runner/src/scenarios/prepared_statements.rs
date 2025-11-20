@@ -34,6 +34,7 @@ pub async fn run_prepared_statements(args: &CliArgs) -> Result<()> {
     tester.test_duckling_queue_empty_and_multiple_batches()?;
     tester.test_current_catalog_unqualified_insert()?;
     tester.test_default_catalog_unqualified_insert()?;
+    tester.test_duckling_queue_insert_with_expressions()?;
     Ok(())
 }
 
@@ -901,6 +902,71 @@ impl<'a> PreparedStatementTester<'a> {
             ensure!(
                 names.value(0) == "default-cat",
                 "unexpected name in default catalog test"
+            );
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
+    }
+
+    /// Ensure duckling_queue prepared inserts with server-side expressions fall back to SQL execution.
+    fn test_duckling_queue_insert_with_expressions(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.dq_expr_sink";
+        self.drop_table_if_exists(TABLE)?;
+        let test_result = (|| -> Result<()> {
+            self.execute_update(
+                "CREATE TABLE swanlake.dq_expr_sink (id INTEGER, ts TIMESTAMP DEFAULT '2024-01-01 00:00:00')",
+            )?;
+
+            // Only parameter is id; ts should be filled by NOW() on the server side.
+            let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![Arc::new(Int32Array::from(vec![9001])) as ArrayRef],
+            )?;
+
+            self.client.execute_batch_update(
+                "INSERT INTO duckling_queue.dq_expr_sink (id, ts) VALUES (?, NOW())",
+                batch,
+            )?;
+
+            let queued_rows = self
+                .client
+                .query_scalar_i64("SELECT COUNT(*) FROM swanlake.dq_expr_sink")?;
+            ensure!(
+                queued_rows == 0,
+                "duckling queue expression insert should buffer before flush"
+            );
+
+            self.execute_update("PRAGMA duckling_queue.flush")?;
+
+            let result = self.client.execute(
+                "SELECT id, ts FROM swanlake.dq_expr_sink ORDER BY id",
+            )?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected rows after duckling queue expression flush")?;
+
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected ids after expression flush")?;
+            let ts_array = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .context("expected timestamps after expression flush")?;
+
+            ensure!(
+                ids.value(0) == 9001,
+                "unexpected id after expression insert: {}",
+                ids.value(0)
+            );
+            ensure!(
+                !ts_array.is_null(0) && ts_array.value_as_datetime(0).is_some(),
+                "timestamp should be populated by default on insert"
             );
             Ok(())
         })();
