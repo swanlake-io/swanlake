@@ -97,7 +97,6 @@ Admin commands:
 
 - `PRAGMA duckling_queue.flush;` / `CALL duckling_queue_flush()` — force every buffer to flush
   immediately.
-- `PRAGMA duckling_queue.cleanup;` — alias for the same flush command (legacy compatibility).
 
 If the server logs that a flush failed, check DuckLake connectivity (the runtime retries and
 requeues the payload). When clients receive “duckling queue runtime is disabled…”, set

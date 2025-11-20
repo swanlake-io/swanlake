@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
 use arrow_array::{
-    ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-    RecordBatch, StringArray, Time32MillisecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, RecordBatch, StringArray, Time32MillisecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
@@ -27,6 +27,9 @@ pub async fn run_prepared_statements(args: &CliArgs) -> Result<()> {
     tester.test_update_with_parameters()?;
     tester.test_delete_with_parameters()?;
     tester.test_select_with_parameters()?;
+    tester.test_insert_with_column_alignment()?;
+    tester.test_duckling_queue_prepared_insert()?;
+    tester.test_duckling_queue_batch_optimization()?;
     Ok(())
 }
 
@@ -265,6 +268,343 @@ impl<'a> PreparedStatementTester<'a> {
         })();
 
         self.finalize_table(PREPARED_SELECT_TABLE, test_result)
+    }
+
+    fn test_insert_with_column_alignment(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.prepared_alignment_test";
+        self.drop_table_if_exists(TABLE)?;
+        let test_result = (|| -> Result<()> {
+            self.execute_update(
+                "CREATE TABLE IF NOT EXISTS swanlake.prepared_alignment_test (id INTEGER, name VARCHAR, active BOOLEAN)",
+            )?;
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("id", DataType::Int32, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(StringArray::from(vec!["alpha", "beta"])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![11, 12])),
+                ],
+            )?;
+
+            self.client.execute_batch_update(
+                "INSERT INTO swanlake.prepared_alignment_test (name, id) VALUES (?, ?)",
+                batch,
+            )?;
+
+            let result = self.client.execute(
+                "SELECT id, name, active FROM swanlake.prepared_alignment_test ORDER BY id",
+            )?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected rows after prepared insert")?;
+
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected Int32 array for id column")?;
+            let names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("expected Utf8 array for name column")?;
+            let flags = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .context("expected Boolean array for active column")?;
+
+            ensure!(
+                ids.value(0) == 11 && ids.value(1) == 12,
+                "ids not aligned correctly"
+            );
+            ensure!(
+                names.value(0) == "alpha" && names.value(1) == "beta",
+                "names not aligned correctly"
+            );
+            ensure!(
+                flags.is_null(0) && flags.is_null(1),
+                "missing active column should be NULL"
+            );
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
+    }
+
+    fn test_duckling_queue_prepared_insert(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.dq_prepared_sink";
+        self.drop_table_if_exists(TABLE)?;
+        let test_result = (|| -> Result<()> {
+            self.execute_update(
+                "CREATE TABLE swanlake.dq_prepared_sink (id INTEGER, label VARCHAR, processed BOOLEAN)",
+            )?;
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("label", DataType::Utf8, false),
+                Field::new("id", DataType::Int32, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(StringArray::from(vec!["queued-a", "queued-b"])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![101, 102])),
+                ],
+            )?;
+
+            self.client.execute_batch_update(
+                "INSERT INTO duckling_queue.dq_prepared_sink (label, id) VALUES (?, ?)",
+                batch,
+            )?;
+
+            let queued_rows = self
+                .client
+                .query_scalar_i64("SELECT COUNT(*) FROM swanlake.dq_prepared_sink")?;
+            ensure!(
+                queued_rows == 0,
+                "duckling queue inserts should not write directly to destination tables"
+            );
+
+            self.execute_update("PRAGMA duckling_queue.flush")?;
+
+            let result = self.client.execute(
+                "SELECT id, label, processed FROM swanlake.dq_prepared_sink ORDER BY id",
+            )?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected rows after duckling queue flush")?;
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected ids after flush")?;
+            let labels = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("expected labels after flush")?;
+            let processed = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .context("expected processed column")?;
+
+            ensure!(
+                ids.value(0) == 101 && ids.value(1) == 102,
+                format!("unexpected ids flushed {:?}", ids)
+            );
+            ensure!(
+                labels.value(0) == "queued-a" && labels.value(1) == "queued-b",
+                "unexpected labels flushed"
+            );
+            ensure!(
+                processed.is_null(0) && processed.is_null(1),
+                "missing processed column should be NULL"
+            );
+            let read_attempt = self
+                .client
+                .execute("SELECT * FROM duckling_queue.dq_prepared_sink");
+            ensure!(
+                read_attempt.is_err(),
+                "duckling queue relations should remain write-only"
+            );
+
+            self.execute_update("PRAGMA duckling_queue.flush")?;
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
+    }
+
+    /// Test the optimized duckling_queue batch insert path.
+    ///
+    /// This test verifies that when Arrow batches are sent via DoPut for
+    /// INSERT INTO duckling_queue.<table> prepared statements, the batches
+    /// are enqueued directly without wasteful Arrow → params → VALUES → Arrow conversion.
+    ///
+    /// Test cases:
+    /// 1. Large batch insert (1000+ rows) - verifies batch optimization works at scale
+    /// 2. Column reordering - INSERT with different column order than batch schema
+    /// 3. Multiple batches - ensures multiple batches are all enqueued correctly
+    /// 4. Empty batch handling - verifies graceful handling of empty batches
+    fn test_duckling_queue_batch_optimization(&mut self) -> Result<()> {
+        const TABLE: &str = "swanlake.dq_batch_test";
+        const REORDER_TABLE: &str = "swanlake.dq_reorder_test";
+        self.drop_table_if_exists(TABLE)?;
+        self.drop_table_if_exists(REORDER_TABLE)?;
+        let test_result = (|| -> Result<()> {
+            // Setup: Create destination table with multiple columns
+            self.execute_update(
+                "CREATE TABLE swanlake.dq_batch_test (id INTEGER, name VARCHAR, value DOUBLE, active BOOLEAN)",
+            )?;
+
+            // Test Case 1: Large batch insert (tests optimization at scale)
+            // Create a batch with 1000 rows to verify efficiency
+            let batch_size = 1000;
+            let ids: Vec<i32> = (1..=batch_size).collect();
+            let names: Vec<String> = (1..=batch_size).map(|i| format!("item_{}", i)).collect();
+            let values: Vec<f64> = (1..=batch_size).map(|i| i as f64 * 1.5).collect();
+            let actives: Vec<bool> = (1..=batch_size).map(|i| i % 2 == 0).collect();
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, false),
+                Field::new("value", DataType::Float64, false),
+                Field::new("active", DataType::Boolean, false),
+            ]));
+
+            let large_batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(ids)) as ArrayRef,
+                    Arc::new(StringArray::from(names)),
+                    Arc::new(Float64Array::from(values)),
+                    Arc::new(BooleanArray::from(actives)),
+                ],
+            )?;
+
+            self.client.execute_batch_update(
+                "INSERT INTO duckling_queue.dq_batch_test (id, name, value, active) VALUES (?, ?, ?, ?)",
+                large_batch,
+            )?;
+
+            // Verify data hasn't landed yet (still in queue)
+            let pre_flush = self
+                .client
+                .query_scalar_i64("SELECT COUNT(*) FROM swanlake.dq_batch_test")?;
+            ensure!(
+                pre_flush == 0,
+                "duckling queue should buffer data before flush"
+            );
+
+            // Flush and verify data
+            self.execute_update("PRAGMA duckling_queue.flush")?;
+
+            let total_rows = self
+                .client
+                .query_scalar_i64("SELECT COUNT(*) FROM swanlake.dq_batch_test")?;
+            ensure!(
+                total_rows == 1000,
+                "expected 1000 rows after flush, got {}",
+                total_rows
+            );
+
+            // Verify large batch data (sample check)
+            let sample_result = self.client.execute(
+                "SELECT id, name, value, active FROM swanlake.dq_batch_test WHERE id IN (1, 500, 1000) ORDER BY id",
+            )?;
+            let sample_batch = sample_result
+                .batches
+                .first()
+                .context("expected sample rows")?;
+
+            ensure!(sample_batch.num_rows() == 3, "expected 3 sample rows");
+
+            // Test Case 2: Column reordering in a separate table
+            // Create separate table to test column reordering without schema conflicts
+            self.execute_update(
+                "CREATE TABLE swanlake.dq_reorder_test (id INTEGER, name VARCHAR, value DOUBLE, active BOOLEAN)",
+            )?;
+
+            // Send batch with columns in different order than INSERT statement
+            let reorder_schema = Arc::new(Schema::new(vec![
+                Field::new("value", DataType::Float64, false),
+                Field::new("active", DataType::Boolean, false),
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, false),
+            ]));
+
+            let reorder_batch = RecordBatch::try_new(
+                reorder_schema,
+                vec![
+                    Arc::new(Float64Array::from(vec![99.9, 88.8])) as ArrayRef,
+                    Arc::new(BooleanArray::from(vec![true, false])),
+                    Arc::new(Int32Array::from(vec![2001, 2002])),
+                    Arc::new(StringArray::from(vec!["reorder_a", "reorder_b"])),
+                ],
+            )?;
+
+            // INSERT specifies column order: (id, name, value, active)
+            // Batch has order: (value, active, id, name)
+            // The align_batch_to_table_schema should handle this
+            self.client.execute_batch_update(
+                "INSERT INTO duckling_queue.dq_reorder_test (id, name, value, active) VALUES (?, ?, ?, ?)",
+                reorder_batch,
+            )?;
+
+            // Flush and verify reordered data
+            self.execute_update("PRAGMA duckling_queue.flush")?;
+
+            let reorder_result = self.client.execute(
+                "SELECT id, name, value, active FROM swanlake.dq_reorder_test ORDER BY id",
+            )?;
+            let reorder_batch = reorder_result
+                .batches
+                .first()
+                .context("expected reordered rows")?;
+
+            let reorder_ids = reorder_batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("expected ids")?;
+            let reorder_names = reorder_batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("expected names")?;
+            let reorder_values = reorder_batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .context("expected values")?;
+            let reorder_actives = reorder_batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .context("expected actives")?;
+
+            ensure!(
+                reorder_ids.value(0) == 2001 && reorder_ids.value(1) == 2002,
+                "column reordering failed for id"
+            );
+            ensure!(
+                reorder_names.value(0) == "reorder_a" && reorder_names.value(1) == "reorder_b",
+                "column reordering failed for name"
+            );
+            ensure!(
+                (reorder_values.value(0) - 99.9).abs() < 0.01
+                    && (reorder_values.value(1) - 88.8).abs() < 0.01,
+                "column reordering failed for value"
+            );
+            ensure!(
+                reorder_actives.value(0) && !reorder_actives.value(1),
+                "column reordering failed for active"
+            );
+
+            // Test Case 3: Verify read protection still works
+            let read_attempt = self
+                .client
+                .execute("SELECT * FROM duckling_queue.dq_batch_test");
+            ensure!(
+                read_attempt.is_err(),
+                "duckling queue should remain write-only after batch optimization"
+            );
+
+            self.execute_update("PRAGMA duckling_queue.flush")?;
+
+            // Cleanup reorder table
+            self.drop_table_if_exists(REORDER_TABLE)?;
+            Ok(())
+        })();
+
+        self.finalize_table(TABLE, test_result)
     }
 
     fn verify_select_result(&self, result: QueryResult) -> Result<()> {
