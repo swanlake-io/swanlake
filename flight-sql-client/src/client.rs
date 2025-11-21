@@ -470,7 +470,7 @@ fn infer_query_from_sql(sql: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         first_token.as_str(),
-        "select" | "with" | "show" | "describe" | "explain" | "values"
+        "select" | "with" | "show" | "describe" | "desc" | "explain" | "values"
     )
 }
 
