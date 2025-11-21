@@ -17,7 +17,7 @@ pub use id::SessionId;
 // - A dedicated DuckDB connection (persistent state)
 // - Transaction state
 // - Prepared statements
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -140,6 +140,7 @@ pub struct Session {
     id: SessionId,
     connection: DuckDbConnection,
     transactions: Arc<Mutex<HashMap<TransactionId, Transaction>>>,
+    aborted_transactions: Arc<Mutex<HashSet<TransactionId>>>,
     prepared_statements: Arc<Mutex<HashMap<StatementHandle, PreparedStatementState>>>,
     transaction_id_gen: Arc<TransactionIdGenerator>,
     statement_handle_gen: Arc<StatementHandleGenerator>,
@@ -157,6 +158,7 @@ impl Session {
             id,
             connection,
             transactions: Arc::new(Mutex::new(HashMap::new())),
+            aborted_transactions: Arc::new(Mutex::new(HashSet::new())),
             prepared_statements: Arc::new(Mutex::new(HashMap::new())),
             transaction_id_gen: Arc::new(TransactionIdGenerator::new()),
             statement_handle_gen: Arc::new(StatementHandleGenerator::new()),
@@ -178,6 +180,7 @@ impl Session {
             id,
             connection,
             transactions: Arc::new(Mutex::new(HashMap::new())),
+            aborted_transactions: Arc::new(Mutex::new(HashSet::new())),
             prepared_statements: Arc::new(Mutex::new(HashMap::new())),
             transaction_id_gen: Arc::new(TransactionIdGenerator::new()),
             statement_handle_gen: Arc::new(StatementHandleGenerator::new()),
@@ -228,15 +231,25 @@ impl Session {
 
         match self.connection.execute_batch("ROLLBACK") {
             Ok(()) => {
-                let cleared = {
+                let (cleared, cleared_ids) = {
                     let mut txs = self
                         .transactions
                         .lock()
                         .expect("transactions mutex poisoned");
                     let cleared = txs.len();
+                    let ids = txs.keys().copied().collect::<Vec<_>>();
                     txs.clear();
-                    cleared
+                    (cleared, ids)
                 };
+                if !cleared_ids.is_empty() {
+                    let mut aborted = self
+                        .aborted_transactions
+                        .lock()
+                        .expect("aborted_transactions mutex poisoned");
+                    for id in cleared_ids {
+                        aborted.insert(id);
+                    }
+                }
                 info!(
                     cleared_transactions = cleared,
                     "auto-rolled back aborted transaction"
@@ -257,6 +270,17 @@ impl Session {
             }
             _ => false,
         }
+    }
+
+    fn transaction_absent_error(&self, transaction_id: TransactionId) -> Result<(), ServerError> {
+        let mut aborted = self
+            .aborted_transactions
+            .lock()
+            .expect("aborted_transactions mutex poisoned");
+        if aborted.remove(&transaction_id) {
+            return Err(ServerError::TransactionAborted);
+        }
+        Err(ServerError::TransactionNotFound)
     }
 
     /// Execute a SELECT query
@@ -721,19 +745,30 @@ impl Session {
     pub fn commit_transaction(&self, transaction_id: TransactionId) -> Result<(), ServerError> {
         self.touch();
 
-        // Verify transaction exists
-        let mut transactions = self
-            .transactions
-            .lock()
-            .expect("transactions mutex poisoned");
-        if !transactions.contains_key(&transaction_id) {
-            return Err(ServerError::TransactionNotFound);
+        // Verify transaction exists (without holding the lock during the commit)
+        {
+            let transactions = self
+                .transactions
+                .lock()
+                .expect("transactions mutex poisoned");
+            if !transactions.contains_key(&transaction_id) {
+                return self.transaction_absent_error(transaction_id);
+            }
         }
 
         // Execute COMMIT on the connection
         self.with_transaction_recovery(|| self.connection.execute_batch("COMMIT"))?;
 
+        let mut transactions = self
+            .transactions
+            .lock()
+            .expect("transactions mutex poisoned");
         transactions.remove(&transaction_id);
+        let mut aborted = self
+            .aborted_transactions
+            .lock()
+            .expect("aborted_transactions mutex poisoned");
+        aborted.remove(&transaction_id);
         debug!("committed transaction");
         Ok(())
     }
@@ -743,19 +778,30 @@ impl Session {
     pub fn rollback_transaction(&self, transaction_id: TransactionId) -> Result<(), ServerError> {
         self.touch();
 
-        // Verify transaction exists
-        let mut transactions = self
-            .transactions
-            .lock()
-            .expect("transactions mutex poisoned");
-        if !transactions.contains_key(&transaction_id) {
-            return Err(ServerError::TransactionNotFound);
+        // Verify transaction exists (without holding the lock during the rollback)
+        {
+            let transactions = self
+                .transactions
+                .lock()
+                .expect("transactions mutex poisoned");
+            if !transactions.contains_key(&transaction_id) {
+                return self.transaction_absent_error(transaction_id);
+            }
         }
 
         // Execute ROLLBACK on the connection
         self.with_transaction_recovery(|| self.connection.execute_batch("ROLLBACK"))?;
 
+        let mut transactions = self
+            .transactions
+            .lock()
+            .expect("transactions mutex poisoned");
         transactions.remove(&transaction_id);
+        let mut aborted = self
+            .aborted_transactions
+            .lock()
+            .expect("aborted_transactions mutex poisoned");
+        aborted.remove(&transaction_id);
         debug!("rolled back transaction");
         Ok(())
     }

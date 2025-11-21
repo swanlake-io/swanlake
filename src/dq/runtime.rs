@@ -93,21 +93,39 @@ fn spawn_flush_workers(
                     }
                     Ok(Err(err)) => {
                         warn!(error = %err, "duckling queue flush failed");
-                        attempt_dlq_offload(
-                            factory_for_dlq,
-                            storage_for_dlq,
-                            &settings_for_dlq,
-                            &retry_payload,
-                        )
+                        match tokio::task::spawn_blocking({
+                            let factory = factory_for_dlq.clone();
+                            let storage = storage_for_dlq.clone();
+                            let settings = settings_for_dlq.clone();
+                            let payload = retry_payload.clone();
+                            move || attempt_dlq_offload(factory, storage, &settings, &payload)
+                        })
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(join_err) => {
+                                warn!(error = %join_err, "duckling queue DLQ offload panicked");
+                                false
+                            }
+                        }
                     }
                     Err(join_err) => {
                         warn!(error = %join_err, "duckling queue flush panicked");
-                        attempt_dlq_offload(
-                            factory_for_dlq,
-                            storage_for_dlq,
-                            &settings_for_dlq,
-                            &retry_payload,
-                        )
+                        match tokio::task::spawn_blocking({
+                            let factory = factory_for_dlq.clone();
+                            let storage = storage_for_dlq.clone();
+                            let settings = settings_for_dlq.clone();
+                            let payload = retry_payload.clone();
+                            move || attempt_dlq_offload(factory, storage, &settings, &payload)
+                        })
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(join_err) => {
+                                warn!(error = %join_err, "duckling queue DLQ offload panicked");
+                                false
+                            }
+                        }
                     }
                 };
 
@@ -218,7 +236,7 @@ fn offload_payload_to_dlq(
                 ))
             })?;
 
-        let dest_path = format!("{}/{}/{}.parquet", target_root, payload.table, file_name);
+        let dest_path = format!("{}/{}/{}", target_root, payload.table, file_name);
         create_parent_dir_if_local(&dest_path)?;
         copy_parquet_chunk(src_path, &dest_path, &app_conn)?;
     }

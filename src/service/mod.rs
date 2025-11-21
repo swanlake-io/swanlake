@@ -91,6 +91,12 @@ impl SwanFlightSqlService {
                 error!(error = %e, "arrow conversion error");
                 Status::internal(format!("arrow error: {e}"))
             }
+            ServerError::TransactionAborted => {
+                error!("transaction aborted and rolled back");
+                Status::failed_precondition(
+                    "transaction aborted and rolled back; start a new transaction",
+                )
+            }
             ServerError::TransactionNotFound => {
                 error!("unknown transaction");
                 Status::invalid_argument("unknown transaction")

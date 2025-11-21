@@ -6,6 +6,8 @@ pub enum ServerError {
     DuckDb(#[from] duckdb::Error),
     #[error("arrow error: {0}")]
     Arrow(#[from] arrow_schema::ArrowError),
+    #[error("transaction was aborted and rolled back")]
+    TransactionAborted,
     #[error("transaction not found")]
     TransactionNotFound,
     #[error("prepared statement not found")]
