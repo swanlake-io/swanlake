@@ -34,17 +34,14 @@ impl TableReference {
 impl ParsedStatement {
     /// Parse a SQL statement.
     ///
-    /// Returns `None` if the SQL cannot be parsed or contains multiple statements.
+    /// For multi-statement SQL, returns the last statement (which determines the result type).
+    /// Returns `None` if the SQL cannot be parsed.
     pub fn parse(sql: &str) -> Option<Self> {
         let dialect = GenericDialect {};
         let statements = Parser::parse_sql(&dialect, sql).ok()?;
 
-        if statements.len() != 1 {
-            return None;
-        }
-
         Some(Self {
-            statement: statements.into_iter().next()?,
+            statement: statements.into_iter().last()?,
         })
     }
 
@@ -255,8 +252,25 @@ mod tests {
     #[test]
     fn test_parsed_statement_multiple_statements() {
         let sql = "INSERT INTO users VALUES (1, 'Alice'); INSERT INTO users VALUES (2, 'Bob');";
-        // Should reject multiple statements
-        assert!(ParsedStatement::parse(sql).is_none());
+        // Should parse and use the last statement
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        assert!(parsed.is_insert());
+    }
+
+    #[test]
+    fn test_parsed_statement_multi_statement_query() {
+        let sql = "USE swanlake; SHOW TABLES;";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        assert!(parsed.is_query());
+    }
+
+    #[test]
+    fn test_parsed_statement_multi_statement_uses_last() {
+        let sql = "SELECT 1; INSERT INTO users VALUES (1, 'Alice');";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        // Last statement is INSERT, so is_query should be false
+        assert!(parsed.is_insert());
+        assert!(!parsed.is_query());
     }
 
     #[test]
