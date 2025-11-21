@@ -40,6 +40,16 @@ impl EngineFactory {
         Ok(Self { init_sql })
     }
 
+    /// Lightweight constructor for tests that need a controllable init SQL without
+    /// installing extensions or hitting the network.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn for_tests(init_sql: &str) -> Self {
+        Self {
+            init_sql: init_sql.to_string(),
+        }
+    }
+
     /// Create a DuckDB connection with the given init SQL
     fn create_connection_with_sql(init_sql: &str) -> Result<Connection, ServerError> {
         let config = Config::default()

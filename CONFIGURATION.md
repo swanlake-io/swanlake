@@ -92,6 +92,7 @@ settings control when flushes happen and how aggressive the runtime should be.
 | `SWANLAKE_DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
 | `SWANLAKE_DUCKLING_QUEUE_TARGET_CATALOG` | Target catalog for flushed tables | `swanlake` |
 | `SWANLAKE_DUCKLING_QUEUE_ROOT` | Directory used to persist buffered batches so they survive crashes | `target/duckling_queue` |
+| `SWANLAKE_DUCKLING_QUEUE_DLQ_TARGET` | Optional destination (e.g. `r2://bucket/path`) to copy failed chunks instead of endlessly retrying | unset |
 
 Admin commands:
 

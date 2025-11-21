@@ -20,6 +20,8 @@ pub struct Settings {
     pub target_catalog: String,
     /// Root directory for persisted buffered chunks.
     pub root_dir: PathBuf,
+    /// Optional destination for failed flush payloads (e.g. r2://bucket/path).
+    pub dlq_target: Option<String>,
 }
 
 impl Settings {
@@ -32,6 +34,7 @@ impl Settings {
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes.max(1),
             target_catalog: config.duckling_queue_target_catalog.clone(),
             root_dir: PathBuf::from(&config.duckling_queue_root),
+            dlq_target: config.duckling_queue_dlq_target.clone(),
         }
     }
 }

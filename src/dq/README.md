@@ -66,6 +66,6 @@ All settings map directly to `ServerConfig` fields.
 
 - `PRAGMA duckling_queue.flush`/`CALL duckling_queue_flush()` – force all buffers to flush immediately.
 - Buffered batches are persisted under `DUCKLING_QUEUE_ROOT`, so pending data is replayed automatically after a crash. Flushes remain at-least-once: data that was already written to DuckLake may be retried after a failure.
-- If DuckLake is unreachable, flush failures are logged and the payload is requeued, applying natural back-pressure on new inserts for that table.
+- If DuckLake is unreachable, flush failures are logged and the payload is requeued, applying natural back-pressure on new inserts for that table. Optionally, set `SWANLAKE_DUCKLING_QUEUE_DLQ_TARGET` (e.g. `r2://bucket/path`) to copy failed chunks to remote storage instead of endlessly retrying that payload.
 
 This new design keeps the user-facing SQL surface unchanged while drastically simplifying the implementation and avoiding the pathological file explosion observed previously.

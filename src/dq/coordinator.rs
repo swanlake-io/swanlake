@@ -68,6 +68,13 @@ impl FlushPayload {
         self.chunks.iter().map(|chunk| chunk.rows).sum()
     }
 
+    pub fn chunk_handles(&self) -> Vec<DurableChunk> {
+        self.chunks
+            .iter()
+            .map(|chunk| chunk.handle.clone())
+            .collect()
+    }
+
     pub fn into_batches_and_chunks(self) -> (Vec<RecordBatch>, Vec<DurableChunk>) {
         let mut batches = Vec::new();
         let mut handles = Vec::new();
@@ -437,6 +444,7 @@ mod tests {
             max_parallel_flushes: 1,
             target_catalog: "swanlake".to_string(),
             root_dir: root,
+            dlq_target: None,
         }
     }
 

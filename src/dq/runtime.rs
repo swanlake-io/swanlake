@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -65,30 +66,53 @@ fn spawn_flush_workers(
     tokio::spawn(async move {
         while let Some(payload) = rx.recv().await {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            let factory_cloned = factory.clone();
+            let factory_for_flush = factory.clone();
+            let factory_for_dlq = factory.clone();
             let coordinator_cloned = coordinator.clone();
-            let settings_clone = settings.clone();
-            let storage_clone = storage.clone();
+            let settings_for_flush = settings.clone();
+            let settings_for_dlq = settings.clone();
+            let storage_for_flush = storage.clone();
+            let storage_for_dlq = storage.clone();
             let tracker_clone = tracker.clone();
             let retry_payload = payload.clone();
             tokio::spawn(async move {
                 let res = tokio::task::spawn_blocking(move || {
-                    flush_payload(factory_cloned, &settings_clone, storage_clone, payload)
+                    flush_payload(
+                        factory_for_flush,
+                        &settings_for_flush,
+                        storage_for_flush,
+                        payload,
+                    )
                 })
                 .await;
 
-                match res {
+                let handled = match res {
                     Ok(Ok(())) => {
                         debug!("duckling queue flush task completed");
+                        true
                     }
                     Ok(Err(err)) => {
-                        warn!(error = %err, "duckling queue flush failed; re-queuing payload");
-                        coordinator_cloned.requeue(retry_payload);
+                        warn!(error = %err, "duckling queue flush failed");
+                        attempt_dlq_offload(
+                            factory_for_dlq,
+                            storage_for_dlq,
+                            &settings_for_dlq,
+                            &retry_payload,
+                        )
                     }
                     Err(join_err) => {
-                        warn!(error = %join_err, "duckling queue flush panicked; re-queuing payload");
-                        coordinator_cloned.requeue(retry_payload);
+                        warn!(error = %join_err, "duckling queue flush panicked");
+                        attempt_dlq_offload(
+                            factory_for_dlq,
+                            storage_for_dlq,
+                            &settings_for_dlq,
+                            &retry_payload,
+                        )
                     }
+                };
+
+                if !handled {
+                    coordinator_cloned.requeue(retry_payload);
                 }
                 tracker_clone.complete();
                 drop(permit);
@@ -126,5 +150,114 @@ fn flush_payload(
         .collect::<Result<Vec<_>, ServerError>>()?;
     conn.insert_with_appender(&settings.target_catalog, &table, aligned_batches)?;
     storage.remove_chunks(chunk_handles)?;
+    Ok(())
+}
+
+fn attempt_dlq_offload(
+    factory: Arc<Mutex<EngineFactory>>,
+    storage: Arc<DurableStorage>,
+    settings: &Settings,
+    payload: &FlushPayload,
+) -> bool {
+    let Some(target_root) = settings.dlq_target.as_ref() else {
+        return false;
+    };
+
+    match offload_payload_to_dlq(factory, storage, target_root, payload) {
+        Ok(()) => {
+            info!(
+                table = %payload.table,
+                target = %target_root,
+                "duckling queue payload copied to DLQ target"
+            );
+            true
+        }
+        Err(err) => {
+            warn!(
+                error = %err,
+                table = %payload.table,
+                target = %target_root,
+                "failed to offload duckling queue payload to DLQ target"
+            );
+            false
+        }
+    }
+}
+
+fn offload_payload_to_dlq(
+    factory: Arc<Mutex<EngineFactory>>,
+    storage: Arc<DurableStorage>,
+    target_root: &str,
+    payload: &FlushPayload,
+) -> Result<(), ServerError> {
+    if payload.is_empty() {
+        return Ok(());
+    }
+
+    let conn = factory.lock().unwrap().create_connection()?;
+    let handles = payload.chunk_handles();
+    if handles.is_empty() {
+        return Ok(());
+    }
+
+    let target_root = target_root.trim_end_matches('/');
+    let app_conn = conn
+        .conn
+        .lock()
+        .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
+
+    for handle in &handles {
+        let src_path = handle.path();
+        let file_name = src_path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .ok_or_else(|| {
+                ServerError::Internal(format!(
+                    "failed to read duckling queue chunk filename from {}",
+                    src_path.display()
+                ))
+            })?;
+
+        let dest_path = format!("{}/{}/{}.parquet", target_root, payload.table, file_name);
+        create_parent_dir_if_local(&dest_path)?;
+        copy_parquet_chunk(src_path, &dest_path, &app_conn)?;
+    }
+
+    // Only remove local chunks after they have been copied successfully.
+    drop(app_conn);
+    storage.remove_chunks(handles)?;
+    Ok(())
+}
+
+fn escape_single_quotes(input: &str) -> String {
+    input.replace("'", "''")
+}
+
+fn create_parent_dir_if_local(dest: &str) -> Result<(), ServerError> {
+    if dest.contains("://") {
+        return Ok(());
+    }
+    if let Some(parent) = std::path::Path::new(dest).parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            ServerError::Internal(format!(
+                "failed to create local DLQ directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn copy_parquet_chunk(
+    src_path: &Path,
+    dest_path: &str,
+    conn: &duckdb::Connection,
+) -> Result<(), ServerError> {
+    let sql = format!(
+        "COPY (SELECT * FROM read_parquet('{}')) TO '{}' (FORMAT 'parquet');",
+        escape_single_quotes(src_path.to_string_lossy().as_ref()),
+        escape_single_quotes(dest_path)
+    );
+    conn.execute(&sql, []).map_err(ServerError::DuckDb)?;
     Ok(())
 }

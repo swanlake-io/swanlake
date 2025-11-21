@@ -33,6 +33,8 @@ pub struct ServerConfig {
     pub duckling_queue_target_catalog: String,
     /// Directory where the Duckling Queue persists buffered batches.
     pub duckling_queue_root: String,
+    /// Optional destination to copy failed duckling_queue chunks (e.g. r2://bucket/path).
+    pub duckling_queue_dlq_target: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -54,6 +56,7 @@ impl Default for ServerConfig {
 
             duckling_queue_target_catalog: "swanlake".to_string(),
             duckling_queue_root: "target/duckling_queue".to_string(),
+            duckling_queue_dlq_target: None,
         }
     }
 }

@@ -5,10 +5,12 @@ use std::path::{Path, PathBuf};
 use std::str;
 
 use arrow_array::RecordBatch;
-use arrow_ipc::reader::FileReader;
-use arrow_ipc::writer::FileWriter;
 use arrow_schema::SchemaRef;
 use chrono::Utc;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_writer::ArrowWriter;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
 use tracing::warn;
 
 use crate::error::ServerError;
@@ -22,6 +24,10 @@ pub struct DurableChunk {
 impl DurableChunk {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 }
 
@@ -66,7 +72,7 @@ impl DurableStorage {
         })?;
 
         let file_name = format!(
-            "{}-{}.arrow",
+            "{}-{}.parquet",
             Utc::now().timestamp_millis(),
             uuid::Uuid::new_v4()
         );
@@ -77,11 +83,21 @@ impl DurableStorage {
                 path.display()
             ))
         })?;
-        let mut writer = FileWriter::try_new(file, schema.as_ref()).map_err(ServerError::Arrow)?;
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(file, schema.clone(), Some(props)).map_err(|err| {
+                ServerError::Internal(format!("failed to create parquet writer: {err}"))
+            })?;
         for batch in batches {
-            writer.write(batch).map_err(ServerError::Arrow)?;
+            writer.write(batch).map_err(|err| {
+                ServerError::Internal(format!("failed to write parquet batch: {err}"))
+            })?;
         }
-        writer.finish().map_err(ServerError::Arrow)?;
+        writer.close().map_err(|err| {
+            ServerError::Internal(format!("failed to finish parquet file: {err}"))
+        })?;
         Ok(DurableChunk::new(path))
     }
 
@@ -112,7 +128,7 @@ impl DurableStorage {
                 .filter(|path| {
                     path.file_name()
                         .and_then(|name| name.to_str())
-                        .map(|name| name.ends_with(".arrow"))
+                        .map(|name| name.ends_with(".parquet"))
                         .unwrap_or(false)
                 })
                 .collect::<Vec<_>>();
@@ -213,16 +229,26 @@ impl DurableStorage {
                 chunk_path.display()
             ))
         })?;
-        let reader = FileReader::try_new(file, None).map_err(ServerError::Arrow)?;
-        let schema = reader.schema();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|err| {
+            ServerError::Internal(format!(
+                "failed to build parquet reader for {}: {err}",
+                chunk_path.display()
+            ))
+        })?;
+        let schema = builder.schema().clone();
+        let mut reader = builder
+            .build()
+            .map_err(|err| ServerError::Internal(format!("failed to read parquet file: {err}")))?;
         let mut batches = Vec::new();
-        for item in reader {
-            let batch = item.map_err(ServerError::Arrow)?;
+        for item in reader.by_ref() {
+            let batch = item.map_err(|err| {
+                ServerError::Internal(format!("failed to read parquet batch: {err}"))
+            })?;
             batches.push(batch);
         }
         Ok(PersistedChunk {
             table: table.to_string(),
-            schema,
+            schema: schema.clone(),
             batches,
             handle: DurableChunk::new(chunk_path.to_path_buf()),
         })
