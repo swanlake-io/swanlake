@@ -18,7 +18,7 @@ mkdir -p "$SWANLAKE_DUCKLING_QUEUE_ROOT"
 export SWANLAKE_DUCKLING_QUEUE_DLQ_TARGET="$TEST_DIR/duckling_dlq"
 mkdir -p "$SWANLAKE_DUCKLING_QUEUE_DLQ_TARGET"
 
-export SWANLAKE_DUCKLAKE_INIT_SQL="INSTALL arrow FROM community; LOAD arrow; ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '$TEST_DIR/swanlake_files', OVERRIDE_DATA_PATH true);"
+export SWANLAKE_DUCKLAKE_INIT_SQL="ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '$TEST_DIR/swanlake_files', OVERRIDE_DATA_PATH true);"
 export RUST_LOG="${RUST_LOG:-info,swanlake::dq=debug}"
 
 # Coverage configuration
