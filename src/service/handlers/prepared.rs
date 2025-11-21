@@ -337,18 +337,12 @@ pub(crate) async fn do_put_prepared_statement_update(
                     "falling back to parameter execution for duckling_queue (expressions/defaults present)"
                 );
                 let session_clone = Arc::clone(&session);
-                return Ok(
-                    tokio::task::spawn_blocking(move || {
-                        SwanFlightSqlService::execute_statement_batches(
-                            &sql,
-                            &params,
-                            &session_clone,
-                        )
-                    })
-                    .await
-                    .map_err(SwanFlightSqlService::status_from_join)?
-                    .map_err(SwanFlightSqlService::status_from_error)?,
-                );
+                return tokio::task::spawn_blocking(move || {
+                    SwanFlightSqlService::execute_statement_batches(&sql, &params, &session_clone)
+                })
+                .await
+                .map_err(SwanFlightSqlService::status_from_join)?
+                .map_err(SwanFlightSqlService::status_from_error);
             }
 
             // Optimized path for duckling_queue: directly enqueue Arrow batches

@@ -21,3 +21,4 @@ lcov.info
 .vscode/
 
 .venv/
+test_*

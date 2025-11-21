@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use arrow_array::RecordBatch;
 use arrow_schema::{Field, Schema};
 use duckdb::types::Value;
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::dq::DqCoordinator;
 use crate::engine::{DuckDbConnection, QueryResult};
@@ -204,12 +204,67 @@ impl Session {
         *last = Instant::now();
     }
 
+    /// Run an operation and automatically roll back if DuckDB reports an aborted transaction.
+    fn with_transaction_recovery<T, F>(&self, op: F) -> Result<T, ServerError>
+    where
+        F: FnOnce() -> Result<T, ServerError>,
+    {
+        match op() {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                self.recover_from_transaction_abort(&err);
+                Err(err)
+            }
+        }
+    }
+
+    /// Detect the "transaction aborted" state and roll back so the session can be reused.
+    fn recover_from_transaction_abort(&self, err: &ServerError) {
+        if !Self::is_transaction_abort_error(err) {
+            return;
+        }
+
+        warn!(error = %err, "transaction aborted; rolling back session state");
+
+        match self.connection.execute_batch("ROLLBACK") {
+            Ok(()) => {
+                let cleared = {
+                    let mut txs = self
+                        .transactions
+                        .lock()
+                        .expect("transactions mutex poisoned");
+                    let cleared = txs.len();
+                    txs.clear();
+                    cleared
+                };
+                info!(
+                    cleared_transactions = cleared,
+                    "auto-rolled back aborted transaction"
+                );
+            }
+            Err(rollback_err) => {
+                warn!(error = %rollback_err, "failed to rollback aborted transaction");
+            }
+        }
+    }
+
+    fn is_transaction_abort_error(err: &ServerError) -> bool {
+        match err {
+            ServerError::DuckDb(duck_err) => {
+                let msg = duck_err.to_string();
+                msg.contains("Current transaction is aborted")
+                    || msg.contains("TransactionContext Error")
+            }
+            _ => false,
+        }
+    }
+
     /// Execute a SELECT query
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn execute_query(&self, sql: &str) -> Result<QueryResult, ServerError> {
         self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
-        self.connection.execute_query(sql)
+        self.with_transaction_recovery(|| self.connection.execute_query(sql))
     }
 
     /// Execute a query with parameters
@@ -221,7 +276,7 @@ impl Session {
     ) -> Result<QueryResult, ServerError> {
         self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
-        self.connection.execute_query_with_params(sql, params)
+        self.with_transaction_recovery(|| self.connection.execute_query_with_params(sql, params))
     }
 
     /// Execute a statement (DDL/DML)
@@ -236,7 +291,7 @@ impl Session {
         }
 
         self.touch();
-        self.connection.execute_statement(sql)
+        self.with_transaction_recovery(|| self.connection.execute_statement(sql))
     }
 
     /// Try to handle duckling queue administrative commands.
@@ -318,10 +373,12 @@ impl Session {
         // Execute the source SQL as a query to get Arrow batches
         // This converts "VALUES (?)" or "SELECT ..." into Arrow format
         let result = if let Some(values) = params {
-            self.connection
-                .execute_query_with_params(&source_sql, values)?
+            self.with_transaction_recovery(|| {
+                self.connection
+                    .execute_query_with_params(&source_sql, values)
+            })?
         } else {
-            self.connection.execute_query(&source_sql)?
+            self.with_transaction_recovery(|| self.connection.execute_query(&source_sql))?
         };
 
         if result.total_rows == 0 {
@@ -404,7 +461,9 @@ impl Session {
         }
 
         self.touch();
-        self.connection.execute_statement_with_params(sql, params)
+        self.with_transaction_recovery(|| {
+            self.connection.execute_statement_with_params(sql, params)
+        })
     }
 
     /// Get schema for a query
@@ -412,7 +471,7 @@ impl Session {
     pub fn schema_for_query(&self, sql: &str) -> Result<arrow_schema::Schema, ServerError> {
         self.ensure_duckling_queue_usage_allowed(sql)?;
         self.touch();
-        self.connection.schema_for_query(sql)
+        self.with_transaction_recovery(|| self.connection.schema_for_query(sql))
     }
 
     /// Insert data using appender API with RecordBatches.
@@ -427,18 +486,20 @@ impl Session {
         batches: Vec<arrow_array::RecordBatch>,
     ) -> Result<usize, ServerError> {
         self.touch();
-        self.connection
-            .insert_with_appender(catalog_name, table_name, batches)
+        self.with_transaction_recovery(|| {
+            self.connection
+                .insert_with_appender(catalog_name, table_name, batches)
+        })
     }
 
     /// Get the schema of a table
     pub fn table_schema(&self, table_name: &str) -> Result<arrow_schema::Schema, ServerError> {
-        self.connection.table_schema(table_name)
+        self.with_transaction_recovery(|| self.connection.table_schema(table_name))
     }
 
     /// Return the current catalog selected for this session.
     pub fn current_catalog(&self) -> Result<String, ServerError> {
-        self.connection.current_catalog()
+        self.with_transaction_recovery(|| self.connection.current_catalog())
     }
 
     fn rename_batch_columns(
@@ -642,7 +703,7 @@ impl Session {
         self.touch();
 
         // Execute BEGIN TRANSACTION on the connection
-        self.connection.execute_batch("BEGIN TRANSACTION")?;
+        self.with_transaction_recovery(|| self.connection.execute_batch("BEGIN TRANSACTION"))?;
 
         let tx_id = self.transaction_id_gen.next();
         let mut transactions = self
@@ -670,7 +731,7 @@ impl Session {
         }
 
         // Execute COMMIT on the connection
-        self.connection.execute_batch("COMMIT")?;
+        self.with_transaction_recovery(|| self.connection.execute_batch("COMMIT"))?;
 
         transactions.remove(&transaction_id);
         debug!("committed transaction");
@@ -692,7 +753,7 @@ impl Session {
         }
 
         // Execute ROLLBACK on the connection
-        self.connection.execute_batch("ROLLBACK")?;
+        self.with_transaction_recovery(|| self.connection.execute_batch("ROLLBACK"))?;
 
         transactions.remove(&transaction_id);
         debug!("rolled back transaction");
