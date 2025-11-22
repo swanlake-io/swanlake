@@ -22,3 +22,6 @@ lcov.info
 
 .venv/
 test_*
+.python-version
+uv.lock
+__marimo__

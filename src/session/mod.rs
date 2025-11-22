@@ -208,7 +208,27 @@ impl Session {
     }
 
     /// Run an operation and automatically roll back if DuckDB reports an aborted transaction.
+    /// After rollback, retry the operation once.
     fn with_transaction_recovery<T, F>(&self, op: F) -> Result<T, ServerError>
+    where
+        F: Fn() -> Result<T, ServerError>,
+    {
+        match op() {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                if Self::is_transaction_abort_error(&err) {
+                    self.recover_from_transaction_abort(&err);
+                    // Retry once after rollback
+                    op()
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    /// Run an operation without retry on transaction abort (for operations that move data).
+    fn with_transaction_recovery_no_retry<T, F>(&self, op: F) -> Result<T, ServerError>
     where
         F: FnOnce() -> Result<T, ServerError>,
     {
@@ -510,7 +530,7 @@ impl Session {
         batches: Vec<arrow_array::RecordBatch>,
     ) -> Result<usize, ServerError> {
         self.touch();
-        self.with_transaction_recovery(|| {
+        self.with_transaction_recovery_no_retry(|| {
             self.connection
                 .insert_with_appender(catalog_name, table_name, batches)
         })
@@ -752,7 +772,9 @@ impl Session {
                 .lock()
                 .expect("transactions mutex poisoned");
             if !transactions.contains_key(&transaction_id) {
-                return self.transaction_absent_error(transaction_id);
+                // Transaction doesn't exist - ignore it (idempotent commit)
+                debug!("transaction not found, ignoring commit");
+                return Ok(());
             }
         }
 

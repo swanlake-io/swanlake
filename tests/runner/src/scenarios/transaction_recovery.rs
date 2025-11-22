@@ -14,6 +14,7 @@ pub async fn run_transaction_recovery(args: &CliArgs) -> Result<()> {
 
     test_auto_rollback_after_abort(&mut client, "tx_recovery")?;
     test_auto_rollback_after_abort(&mut client, "swanlake.tx_recovery_catalog")?;
+    test_auto_retry_after_schema_error(&mut client)?;
     test_new_session_after_abort(args)?;
 
     info!("Transaction recovery tests completed successfully");
@@ -40,31 +41,65 @@ fn test_auto_rollback_after_abort(client: &mut FlightSQLClient, table: &str) -> 
             "expected a type-related error, got {err_text}"
         );
 
-        // Next statement should fail with the transaction aborted error; the server should
-        // auto-rollback in response so the session becomes usable again.
-        let tx_err = client
-            .execute_update(&format!("INSERT INTO {table} VALUES (2)"))
-            .expect_err("expected transaction abort after failure");
-        let tx_err_text = tx_err.to_string().to_lowercase();
-        ensure!(
-            tx_err_text.contains("transaction") && tx_err_text.contains("abort"),
-            "expected transaction abort error, got {tx_err_text}"
-        );
+        // Next statement will detect the aborted transaction, auto-rollback, and retry.
+        // The retry succeeds in autocommit mode (outside the transaction).
+        client.execute_update(&format!("INSERT INTO {table} VALUES (2)"))?;
 
-        // After the abort was detected, the server should have rolled back the transaction,
-        // so fresh statements should succeed in autocommit mode.
+        // After the auto-rollback and retry, fresh statements should continue to work.
         client.execute_update(&format!("INSERT INTO {table} VALUES (3)"))?;
 
         let ids = fetch_ids(client, &format!("SELECT id FROM {table} ORDER BY id"))?;
         ensure!(
-            ids == vec![3],
-            "expected rolled-back transaction to remove earlier writes for {table}, got {ids:?}"
+            ids == vec![2, 3],
+            "expected rolled-back transaction to remove INSERT(1), leaving only auto-retried INSERT(2) and INSERT(3) for {table}, got {ids:?}"
         );
         Ok(())
     })();
 
     client.execute_update(&format!("DROP TABLE IF EXISTS {table}"))?;
     result
+}
+
+fn test_auto_retry_after_schema_error(client: &mut FlightSQLClient) -> Result<()> {
+    // This test simulates the scenario from the bug report:
+    // 1. A query with an error (e.g., missing file) puts DuckDB in aborted transaction state
+    // 2. The next query should auto-retry after rollback and succeed
+
+    client.execute_update("DROP TABLE IF EXISTS auto_retry_test")?;
+    client.execute_update("CREATE TABLE auto_retry_test (id INT, name VARCHAR)")?;
+    client.execute_update("INSERT INTO auto_retry_test VALUES (1, 'test')")?;
+
+    // First, cause an error that puts the transaction in aborted state.
+    // We'll try to query a non-existent table.
+    let err = client
+        .execute("SELECT * FROM non_existent_table_xyz LIMIT 10")
+        .expect_err("expected error for non-existent table");
+    let err_text = err.to_string().to_lowercase();
+    ensure!(
+        err_text.contains("catalog")
+            || err_text.contains("not found")
+            || err_text.contains("does not exist"),
+        "expected catalog/not found error, got {err_text}"
+    );
+
+    // Now execute a valid query. This should trigger auto-retry after detecting
+    // the aborted transaction state, roll back, and succeed on the retry.
+    let result = client.execute("SHOW TABLES")?;
+    ensure!(
+        result.total_rows > 0,
+        "expected SHOW TABLES to succeed after auto-retry"
+    );
+
+    // Verify we can still query the table that exists
+    let result = client.execute("SELECT COUNT(*) FROM auto_retry_test")?;
+    ensure!(
+        result.total_rows == 1,
+        "expected to query existing table after recovery"
+    );
+
+    client.execute_update("DROP TABLE IF EXISTS auto_retry_test")?;
+    info!("Auto-retry after schema error test passed");
+    Ok(())
 }
 
 fn test_new_session_after_abort(args: &CliArgs) -> Result<()> {
