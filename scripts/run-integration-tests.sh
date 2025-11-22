@@ -172,3 +172,9 @@ cd -
 sleep 2
 
 echo "Integration tests completed. Coverage data collected in target/llvm-cov-target/"
+
+# ============================================================================
+# Generate Coverage Report
+# ============================================================================
+
+cargo llvm-cov report --lcov --output-path "$ROOT_DIR/lcov.info"

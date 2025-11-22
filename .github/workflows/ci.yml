@@ -103,11 +103,6 @@ jobs:
           PGUSER: postgres
           SWANLAKE_DUCKDB_UI_SERVER_ENABLED: true
 
-      - name: Collect coverage
-        run: |
-          source .duckdb/env.sh
-          cargo llvm-cov report --lcov --output-path lcov.info
-
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v5
         with:
