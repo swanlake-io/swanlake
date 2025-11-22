@@ -7,6 +7,7 @@ use tracing::{error, field::display, info};
 use crate::service::SwanFlightSqlService;
 use crate::session::id::TransactionId;
 
+/// Starts a transaction for the current session via FlightSQL action.
 pub(crate) async fn do_action_begin_transaction(
     service: &SwanFlightSqlService,
     _query: ActionBeginTransactionRequest,
@@ -27,6 +28,8 @@ pub(crate) async fn do_action_begin_transaction(
     })
 }
 
+/// Commits or rolls back a session transaction based on the action flag,
+/// tolerating autocommit scenarios where the operation becomes a no-op.
 pub(crate) async fn do_action_end_transaction(
     service: &SwanFlightSqlService,
     query: ActionEndTransactionRequest,

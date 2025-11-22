@@ -36,14 +36,101 @@ impl SwanFlightSqlService {
         handle: StatementHandle,
         meta: PreparedStatementMeta,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        let PreparedStatementMeta { sql, .. } = meta;
+        let parameters = session
+            .take_prepared_statement_parameters(handle)
+            .map_err(Self::status_from_error)?
+            .unwrap_or_else(Vec::new);
+
+        self.execute_prepared_query_with_params(session, handle, meta, parameters)
+            .await
+    }
+
+    pub(crate) async fn execute_prepared_update_handle(
+        &self,
+        session: &Arc<Session>,
+        handle: StatementHandle,
+        meta: PreparedStatementMeta,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let PreparedStatementMeta { sql, ephemeral, .. } = meta;
 
         let parameters = session
             .take_prepared_statement_parameters(handle)
             .map_err(Self::status_from_error)?
             .unwrap_or_else(Vec::new);
 
-        if meta.ephemeral {
+        if ephemeral {
+            if let Err(err) = session.close_prepared_statement(handle) {
+                warn!(
+                    handle = %handle,
+                    %err,
+                    "failed to close ephemeral prepared statement"
+                );
+            }
+        }
+
+        let param_count = parameters.len();
+        info!(
+            handle = %handle,
+            sql = %sql,
+            param_count,
+            "executing prepared statement update via handle"
+        );
+
+        let session_clone = session.clone();
+        let params_for_exec = parameters;
+        let sql_for_exec = sql.clone();
+
+        let affected_rows = tokio::task::spawn_blocking(move || {
+            if params_for_exec.is_empty() {
+                Self::execute_statement_batches(&sql_for_exec, &[], &session_clone)
+            } else {
+                Self::execute_statement_batches(
+                    &sql_for_exec,
+                    std::slice::from_ref(&params_for_exec),
+                    &session_clone,
+                )
+            }
+        })
+        .await
+        .map_err(Self::status_from_join)?
+        .map_err(Self::status_from_error)?;
+
+        info!(
+            handle = %handle,
+            affected_rows,
+            "prepared statement update completed"
+        );
+
+        Ok(Self::empty_affected_rows_response(affected_rows))
+    }
+
+    pub(crate) fn empty_affected_rows_response(
+        affected_rows: i64,
+    ) -> Response<<Self as FlightService>::DoGetStream> {
+        // Emit an empty schema message so Flight clients don't hit EOF/Unknown.
+        let empty_schema = arrow_schema::Schema::empty();
+        let flight_data =
+            arrow_flight::utils::batches_to_flight_data(&empty_schema, vec![]).unwrap_or_default();
+        let stream = Self::into_stream(flight_data);
+        let mut response = Response::new(stream);
+        if let Ok(value) = MetadataValue::try_from(affected_rows.to_string()) {
+            response
+                .metadata_mut()
+                .insert("x-swanlake-affected-rows", value);
+        }
+        response
+    }
+
+    async fn execute_prepared_query_with_params(
+        &self,
+        session: &Arc<Session>,
+        handle: StatementHandle,
+        meta: PreparedStatementMeta,
+        parameters: Vec<Value>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let PreparedStatementMeta { sql, ephemeral, .. } = meta;
+
+        if ephemeral {
             if let Err(err) = session.close_prepared_statement(handle) {
                 warn!(
                     handle = %handle,

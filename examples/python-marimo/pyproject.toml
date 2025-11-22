@@ -1,0 +1,13 @@
+[project]
+name = "python-marimo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "adbc-driver-flightsql>=1.9.0",
+    "marimo[sql]>=0.18.0",
+]
+
+[tool.ruff]
+ignore = ["F541"]

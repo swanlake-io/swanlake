@@ -37,12 +37,11 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 - **Queries**: `CommandStatementQuery` ➜ `get_flight_info_statement` ➜ `do_get_statement`.
 - **Updates/DDL**: `CommandStatementUpdate` ➜ `do_put_statement_update`.
 - **Prepared flow**: `CreatePreparedStatement` yields handle + schema, followed by `GetFlightInfo`/`DoGet` (queries) or `DoPut` (updates).
-- **Tickets**: all `TicketStatementQuery` payloads are our own protobuf (`TicketStatementPayload`). They carry `{version, kind, statement_handle}` only—the SQL/schema stay server-side. `kind` distinguishes long-lived prepared statements from one-shot "ephemeral" handles created for ad-hoc queries so FlightInfo + DoGet share the same cached schema/query plan.
-- **Ephemeral handles**: `get_flight_info_statement` now registers every SELECT as an ephemeral prepared statement with cached schema. `do_get_statement` executes via the same handle and immediately closes it, ensuring the query runs exactly once.
-- **Detection**: `is_query_statement()` strips comments and inspects the first keyword; SELECT/WITH/SHOW/etc. route to query path, everything else goes to update path.
-- **Metadata**: Responses attach `x-swanlake-total-rows` / `x-swanlake-total-bytes` when available.
-- **Health checks**: gRPC health service available at `grpc.health.v1.Health` endpoint for container orchestration (ECS, Kubernetes).
-- **Duckling Queue admin command**: `PRAGMA duckling_queue.flush;` bypasses the async worker by rotating the active file and flushing every sealed DB immediately (handy for CI/tests).
+- **Tickets**: `TicketStatementQuery` payloads carry `{version, kind, returns_rows, statement_handle? , fallback_sql?}` so DoGet knows whether to stream rows or execute a command.
+- **Ephemeral handles**: `get_flight_info_statement` registers ad-hoc queries with ephemeral handles; `do_get_statement` executes and auto-closes them.
+- **Metadata**: Responses attach `x-swanlake-total-rows` / `x-swanlake-total-bytes` (queries) and `x-swanlake-affected-rows` (commands) when available.
+- **Duckling Queue**: inserts via SQL or Arrow batches; optimized paths live in `do_put_prepared_statement_update`.
+- See `src/service/handlers/README.md` for handler entrypoints and flow, and `tests/sql/README.md` for the SQL test format.
 
 ## Testing & Tooling
 - `./scripts/run-integration-tests.sh` — end-to-end (builds server, runs Go client tests).

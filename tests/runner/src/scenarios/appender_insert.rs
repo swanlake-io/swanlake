@@ -2,16 +2,16 @@ use crate::CliArgs;
 use anyhow::{bail, Context, Result};
 use arrow_array::{Int32Array, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use flight_sql_client::{FlightSQLClient, StatementResult};
+use flight_sql_client::FlightSQLClient;
 use std::sync::Arc;
 use tracing::info;
 
 pub async fn run(args: &CliArgs) -> Result<()> {
     info!("Running appender insert tests");
 
-    let mut client = FlightSQLClient::connect(args.endpoint())
+    let mut client = FlightSQLClient::connect(&args.endpoint)
         .context("failed to connect to FlightSQL server")?;
-    client.exec("use swanlake")?;
+    client.execute_update("use swanlake")?;
 
     basic_appender_insert(&mut client)?;
     column_order_with_quoted_table(&mut client)?;
@@ -60,33 +60,31 @@ fn column_order_with_quoted_table(client: &mut FlightSQLClient) -> Result<()> {
         batch,
     )?;
 
-    match client.run_statement(r#"SELECT a, "MixedCase" FROM "QuotedInsert" ORDER BY a"#)? {
-        StatementResult::Query { batches, .. } => {
-            let batch = batches
-                .into_iter()
-                .next()
-                .context("expected result batch")?;
-            let a_col = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .context("expected Int32 array for column a")?;
-            let mixed_col = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .context("expected Int32 array for column MixedCase")?;
-            if a_col.len() != 2 || mixed_col.len() != 2 {
-                bail!("unexpected row count for quoted insert test");
-            }
-            if a_col.value(0) != 1 || mixed_col.value(0) != 10 {
-                bail!("column order mismatch for first row");
-            }
-            if a_col.value(1) != 2 || mixed_col.value(1) != 20 {
-                bail!("column order mismatch for second row");
-            }
-        }
-        _ => bail!("expected query result for quoted insert"),
+    let batches = client
+        .execute_query(r#"SELECT a, "MixedCase" FROM "QuotedInsert" ORDER BY a"#)?
+        .batches;
+    let batch = batches
+        .into_iter()
+        .next()
+        .context("expected result batch")?;
+    let a_col = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .context("expected Int32 array for column a")?;
+    let mixed_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .context("expected Int32 array for column MixedCase")?;
+    if a_col.len() != 2 || mixed_col.len() != 2 {
+        bail!("unexpected row count for quoted insert test");
+    }
+    if a_col.value(0) != 1 || mixed_col.value(0) != 10 {
+        bail!("column order mismatch for first row");
+    }
+    if a_col.value(1) != 2 || mixed_col.value(1) != 20 {
+        bail!("column order mismatch for second row");
     }
 
     client.execute_update(r#"DROP TABLE "QuotedInsert""#)?;
@@ -122,33 +120,31 @@ fn type_mapping_with_partial_columns(client: &mut FlightSQLClient) -> Result<()>
 
     assert_row_count(client, "SELECT COUNT(*) FROM appender_type_test", 2)?;
 
-    match client.run_statement("SELECT id, ubig FROM appender_type_test ORDER BY id")? {
-        StatementResult::Query { batches, .. } => {
-            let batch = batches
-                .into_iter()
-                .next()
-                .context("expected result batch")?;
-            let ids = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .context("expected Int32 array for id")?;
-            let ubigs = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .context("expected UInt64 array for ubig")?;
-            if ids.len() != 2 || ubigs.len() != 2 {
-                bail!("type mapping test returned unexpected rows");
-            }
-            if ids.value(0) != 1 || ubigs.value(0) != 100 {
-                bail!("type mapping test mismatched first row");
-            }
-            if ids.value(1) != 2 || ubigs.value(1) != 200 {
-                bail!("type mapping test mismatched second row");
-            }
-        }
-        _ => bail!("expected query result for type mapping test"),
+    let batches = client
+        .execute_query("SELECT id, ubig FROM appender_type_test ORDER BY id")?
+        .batches;
+    let batch = batches
+        .into_iter()
+        .next()
+        .context("expected result batch")?;
+    let ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .context("expected Int32 array for id")?;
+    let ubigs = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .context("expected UInt64 array for ubig")?;
+    if ids.len() != 2 || ubigs.len() != 2 {
+        bail!("type mapping test returned unexpected rows");
+    }
+    if ids.value(0) != 1 || ubigs.value(0) != 100 {
+        bail!("type mapping test mismatched first row");
+    }
+    if ids.value(1) != 2 || ubigs.value(1) != 200 {
+        bail!("type mapping test mismatched second row");
     }
 
     // Ensure the omitted columns were stored as NULL.
@@ -159,25 +155,21 @@ fn type_mapping_with_partial_columns(client: &mut FlightSQLClient) -> Result<()>
 }
 
 fn assert_row_count(client: &mut FlightSQLClient, sql: &str, expected: i64) -> Result<()> {
-    match client.run_statement(sql)? {
-        StatementResult::Query { batches, .. } => {
-            let batch = batches
-                .into_iter()
-                .next()
-                .context("expected row count batch")?;
-            let array = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<arrow_array::Int64Array>()
-                .context("expected Int64 array for COUNT(*)")?;
-            if array.value(0) != expected {
-                bail!(
-                    "expected {expected} rows, but query returned {}",
-                    array.value(0)
-                );
-            }
-        }
-        _ => bail!("expected query result for row count"),
+    let batches = client.execute_query(sql)?.batches;
+    let batch = batches
+        .into_iter()
+        .next()
+        .context("expected row count batch")?;
+    let array = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .context("expected Int64 array for COUNT(*)")?;
+    if array.value(0) != expected {
+        bail!(
+            "expected {expected} rows, but query returned {}",
+            array.value(0)
+        );
     }
 
     Ok(())

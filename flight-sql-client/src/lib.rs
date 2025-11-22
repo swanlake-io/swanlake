@@ -28,11 +28,6 @@ pub use client::FlightSQLClient;
 /// See [`QueryResult`] for details.
 pub use client::QueryResult;
 
-/// Result when executing an arbitrary SQL statement.
-///
-/// See [`StatementResult`] for details.
-pub use client::StatementResult;
-
 /// Result of executing an update/DDL statement.
 ///
 /// See [`UpdateResult`] for details.

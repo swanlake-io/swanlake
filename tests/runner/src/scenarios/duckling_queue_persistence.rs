@@ -10,7 +10,8 @@ use crate::CliArgs;
 pub async fn run_duckling_queue_persistence(args: &CliArgs) -> Result<()> {
     info!("running duckling queue persistence scenario");
     let test_dir = args
-        .test_dir()
+        .test_dir
+        .as_ref()
         .context("--test-dir is required for duckling queue persistence scenario")?;
     let attach_sql = format!(
         "ATTACH IF NOT EXISTS 'ducklake:postgres:dbname=swanlake_test' AS swanlake \
@@ -20,7 +21,7 @@ pub async fn run_duckling_queue_persistence(args: &CliArgs) -> Result<()> {
     let root = PathBuf::from(format!("{test_dir}/duckling_queue"));
     reset_dir(&root)?;
 
-    let mut conn = FlightSQLClient::connect(args.endpoint())?;
+    let mut conn = FlightSQLClient::connect(&args.endpoint)?;
     conn.execute_update(&attach_sql)?;
     conn.execute_update("DROP TABLE IF EXISTS swanlake.dq_persist_target;")?;
 

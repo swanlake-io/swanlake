@@ -1,55 +1,25 @@
 # SwanLake Test Runner
 
-Standalone SQL logic test runner for SwanLake using Arrow Flight SQL and ADBC.
+Rust-based runner that drives the SwanLake Flight SQL endpoint and our Go-in-the-loop scenarios.
 
-## Overview
+## What it Runs
+- **SQL scripts** in `tests/sql/*.test`: simple format (`statement ok/error` and `query <types|error>`). See `tests/sql/README.md` for details.
+- **Scenarios** in `tests/runner/src/scenarios`: Rust integration checks for duckling_queue, appender, prepared statements, etc.
 
-This is an independent Rust project that runs SQL logic tests against a SwanLake server. It uses Arrow 56.x to maintain compatibility with ADBC drivers, while the main SwanLake project uses Arrow 57.x.
-
-## Dependencies
-
-- **Arrow 56.x** - Compatible with ADBC 0.20.0
-- **ADBC** - Arrow Database Connectivity for connecting to Flight SQL servers
-- **sqllogictest** - SQL logic test framework
-
-## Building
-
+## Usage
 ```bash
-cd tests/runner
-cargo build --release
-```
-
-## Running Tests
-
-Start the SwanLake server first, then run:
-
-```bash
-cargo run -- \
+# from repo root (server should be running on the endpoint)
+cargo run --manifest-path tests/runner/Cargo.toml -- \
   --endpoint grpc://127.0.0.1:4214 \
-  --test-dir ../../tests/sqllogictest
+  --test-dir target/ducklake-tests
 ```
 
-### Command Line Options
+Flags:
+- `--endpoint` (default `grpc://127.0.0.1:4214`)
+- `--test-dir` (required for SQL scripts; used for `__TEST_DIR__` substitution)
+- `--var KEY=VALUE` to add extra substitutions in SQL scripts
+- positional args: optional list of `.test` files; if omitted, all `tests/sql/*.test` are run
 
-- `--endpoint` - SwanLake Flight SQL endpoint (default: `grpc://127.0.0.1:4214`)
-- `--test-files` - Specific test files to run (optional)
-- `--labels` - Test labels to filter (optional)
-- `--vars` - Variable substitutions in format `key=value` (optional)
-- `--test-dir` - Directory containing SQL logic test files (default: `../../tests/sqllogictest`)
-
-## Example
-
-```bash
-# Run all tests
-cargo run
-
-# Run specific test file
-cargo run -- --test-files basic_queries.slt
-
-# Run with substitutions
-cargo run -- --vars "table_name=my_table"
-```
-
-## Architecture
-
-The runner connects to SwanLake via ADBC's Flight SQL driver and executes SQL logic tests, comparing actual results against expected outputs defined in `.slt` files.
+## Notes
+- The runner talks to the live server via `flight_sql_client` (ADBC Flight SQL). It normalizes query outputs to tab-delimited strings to match expected rows.
+- Arrow/ADBC versions here are kept in sync with the main repo (no separate sqllogictest harness).

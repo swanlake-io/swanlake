@@ -8,9 +8,9 @@ use crate::CliArgs;
 pub async fn run_transaction_recovery(args: &CliArgs) -> Result<()> {
     info!("Running transaction recovery tests");
 
-    let mut client = FlightSQLClient::connect(args.endpoint())
+    let mut client = FlightSQLClient::connect(&args.endpoint)
         .context("failed to connect to FlightSQL server")?;
-    client.exec("use swanlake")?;
+    client.execute_update("use swanlake")?;
 
     test_auto_rollback_after_abort(&mut client, "tx_recovery")?;
     test_auto_rollback_after_abort(&mut client, "swanlake.tx_recovery_catalog")?;
@@ -104,9 +104,9 @@ fn test_auto_retry_after_schema_error(client: &mut FlightSQLClient) -> Result<()
 
 fn test_new_session_after_abort(args: &CliArgs) -> Result<()> {
     // Ensure a fresh connection works even after a previous session experienced an abort.
-    let mut client = FlightSQLClient::connect(args.endpoint())
+    let mut client = FlightSQLClient::connect(&args.endpoint)
         .context("failed to connect to FlightSQL server for new session test")?;
-    client.exec("use swanlake")?;
+    client.execute_update("use swanlake")?;
     let QueryResult { total_rows, .. } = client.execute("SELECT 1")?;
     ensure!(total_rows == 1, "expected SELECT 1 to return a single row");
     Ok(())

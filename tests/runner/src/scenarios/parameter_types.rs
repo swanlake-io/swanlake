@@ -15,12 +15,12 @@ use crate::CliArgs;
 use flight_sql_client::FlightSQLClient;
 
 pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
-    let endpoint = args.endpoint();
+    let endpoint = &args.endpoint;
     let mut client = FlightSQLClient::connect(endpoint)?;
-    client.exec("use swanlake")?;
+    client.execute_update("use swanlake")?;
 
     // Create test table with various supported types
-    client.exec(
+    client.execute_update(
         r#"
         CREATE TABLE IF NOT EXISTS parameter_types_test (
             id INTEGER,
@@ -42,7 +42,7 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     )?;
 
     // Clear table
-    client.exec("DELETE FROM parameter_types_test")?;
+    client.execute_update("DELETE FROM parameter_types_test")?;
 
     // Insert row via prepared statement to exercise Arrow->DuckDB conversions
     let params = build_parameter_batch()?;
@@ -91,7 +91,7 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     }
 
     // Clean up
-    client.exec("DROP TABLE parameter_types_test")?;
+    client.execute_update("DROP TABLE parameter_types_test")?;
 
     Ok(())
 }

@@ -13,7 +13,8 @@ use tracing::info;
 pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
     info!("running duckling queue recovery scenario");
     let test_dir = args
-        .test_dir()
+        .test_dir
+        .as_ref()
         .context("--test-dir is required for duckling queue recovery scenario")?;
 
     let dq_root = PathBuf::from(
@@ -27,7 +28,7 @@ pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
          (DATA_PATH '{test_dir}/swanlake_files', OVERRIDE_DATA_PATH true);"
     );
 
-    let mut conn = FlightSQLClient::connect(args.endpoint())?;
+    let mut conn = FlightSQLClient::connect(&args.endpoint)?;
     conn.execute_update(&attach_sql)?;
     conn.execute_update("DROP TABLE IF EXISTS swanlake.dq_recovery_target;")?;
 
@@ -46,43 +47,34 @@ pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
         "SELECT id, label FROM '{}' ORDER BY id",
         chunk.to_string_lossy()
     );
-    let result = conn.run_statement(&query)?;
-    match result {
-        flight_sql_client::StatementResult::Query { batches, .. } => {
-            let mut values = Vec::new();
-            for batch in batches {
-                let id_col = batch
-                    .column_by_name("id")
-                    .ok_or_else(|| anyhow!("id column missing in recovered batch"))?;
-                let label_col = batch
-                    .column_by_name("label")
-                    .ok_or_else(|| anyhow!("label column missing in recovered batch"))?;
+    let result = conn.execute_query(&query)?;
+    let mut values = Vec::new();
+    for batch in result.batches {
+        let id_col = batch
+            .column_by_name("id")
+            .ok_or_else(|| anyhow!("id column missing in recovered batch"))?;
+        let label_col = batch
+            .column_by_name("label")
+            .ok_or_else(|| anyhow!("label column missing in recovered batch"))?;
 
-                let ids = id_col
-                    .as_any()
-                    .downcast_ref::<arrow_array::Int64Array>()
-                    .ok_or_else(|| anyhow!("id column is not Int64"))?;
-                let labels = label_col
-                    .as_any()
-                    .downcast_ref::<arrow_array::StringArray>()
-                    .ok_or_else(|| anyhow!("label column is not Utf8"))?;
-                for row_idx in 0..batch.num_rows() {
-                    values.push((ids.value(row_idx), labels.value(row_idx).to_string()));
-                }
-            }
-            values.sort_by_key(|(id, _)| *id);
-            assert_eq!(
-                values,
-                vec![(1, "alpha".to_string()), (2, "beta".to_string())],
-                "persisted chunk should preserve all rows and types"
-            );
-        }
-        _ => {
-            return Err(anyhow!(
-                "expected query result when reading persisted parquet chunk"
-            ))
+        let ids = id_col
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .ok_or_else(|| anyhow!("id column is not Int64"))?;
+        let labels = label_col
+            .as_any()
+            .downcast_ref::<arrow_array::StringArray>()
+            .ok_or_else(|| anyhow!("label column is not Utf8"))?;
+        for row_idx in 0..batch.num_rows() {
+            values.push((ids.value(row_idx), labels.value(row_idx).to_string()));
         }
     }
+    values.sort_by_key(|(id, _)| *id);
+    assert_eq!(
+        values,
+        vec![(1, "alpha".to_string()), (2, "beta".to_string())],
+        "persisted chunk should preserve all rows and types"
+    );
 
     info!("duckling queue recovery scenario passed");
     Ok(())

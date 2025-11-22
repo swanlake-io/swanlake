@@ -20,7 +20,7 @@ const PREPARED_DELETE_TABLE: &str = "prepared_delete_test";
 const PREPARED_SELECT_TABLE: &str = "prepared_select_test";
 
 pub async fn run_prepared_statements(args: &CliArgs) -> Result<()> {
-    let endpoint = args.endpoint();
+    let endpoint = &args.endpoint;
     let mut client = FlightSQLClient::connect(endpoint)?;
 
     let mut tester = PreparedStatementTester::new(&mut client);

@@ -9,6 +9,7 @@ use arrow_flight::sql::{
     TicketStatementQuery,
 };
 use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
+use arrow_schema::Schema;
 use prost::Message;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
@@ -31,6 +32,9 @@ fn parse_statement_handle(bytes: &[u8], context: &str) -> Result<StatementHandle
     })
 }
 
+/// Creates a prepared statement for the provided SQL, inferring whether it is
+/// a query and caching schema when possible. Invoked by the FlightSQL
+/// `CreatePreparedStatement` action.
 pub(crate) async fn do_action_create_prepared_statement(
     service: &SwanFlightSqlService,
     query: ActionCreatePreparedStatementRequest,
@@ -88,6 +92,9 @@ pub(crate) async fn do_action_create_prepared_statement(
     })
 }
 
+/// Returns FlightInfo (including ticket and schema) for a prepared statement so
+/// clients can call DoGet. Streams schemas for query statements and returns an
+/// empty schema for commands so ExecuteQuery callers can run DDL/DML.
 pub(crate) async fn get_flight_info_prepared_statement(
     service: &SwanFlightSqlService,
     query: CommandPreparedStatementQuery,
@@ -105,37 +112,33 @@ pub(crate) async fn get_flight_info_prepared_statement(
 
     tracing::Span::current().record("sql", meta.sql.as_str());
 
-    if !meta.is_query {
-        error!(
-            handle = %handle,
-            sql = %meta.sql,
-            "prepared statement does not return a result set"
-        );
-        return Err(Status::invalid_argument(
-            "prepared statement does not return a result set",
-        ));
-    }
-
+    let returns_rows = meta.is_query;
     info!(
         handle = %handle,
         sql = %meta.sql,
+        returns_rows,
         "getting flight info for prepared statement"
     );
 
-    let schema = if let Some(schema) = &meta.schema {
-        schema.clone()
-    } else {
-        let sql_for_schema = meta.sql.clone();
-        let session_clone = Arc::clone(&session);
-        let schema =
-            tokio::task::spawn_blocking(move || session_clone.schema_for_query(&sql_for_schema))
-                .await
-                .map_err(SwanFlightSqlService::status_from_join)?
-                .map_err(SwanFlightSqlService::status_from_error)?;
-        session
-            .cache_prepared_statement_schema(handle, schema.clone())
+    let schema = if returns_rows {
+        if let Some(schema) = &meta.schema {
+            schema.clone()
+        } else {
+            let sql_for_schema = meta.sql.clone();
+            let session_clone = Arc::clone(&session);
+            let schema = tokio::task::spawn_blocking(move || {
+                session_clone.schema_for_query(&sql_for_schema)
+            })
+            .await
+            .map_err(SwanFlightSqlService::status_from_join)?
             .map_err(SwanFlightSqlService::status_from_error)?;
-        schema
+            session
+                .cache_prepared_statement_schema(handle, schema.clone())
+                .map_err(SwanFlightSqlService::status_from_error)?;
+            schema
+        }
+    } else {
+        Schema::empty()
     };
 
     debug!(
@@ -148,6 +151,7 @@ pub(crate) async fn get_flight_info_prepared_statement(
     let ticket = TicketStatementQuery {
         statement_handle: TicketStatementPayload::new(StatementTicketKind::Prepared)
             .with_handle(handle)
+            .with_returns_rows(returns_rows)
             .encode_to_vec()
             .into(),
     };
@@ -164,6 +168,8 @@ pub(crate) async fn get_flight_info_prepared_statement(
     Ok(Response::new(info))
 }
 
+/// Streams results or executes a command for a prepared statement referenced by
+/// handle. This is the DoGet path after `get_flight_info_prepared_statement`.
 pub(crate) async fn do_get_prepared_statement(
     service: &SwanFlightSqlService,
     query: CommandPreparedStatementQuery,
@@ -181,22 +187,19 @@ pub(crate) async fn do_get_prepared_statement(
 
     tracing::Span::current().record("sql", meta.sql.as_str());
 
-    if !meta.is_query {
-        error!(
-            handle = %handle,
-            sql = %meta.sql,
-            "prepared statement does not return a result set"
-        );
-        return Err(Status::invalid_argument(
-            "prepared statement does not return a result set",
-        ));
+    if meta.is_query {
+        service
+            .execute_prepared_query_handle(&session, handle, meta)
+            .await
+    } else {
+        service
+            .execute_prepared_update_handle(&session, handle, meta)
+            .await
     }
-
-    service
-        .execute_prepared_query_handle(&session, handle, meta)
-        .await
 }
 
+/// Binds parameters for a prepared statement via DoPut (query or command). No
+/// rows are returned; it only updates the prepared statement's bound parameters.
 pub(crate) async fn do_put_prepared_statement_query(
     service: &SwanFlightSqlService,
     query: CommandPreparedStatementQuery,
@@ -214,17 +217,6 @@ pub(crate) async fn do_put_prepared_statement_query(
 
     tracing::Span::current().record("sql", meta.sql.as_str());
 
-    if !meta.is_query {
-        error!(
-            handle = %handle,
-            sql = %meta.sql,
-            "prepared statement does not support query binding"
-        );
-        return Err(Status::invalid_argument(
-            "prepared statement does not support query binding",
-        ));
-    }
-
     let parameter_sets = SwanFlightSqlService::collect_parameter_sets(request).await?;
 
     if let Some(first_params) = parameter_sets.into_iter().next() {
@@ -235,12 +227,14 @@ pub(crate) async fn do_put_prepared_statement_query(
 
     info!(
         handle = %handle,
+        returns_rows = meta.is_query,
         "parameters bound to prepared statement"
     );
 
     Ok(DoPutPreparedStatementResult::default())
 }
 
+/// Closes a prepared statement handle within the current session.
 pub(crate) async fn do_action_close_prepared_statement(
     service: &SwanFlightSqlService,
     query: ActionClosePreparedStatementRequest,

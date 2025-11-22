@@ -12,7 +12,8 @@ use crate::CliArgs;
 pub async fn run_duckling_queue_dlq(args: &CliArgs) -> Result<()> {
     info!("running duckling queue DLQ offload scenario");
     let test_dir = args
-        .test_dir()
+        .test_dir
+        .as_ref()
         .context("--test-dir is required for duckling queue DLQ scenario")?;
 
     let dq_root = PathBuf::from(
@@ -32,7 +33,7 @@ pub async fn run_duckling_queue_dlq(args: &CliArgs) -> Result<()> {
          (DATA_PATH '{test_dir}/swanlake_files', OVERRIDE_DATA_PATH true);"
     );
 
-    let mut conn = FlightSQLClient::connect(args.endpoint())?;
+    let mut conn = FlightSQLClient::connect(&args.endpoint)?;
     conn.execute_update(&attach_sql)?;
     conn.execute_update("DROP TABLE IF EXISTS swanlake.dq_dlq_target;")?;
 

@@ -163,6 +163,11 @@ cd "$ROOT_DIR/examples/python-adbc"
 uv run main.py
 cd -
 
+# Run Python marimo example
+cd "$ROOT_DIR/examples/python-marimo"
+uv run swanlake.py
+cd -
+
 # Give a moment for profraw files to be fully written
 sleep 2
 

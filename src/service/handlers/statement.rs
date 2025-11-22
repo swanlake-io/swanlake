@@ -6,6 +6,7 @@ use arrow_flight::sql::{
     CommandStatementQuery, CommandStatementUpdate, ProstMessageExt, TicketStatementQuery,
 };
 use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
+use arrow_schema::Schema;
 use prost::Message;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
@@ -14,7 +15,11 @@ use super::ticket::{StatementTicketKind, TicketStatementPayload};
 use crate::error::ServerError;
 use crate::service::SwanFlightSqlService;
 use crate::session::PreparedStatementOptions;
+use crate::sql_parser::ParsedStatement;
 
+/// Plans an ad-hoc SQL statement and returns a FlightInfo+ticket that can be
+/// consumed via DoGet. Supports both queries (with planned schema) and commands
+/// (empty schema so ExecuteQuery callers can still issue DDL/DML).
 pub(crate) async fn get_flight_info_statement(
     service: &SwanFlightSqlService,
     query: CommandStatementQuery,
@@ -23,20 +28,40 @@ pub(crate) async fn get_flight_info_statement(
     let sql = query.query;
     let session = service.prepare_request(&request).await?;
 
-    let sql_for_schema = sql.clone();
-    let session_for_schema = Arc::clone(&session);
-    let schema =
-        tokio::task::spawn_blocking(move || session_for_schema.schema_for_query(&sql_for_schema))
-            .await
-            .map_err(SwanFlightSqlService::status_from_join)?
-            .map_err(SwanFlightSqlService::status_from_error)?;
+    let parsed = ParsedStatement::parse(&sql);
+    let mut returns_rows = parsed.as_ref().is_some_and(|p| p.is_query());
 
-    debug!(field_count = schema.fields().len(), "planned schema");
+    let schema = if returns_rows || parsed.is_none() {
+        let sql_for_schema = sql.clone();
+        let session_for_schema = Arc::clone(&session);
+        match tokio::task::spawn_blocking(move || {
+            session_for_schema.schema_for_query(&sql_for_schema)
+        })
+        .await
+        {
+            Ok(Ok(schema)) => {
+                debug!(field_count = schema.fields().len(), "planned schema");
+                returns_rows = true;
+                schema
+            }
+            Ok(Err(err)) if returns_rows => {
+                return Err(SwanFlightSqlService::status_from_error(err))
+            }
+            Ok(Err(err)) => {
+                debug!(%err, "treating statement as command after schema planning failed");
+                Schema::empty()
+            }
+            Err(join_err) => return Err(SwanFlightSqlService::status_from_join(join_err)),
+        }
+    } else {
+        Schema::empty()
+    };
 
     let descriptor = request.into_inner();
     let ticket = TicketStatementQuery {
         statement_handle: TicketStatementPayload::new(StatementTicketKind::Ephemeral)
             .with_fallback_sql(sql.clone())
+            .with_returns_rows(returns_rows)
             .encode_to_vec()
             .into(),
     };
@@ -52,6 +77,9 @@ pub(crate) async fn get_flight_info_statement(
     Ok(Response::new(info))
 }
 
+/// Executes a ticket created by `get_flight_info_statement` or a prepared
+/// statement ticket, streaming rows for query statements and executing commands
+/// for non-query tickets so ExecuteQuery callers do not fail.
 pub(crate) async fn do_get_statement(
     service: &SwanFlightSqlService,
     ticket: TicketStatementQuery,
@@ -67,15 +95,6 @@ pub(crate) async fn do_get_statement(
         let session = service.get_session(&request).await?;
         match session.get_prepared_statement_meta(handle) {
             Ok(meta) => {
-                if !meta.is_query {
-                    error!(
-                        handle = %handle,
-                        "prepared statement does not return a result set"
-                    );
-                    return Err(Status::invalid_argument(
-                        "prepared statement does not return a result set",
-                    ));
-                }
                 let ticket_kind = payload
                     .ticket_kind()
                     .unwrap_or(StatementTicketKind::Prepared);
@@ -83,11 +102,18 @@ pub(crate) async fn do_get_statement(
                     handle = %handle,
                     kind = ?ticket_kind,
                     sql = %meta.sql,
+                    returns_rows = meta.is_query,
                     "executing statement via indexed ticket"
                 );
-                return service
-                    .execute_prepared_query_handle(&session, handle, meta)
-                    .await;
+                return if meta.is_query {
+                    service
+                        .execute_prepared_query_handle(&session, handle, meta)
+                        .await
+                } else {
+                    service
+                        .execute_prepared_update_handle(&session, handle, meta)
+                        .await
+                };
             }
             Err(ServerError::PreparedStatementNotFound) => {
                 if let Some(sql) = payload.fallback_sql_str() {
@@ -95,8 +121,13 @@ pub(crate) async fn do_get_statement(
                         handle = %handle,
                         "prepared handle missing; executing fallback SQL"
                     );
-                    return execute_ephemeral_ticket_statement(service, sql.to_owned(), &request)
-                        .await;
+                    return execute_ephemeral_ticket_statement(
+                        service,
+                        sql.to_owned(),
+                        payload.returns_rows_flag(),
+                        &request,
+                    )
+                    .await;
                 }
                 error!(handle = %handle, "unknown prepared statement handle");
                 return Err(Status::invalid_argument("unknown prepared statement"));
@@ -108,13 +139,22 @@ pub(crate) async fn do_get_statement(
     }
 
     if let Some(sql) = payload.fallback_sql_str() {
-        return execute_ephemeral_ticket_statement(service, sql.to_owned(), &request).await;
+        return execute_ephemeral_ticket_statement(
+            service,
+            sql.to_owned(),
+            payload.returns_rows_flag(),
+            &request,
+        )
+        .await;
     }
 
     error!("ticket payload missing handle and fallback SQL");
     Err(Status::invalid_argument("invalid ticket payload"))
 }
 
+/// Handles DoPut for ad-hoc update statements (INSERT/UPDATE/DDL) and returns
+/// the affected row count. This is the ExecuteUpdate entrypoint for
+/// non-prepared statements.
 pub(crate) async fn do_put_statement_update(
     service: &SwanFlightSqlService,
     command: CommandStatementUpdate,
@@ -134,21 +174,36 @@ pub(crate) async fn do_put_statement_update(
 async fn execute_ephemeral_ticket_statement(
     service: &SwanFlightSqlService,
     sql: String,
+    returns_rows: bool,
     request: &Request<Ticket>,
 ) -> Result<Response<<SwanFlightSqlService as FlightService>::DoGetStream>, Status> {
     info!(sql = %sql, "executing ticket via fallback SQL");
     let session = service.get_session(request).await?;
-    let handle = session
-        .create_prepared_statement(
-            sql.clone(),
-            true,
-            PreparedStatementOptions::new().ephemeral(),
-        )
-        .map_err(SwanFlightSqlService::status_from_error)?;
-    let meta = session
-        .get_prepared_statement_meta(handle)
-        .map_err(SwanFlightSqlService::status_from_error)?;
-    service
-        .execute_prepared_query_handle(&session, handle, meta)
-        .await
+    if returns_rows {
+        let handle = session
+            .create_prepared_statement(
+                sql.clone(),
+                true,
+                PreparedStatementOptions::new().ephemeral(),
+            )
+            .map_err(SwanFlightSqlService::status_from_error)?;
+        let meta = session
+            .get_prepared_statement_meta(handle)
+            .map_err(SwanFlightSqlService::status_from_error)?;
+        service
+            .execute_prepared_query_handle(&session, handle, meta)
+            .await
+    } else {
+        let sql_for_exec = sql.clone();
+        let session_clone = Arc::clone(&session);
+        let affected_rows =
+            tokio::task::spawn_blocking(move || session_clone.execute_statement(&sql_for_exec))
+                .await
+                .map_err(SwanFlightSqlService::status_from_join)?
+                .map_err(SwanFlightSqlService::status_from_error)?;
+        info!(sql = %sql, affected_rows, "ephemeral command executed via DoGet");
+        Ok(SwanFlightSqlService::empty_affected_rows_response(
+            affected_rows,
+        ))
+    }
 }

@@ -4,147 +4,41 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::{Arc, Once};
+use std::sync::Once;
 
 use anyhow::{anyhow, bail, Context, Result};
 use arrow_array::Array;
-use arrow_schema::DataType;
-use async_trait::async_trait;
-use flight_sql_client::{arrow::array_value_to_string, FlightSQLClient, StatementResult};
-use sqllogictest::{AsyncDB, DBOutput, DefaultColumnType, MakeConnection, Runner};
-use thiserror::Error;
-use tracing::{info, warn};
+use flight_sql_client::{arrow::array_value_to_string, FlightSQLClient};
+use tracing::info;
 
 mod scenarios;
 
-#[derive(Debug, Error)]
-enum RunnerError {
-    #[error(transparent)]
-    Source(#[from] anyhow::Error),
-}
-
-#[derive(Clone)]
-struct FlightSqlDb {
-    client: Option<FlightSQLClient>,
-    substitutions: Arc<HashMap<String, String>>,
-}
-
-impl FlightSqlDb {
-    async fn connect(endpoint: &str, substitutions: Arc<HashMap<String, String>>) -> Result<Self> {
-        let uri = endpoint.trim().to_string();
-        info!("Connecting to Flight SQL endpoint {uri}");
-        let client = FlightSQLClient::connect(&uri)
-            .with_context(|| format!("failed to establish connection to {uri}"))?;
-        info!("Flight SQL connection established to {uri}");
-
-        Ok(Self {
-            client: Some(client),
-            substitutions,
-        })
-    }
-
-    fn apply_substitutions(&self, sql: &str) -> String {
-        let mut substituted = sql.to_owned();
-        for (key, value) in self.substitutions.iter() {
-            substituted = substituted.replace(key, value);
-        }
-        substituted
-    }
-
-    async fn execute_statement(&mut self, sql: &str) -> Result<DBOutput<DefaultColumnType>> {
-        let substituted = self.apply_substitutions(sql);
-        info!("Executing SQL: {substituted}");
-        let conn = self
-            .client
-            .as_mut()
-            .context("database connection has been shut down")?;
-
-        match conn.run_statement(&substituted)? {
-            StatementResult::Query { schema, batches } => {
-                let mut rows = Vec::new();
-                let mut row_count = 0usize;
-                for batch in batches {
-                    let column_count = batch.num_columns();
-                    for row_idx in 0..batch.num_rows() {
-                        let mut row = Vec::with_capacity(column_count);
-                        for col_idx in 0..column_count {
-                            let column = batch.column(col_idx);
-                            if column.is_null(row_idx) {
-                                row.push("NULL".to_string());
-                            } else {
-                                row.push(format_value(column.as_ref(), row_idx)?);
-                            }
-                        }
-                        rows.push(row);
-                        row_count += 1;
-                    }
-                }
-                info!("Query completed with {row_count} row(s) returned");
-
-                let types = schema
-                    .fields()
-                    .iter()
-                    .map(|field| column_type_from_arrow(field.data_type()))
-                    .collect();
-                Ok(DBOutput::Rows { types, rows })
-            }
-            StatementResult::Command { rows_affected } => {
-                let affected = rows_affected.unwrap_or(0).max(0) as u64;
-                info!("Command completed with {affected} row(s) affected");
-                Ok(DBOutput::StatementComplete(affected))
-            }
-        }
-    }
-}
-
-#[async_trait]
-impl AsyncDB for FlightSqlDb {
-    type Error = RunnerError;
-    type ColumnType = DefaultColumnType;
-
-    async fn run(&mut self, sql: &str) -> Result<DBOutput<Self::ColumnType>, Self::Error> {
-        self.execute_statement(sql).await.map_err(RunnerError::from)
-    }
-
-    async fn shutdown(&mut self) {
-        if self.client.take().is_some() {
-            info!("Flight SQL connection closed");
-        } else {
-            warn!("Flight SQL connection already closed");
-        }
-    }
-
-    fn engine_name(&self) -> &str {
-        "swanlake"
-    }
-}
-
-pub struct CliArgs {
+#[derive(Clone, Debug)]
+struct CliArgs {
     endpoint: String,
     test_files: Vec<PathBuf>,
-    labels: Vec<String>,
     vars: HashMap<String, String>,
     test_dir: Option<String>,
 }
 
-impl CliArgs {
-    pub fn endpoint(&self) -> &str {
-        &self.endpoint
-    }
+#[derive(Debug)]
+enum RecordKind {
+    Statement { expect_error: bool },
+    Query {
+        expect_error: bool,
+        expected_rows: Vec<String>,
+    },
+}
 
-    pub fn test_dir(&self) -> Option<&str> {
-        self.test_dir.as_deref()
-    }
-
-    pub fn test_files(&self) -> &[PathBuf] {
-        &self.test_files
-    }
+#[derive(Debug)]
+struct TestRecord {
+    kind: RecordKind,
+    sql: String,
 }
 
 fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
     let mut args = args_iter.into_iter();
     let mut endpoint = String::from("grpc://127.0.0.1:4214");
-    let mut labels = Vec::new();
     let mut vars = HashMap::new();
     let mut test_files = Vec::new();
     let mut test_dir: Option<String> = Some("target/ducklake-tests".to_string());
@@ -153,10 +47,6 @@ fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
         match arg.as_str() {
             "--endpoint" | "-e" => {
                 endpoint = args.next().context("expected value after --endpoint")?;
-            }
-            "--label" | "-l" => {
-                let label = args.next().context("expected value after --label")?;
-                labels.push(label);
             }
             "--var" => {
                 let raw = args.next().context("expected KEY=VALUE after --var")?;
@@ -179,72 +69,25 @@ fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
         }
     }
 
+    if test_files.is_empty() {
+        let root = PathBuf::from("tests/sql");
+        for entry in root
+            .read_dir()
+            .with_context(|| format!("failed to read {}", root.display()))?
+        {
+            let entry = entry?;
+            if entry.file_type()?.is_file() && entry.path().extension().and_then(|e| e.to_str()) == Some("test") {
+                test_files.push(entry.path());
+            }
+        }
+    }
+
     Ok(CliArgs {
         endpoint,
         test_files,
-        labels,
         vars,
         test_dir,
     })
-}
-
-fn load_script_without_requires(path: &Path) -> Result<String> {
-    let file = File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-    let mut buffer = String::new();
-    let mut output = String::new();
-
-    while reader.read_line(&mut buffer)? != 0 {
-        let trimmed = buffer.trim_start();
-        if trimmed.starts_with("require ") {
-            let indent_len = buffer.len() - trimmed.len();
-            if indent_len > 0 {
-                output.push_str(&buffer[..indent_len]);
-            }
-            output.push_str("# ");
-            output.push_str(trimmed);
-            if !trimmed.ends_with('\n') {
-                output.push('\n');
-            }
-        } else {
-            output.push_str(&buffer);
-        }
-        buffer.clear();
-    }
-
-    Ok(output)
-}
-
-fn column_type_from_arrow(data_type: &DataType) -> DefaultColumnType {
-    match data_type {
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Time32(_)
-        | DataType::Time64(_)
-        | DataType::Timestamp(_, _)
-        | DataType::Duration(_)
-        | DataType::Date32
-        | DataType::Date64
-        | DataType::Interval(_) => DefaultColumnType::Integer,
-        DataType::Float16
-        | DataType::Float32
-        | DataType::Float64
-        | DataType::Decimal128(_, _)
-        | DataType::Decimal256(_, _) => DefaultColumnType::FloatingPoint,
-        DataType::Utf8
-        | DataType::LargeUtf8
-        | DataType::Binary
-        | DataType::LargeBinary
-        | DataType::FixedSizeBinary(_)
-        | DataType::Boolean => DefaultColumnType::Text,
-        _ => DefaultColumnType::Any,
-    }
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -265,74 +108,203 @@ async fn run_entrypoint() -> Result<()> {
     let args = parse_args(raw_args)?;
 
     info!(
-        "Running SQLLogicTest with {} script(s)",
+        "Running SQL tests with {} script(s)",
         args.test_files.len()
     );
-    run_sqllogictest(&args).await?;
+    run_sql_tests(&args).await?;
     scenarios::run_all(&args).await?;
     Ok(())
 }
 
-fn build_runner(
-    endpoint: &str,
-    substitutions: Arc<HashMap<String, String>>,
-    labels: &[String],
-) -> Runner<FlightSqlDb, impl MakeConnection<Conn = FlightSqlDb>> {
-    let endpoint = endpoint.to_string();
-    let mut runner = Runner::new({
-        let endpoint = endpoint.clone();
-        let substitutions = substitutions.clone();
-        move || {
-            let endpoint = endpoint.clone();
-            let substitutions = substitutions.clone();
-            async move {
-                FlightSqlDb::connect(&endpoint, substitutions)
-                    .await
-                    .map_err(RunnerError::from)
-            }
-        }
-    });
+async fn run_sql_tests(args: &CliArgs) -> Result<()> {
+    let test_dir = args
+        .test_dir
+        .as_ref()
+        .context("--test-dir is required for SQL tests")?;
 
-    for label in labels {
-        runner.add_label(label);
+    let mut substitutions = args.vars.clone();
+    substitutions.insert("__TEST_DIR__".to_string(), test_dir.clone());
+
+    for path in &args.test_files {
+        info!("Executing script {}", path.display());
+        let records = parse_test_file(path)?;
+        execute_records(&args.endpoint, &substitutions, &records)
+            .await
+            .with_context(|| format!("failed while running {}", path.display()))?;
+        info!("Script {} completed successfully", path.display());
     }
-
-    runner
+    Ok(())
 }
 
-async fn run_sqllogictest(args: &CliArgs) -> Result<()> {
-    let test_dir = args
-        .test_dir()
-        .context("--test-dir is required for SQLLogicTest")?
-        .to_string();
+fn parse_test_file(path: &Path) -> Result<Vec<TestRecord>> {
+    let file = File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut buf = String::new();
+    let mut records = Vec::new();
 
-    for test_file in &args.test_files {
-        info!("Preparing script {}", test_file.display());
-        let mut substitutions = args.vars.clone();
-        substitutions.insert("__TEST_DIR__".to_string(), test_dir.clone());
-        let substitutions = Arc::new(substitutions);
-
-        let mut runner = build_runner(args.endpoint(), substitutions.clone(), &args.labels);
-        runner.set_var("__TEST_DIR__".to_string(), test_dir.clone());
-        for (key, value) in substitutions.iter() {
-            runner.set_var(key.clone(), value.clone());
+    while reader.read_line(&mut buf)? != 0 {
+        let line = buf.trim_end().to_string();
+        buf.clear();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with("require ") {
+            continue;
         }
 
-        let script = load_script_without_requires(test_file)?;
-        info!("Executing SQLLogicTest script {}", test_file.display());
+        if line.starts_with("statement") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            let expect_error = parts.get(1).is_some_and(|p| *p == "error");
+            let mut sql_lines = Vec::new();
+            while reader.read_line(&mut buf)? != 0 {
+                let line_owned = buf.trim_end().to_string();
+                buf.clear();
+                if line_owned.is_empty() {
+                    break;
+                }
+                sql_lines.push(line_owned);
+            }
+            records.push(TestRecord {
+                kind: RecordKind::Statement { expect_error },
+                sql: sql_lines.join("\n"),
+            });
+            continue;
+        }
 
-        runner
-            .run_script_with_name_async(&script, test_file.display().to_string())
-            .await
-            .with_context(|| format!("failed while running {}", test_file.display()))?;
-        info!("Script {} completed successfully", test_file.display());
-        runner.shutdown_async().await;
-        info!("Runner shutdown complete for {}", test_file.display());
+        if line.starts_with("query") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 2 {
+                bail!("invalid query header: {line}");
+            }
+            let expect_error = parts[1] == "error";
+
+            let mut sql_lines = Vec::new();
+            while reader.read_line(&mut buf)? != 0 {
+                let line_owned = buf.trim_end().to_string();
+                buf.clear();
+                if line_owned == "----" {
+                    break;
+                }
+                sql_lines.push(line_owned);
+            }
+
+            let mut expected_rows = Vec::new();
+            while reader.read_line(&mut buf)? != 0 {
+                let line_owned = buf.trim_end().to_string();
+                buf.clear();
+                if line_owned.is_empty() {
+                    break;
+                }
+                // Use tabs as column separators when present; otherwise split on whitespace.
+                if line_owned.contains('\t') {
+                    expected_rows.push(line_owned);
+                } else {
+                    expected_rows.push(
+                        line_owned
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join("\t"),
+                    );
+                }
+            }
+
+            records.push(TestRecord {
+                kind: RecordKind::Query {
+                    expect_error,
+                    expected_rows,
+                },
+                sql: sql_lines.join("\n"),
+            });
+            continue;
+        }
+
+        bail!("unknown directive: {line}");
     }
 
-    info!("All SQLLogicTest scripts completed");
+    Ok(records)
+}
+
+async fn execute_records(
+    endpoint: &str,
+    substitutions: &HashMap<String, String>,
+    records: &[TestRecord],
+) -> Result<()> {
+    let mut client = FlightSQLClient::connect(endpoint)
+        .with_context(|| format!("failed to establish connection to {endpoint}"))?;
+
+    for rec in records {
+        let sql = apply_substitutions(&rec.sql, substitutions);
+        match &rec.kind {
+            RecordKind::Statement { expect_error } => {
+                let result = client.execute_update(&sql);
+                if *expect_error {
+                    if result.is_ok() {
+                        bail!("expected error but statement succeeded: {sql}");
+                    }
+                } else {
+                    result.with_context(|| format!("statement failed: {sql}"))?;
+                }
+            }
+            RecordKind::Query {
+                expect_error,
+                expected_rows,
+            } => {
+                let result = client.execute(&sql);
+                match (result, expect_error) {
+                    (Err(_), true) => continue,
+                    (Err(err), false) => {
+                        return Err(anyhow!("query failed: {err} for sql: {sql}"));
+                    }
+                    (Ok(_res), true) => bail!("expected query to error but it succeeded: {sql}"),
+                    (Ok(res), false) => {
+                        let rows = collect_rows(&res)?;
+                        let normalized: Vec<String> = rows
+                            .into_iter()
+                            .map(|r| r.join("\t"))
+                            .collect();
+                        if normalized != *expected_rows {
+                            bail!(
+                                "unexpected rows for sql {}: got {:?}, expected {:?}",
+                                sql,
+                                normalized,
+                                expected_rows
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Ok(())
+}
+
+fn apply_substitutions(sql: &str, subs: &HashMap<String, String>) -> String {
+    let mut substituted = sql.to_owned();
+    for (k, v) in subs {
+        substituted = substituted.replace(k, v);
+    }
+    substituted
+}
+
+fn collect_rows(result: &flight_sql_client::QueryResult) -> Result<Vec<Vec<String>>> {
+    let mut rows = Vec::new();
+    for batch in &result.batches {
+        let cols = batch.num_columns();
+        for row_idx in 0..batch.num_rows() {
+            let mut row = Vec::with_capacity(cols);
+            for col_idx in 0..cols {
+                let col = batch.column(col_idx);
+                if col.is_null(row_idx) {
+                    row.push("NULL".to_string());
+                } else {
+                    row.push(format_value(col.as_ref(), row_idx)?);
+                }
+            }
+            rows.push(row);
+        }
+    }
+    Ok(rows)
 }
 
 fn format_value(array: &dyn Array, idx: usize) -> Result<String> {
@@ -340,11 +312,11 @@ fn format_value(array: &dyn Array, idx: usize) -> Result<String> {
 }
 
 fn init_logging() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let _ = tracing_subscriber::fmt()
-            .with_target(false)
-            .compact()
-            .try_init();
+    static START: Once = Once::new();
+    START.call_once(|| {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .init();
     });
 }

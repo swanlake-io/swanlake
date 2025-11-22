@@ -5,9 +5,10 @@
 //! Every Flight `Ticket` we emit is opaque to clients, but the server needs to
 //! remember *which* query/statement it represents. We therefore encode a small
 //! protobuf payload that carries only a version number, the handle bytes, and
-//! a `kind` flag (prepared vs. ephemeral). The payload acts as an index into
-//! the session's prepared-statement map, so the actual SQL, schema cache, and
-//! parameters never leave the server.
+//! a `kind` flag (prepared vs. ephemeral) plus a `returns_rows` bit so we know
+//! whether to stream results or execute a command. The payload acts as an index
+//! into the session's prepared-statement map, so the actual SQL, schema cache,
+//! and parameters never leave the server.
 //!
 //! ```text
 //! client                server session
@@ -51,6 +52,10 @@ pub struct TicketStatementPayload {
     /// Optional SQL text to fall back to if the handle cannot be resolved.
     #[prost(string, optional, tag = "4")]
     pub fallback_sql: Option<String>,
+    /// Whether the statement returns rows (queries) or is a command (DDL/DML).
+    /// Defaults to `true` for backward compatibility if absent.
+    #[prost(bool, optional, tag = "5")]
+    pub returns_rows: Option<bool>,
 }
 
 impl TicketStatementPayload {
@@ -62,6 +67,7 @@ impl TicketStatementPayload {
             kind: kind as i32,
             statement_handle: Vec::new(),
             fallback_sql: None,
+            returns_rows: None,
         }
     }
 
@@ -72,6 +78,11 @@ impl TicketStatementPayload {
 
     pub fn with_fallback_sql<S: Into<String>>(mut self, sql: S) -> Self {
         self.fallback_sql = Some(sql.into());
+        self
+    }
+
+    pub fn with_returns_rows(mut self, returns_rows: bool) -> Self {
+        self.returns_rows = Some(returns_rows);
         self
     }
 
@@ -88,5 +99,10 @@ impl TicketStatementPayload {
 
     pub fn ticket_kind(&self) -> Option<StatementTicketKind> {
         StatementTicketKind::try_from(self.kind).ok()
+    }
+
+    /// Default to true so older tickets that did not set this field remain query tickets.
+    pub fn returns_rows_flag(&self) -> bool {
+        self.returns_rows.unwrap_or(true)
     }
 }

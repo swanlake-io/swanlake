@@ -3,15 +3,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::arrow::{value_as_bool, value_as_f64, value_as_i64, value_as_string};
 use adbc_core::{
-    error::Status as AdbcStatus,
     options::{AdbcVersion, OptionDatabase, OptionValue},
     Connection, Database, Driver, Statement,
 };
 use adbc_driver_flightsql::DRIVER_PATH;
 use adbc_driver_manager::{ManagedConnection, ManagedDriver};
 use anyhow::{anyhow, Context, Result};
-use arrow_array::{RecordBatch, RecordBatchReader, StringArray};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_array::{RecordBatch, StringArray};
+use arrow_schema::{DataType, Field, Schema};
 
 struct CachedDriver {
     driver: Mutex<ManagedDriver>,
@@ -93,6 +92,8 @@ pub struct QueryResult {
     pub batches: Vec<RecordBatch>,
     /// Total number of rows across all batches.
     pub total_rows: usize,
+    /// Rows affected reported by the server (if available).
+    pub rows_affected: Option<i64>,
 }
 
 impl QueryResult {
@@ -112,6 +113,16 @@ impl QueryResult {
         Self {
             batches,
             total_rows,
+            rows_affected: None,
+        }
+    }
+
+    pub fn with_rows_affected(batches: Vec<RecordBatch>, rows_affected: Option<i64>) -> Self {
+        let total_rows = batches.iter().map(|b| b.num_rows()).sum();
+        Self {
+            batches,
+            total_rows,
+            rows_affected,
         }
     }
 
@@ -139,19 +150,6 @@ pub struct UpdateResult {
     pub rows_affected: Option<i64>,
 }
 
-/// Result when executing an arbitrary SQL statement.
-///
-/// Distinguishes between queries that return data and commands that modify data.
-pub enum StatementResult {
-    /// A query that returns rows.
-    Query {
-        schema: SchemaRef,
-        batches: Vec<RecordBatch>,
-    },
-    /// A command (e.g., INSERT, UPDATE) that may affect rows.
-    Command { rows_affected: Option<i64> },
-}
-
 impl FlightSQLClient {
     /// Connect to a SwanLake Flight SQL server.
     ///
@@ -175,46 +173,34 @@ impl FlightSQLClient {
         Ok(Self { conn })
     }
 
-    /// Execute a query and return results.
-    ///
-    /// Use this for SELECT statements that return data.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let result = client.execute("SELECT id, name FROM users")?;
-    /// println!("Rows: {}", result.total_rows);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
-        match self.run_statement(sql)? {
-            StatementResult::Query { batches, .. } => Ok(QueryResult::new(batches)),
-            StatementResult::Command { .. } => Err(anyhow!("statement did not return rows")),
+    /// Execute a query and return results. Use when you expect rows.
+    pub fn execute_query(&mut self, sql: &str) -> Result<QueryResult> {
+        let mut stmt = self.conn.new_statement()?;
+        stmt.set_sql_query(sql)?;
+
+        let reader = stmt.execute()?;
+        let mut batches = Vec::new();
+        for batch in reader {
+            batches.push(batch?);
         }
+        Ok(QueryResult::new(batches))
+    }
+
+    /// Convenience wrapper that always calls `execute_query`. The server
+    /// accepts commands via ExecuteQuery, so callers that are unsure can use
+    /// this method.
+    pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
+        self.execute_query(sql)
     }
 
     /// Execute an update/DDL statement (INSERT, UPDATE, DELETE, CREATE, etc.).
-    ///
-    /// Use this for statements that modify data or schema.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let result = client.execute_update("CREATE TABLE test (id INTEGER)")?;
-    /// println!("Affected: {:?}", result.rows_affected);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
     pub fn execute_update(&mut self, sql: &str) -> Result<UpdateResult> {
-        match self.run_statement(sql)? {
-            StatementResult::Command { rows_affected } => Ok(UpdateResult { rows_affected }),
-            StatementResult::Query { .. } => Err(anyhow!("statement returned rows unexpectedly")),
-        }
+        let mut stmt = self.conn.new_statement()?;
+        stmt.set_sql_query(sql)?;
+        let rows_affected = stmt
+            .execute_update()?
+            .and_then(|value| value.try_into().ok());
+        Ok(UpdateResult { rows_affected })
     }
 
     /// Execute a query with string parameters using prepared statements.
@@ -289,46 +275,6 @@ impl FlightSQLClient {
         &mut self.conn
     }
 
-    /// Run a statement and return whether it produced rows or affected rows.
-    ///
-    /// Automatically detects if the statement is a query or command.
-    pub fn run_statement(&mut self, sql: &str) -> Result<StatementResult> {
-        let mut stmt = self.conn.new_statement()?;
-        stmt.set_sql_query(sql)?;
-        let is_query = match stmt.execute_schema() {
-            Ok(schema) => !schema.fields().is_empty(),
-            Err(err) => match err.status {
-                AdbcStatus::NotImplemented | AdbcStatus::Unknown => infer_query_from_sql(sql),
-                _ => return Err(anyhow!("failed to inspect query schema: {err}")),
-            },
-        };
-
-        if is_query {
-            let reader = stmt.execute()?;
-            let schema = reader.schema();
-            let mut batches = Vec::new();
-            for batch in reader {
-                batches.push(batch?);
-            }
-            Ok(StatementResult::Query { schema, batches })
-        } else {
-            let rows_affected = stmt
-                .execute_update()?
-                .and_then(|value| value.try_into().ok());
-            Ok(StatementResult::Command { rows_affected })
-        }
-    }
-
-    /// Execute a statement expected to be a command (non-query).
-    ///
-    /// Returns the number of affected rows, if available.
-    pub fn exec(&mut self, sql: &str) -> Result<Option<i64>> {
-        match self.run_statement(sql)? {
-            StatementResult::Command { rows_affected } => Ok(rows_affected),
-            StatementResult::Query { .. } => Err(anyhow!("statement unexpectedly returned rows")),
-        }
-    }
-
     /// Execute a query that returns a single i64 value.
     ///
     /// Useful for COUNT(*) or similar scalar queries.
@@ -344,21 +290,15 @@ impl FlightSQLClient {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn query_scalar_i64(&mut self, sql: &str) -> Result<i64> {
-        match self.run_statement(sql)? {
-            StatementResult::Query { batches, .. } => {
-                let batch = batches
-                    .first()
-                    .ok_or_else(|| anyhow!("query returned no rows"))?;
-                if batch.num_rows() == 0 || batch.num_columns() == 0 {
-                    return Err(anyhow!("query returned empty result"));
-                }
-                let column = batch.column(0);
-                Ok(value_as_i64(column.as_ref(), 0)?)
-            }
-            StatementResult::Command { .. } => {
-                Err(anyhow!("expected query to return a scalar result"))
-            }
+        let batches = self.execute_query(sql)?.batches;
+        let batch = batches
+            .first()
+            .ok_or_else(|| anyhow!("query returned no rows"))?;
+        if batch.num_rows() == 0 || batch.num_columns() == 0 {
+            return Err(anyhow!("query returned empty result"));
         }
+        let column = batch.column(0);
+        Ok(value_as_i64(column.as_ref(), 0)?)
     }
 
     /// Execute a query that returns a single f64 value.
@@ -376,21 +316,15 @@ impl FlightSQLClient {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn query_scalar_f64(&mut self, sql: &str) -> Result<f64> {
-        match self.run_statement(sql)? {
-            StatementResult::Query { batches, .. } => {
-                let batch = batches
-                    .first()
-                    .ok_or_else(|| anyhow!("query returned no rows"))?;
-                if batch.num_rows() == 0 || batch.num_columns() == 0 {
-                    return Err(anyhow!("query returned empty result"));
-                }
-                let column = batch.column(0);
-                Ok(value_as_f64(column.as_ref(), 0)?)
-            }
-            StatementResult::Command { .. } => {
-                Err(anyhow!("expected query to return a scalar result"))
-            }
+        let batches = self.execute_query(sql)?.batches;
+        let batch = batches
+            .first()
+            .ok_or_else(|| anyhow!("query returned no rows"))?;
+        if batch.num_rows() == 0 || batch.num_columns() == 0 {
+            return Err(anyhow!("query returned empty result"));
         }
+        let column = batch.column(0);
+        Ok(value_as_f64(column.as_ref(), 0)?)
     }
 
     /// Execute a query that returns a single bool value.
@@ -408,21 +342,15 @@ impl FlightSQLClient {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn query_scalar_bool(&mut self, sql: &str) -> Result<bool> {
-        match self.run_statement(sql)? {
-            StatementResult::Query { batches, .. } => {
-                let batch = batches
-                    .first()
-                    .ok_or_else(|| anyhow!("query returned no rows"))?;
-                if batch.num_rows() == 0 || batch.num_columns() == 0 {
-                    return Err(anyhow!("query returned empty result"));
-                }
-                let column = batch.column(0);
-                Ok(value_as_bool(column.as_ref(), 0)?)
-            }
-            StatementResult::Command { .. } => {
-                Err(anyhow!("expected query to return a scalar result"))
-            }
+        let batches = self.execute_query(sql)?.batches;
+        let batch = batches
+            .first()
+            .ok_or_else(|| anyhow!("query returned no rows"))?;
+        if batch.num_rows() == 0 || batch.num_columns() == 0 {
+            return Err(anyhow!("query returned empty result"));
         }
+        let column = batch.column(0);
+        Ok(value_as_bool(column.as_ref(), 0)?)
     }
 
     /// Execute a query that returns a single string value.
@@ -440,38 +368,16 @@ impl FlightSQLClient {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn query_scalar_string(&mut self, sql: &str) -> Result<String> {
-        match self.run_statement(sql)? {
-            StatementResult::Query { batches, .. } => {
-                let batch = batches
-                    .first()
-                    .ok_or_else(|| anyhow!("query returned no rows"))?;
-                if batch.num_rows() == 0 || batch.num_columns() == 0 {
-                    return Err(anyhow!("query returned empty result"));
-                }
-                let column = batch.column(0);
-                Ok(value_as_string(column.as_ref(), 0)?)
-            }
-            StatementResult::Command { .. } => {
-                Err(anyhow!("expected query to return a scalar result"))
-            }
+        let batches = self.execute_query(sql)?.batches;
+        let batch = batches
+            .first()
+            .ok_or_else(|| anyhow!("query returned no rows"))?;
+        if batch.num_rows() == 0 || batch.num_columns() == 0 {
+            return Err(anyhow!("query returned empty result"));
         }
+        let column = batch.column(0);
+        Ok(value_as_string(column.as_ref(), 0)?)
     }
-}
-
-fn infer_query_from_sql(sql: &str) -> bool {
-    let trimmed = sql.trim_start();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let first_token = trimmed
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    matches!(
-        first_token.as_str(),
-        "select" | "with" | "show" | "describe" | "desc" | "explain" | "values"
-    )
 }
 
 #[cfg(test)]

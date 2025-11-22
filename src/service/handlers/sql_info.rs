@@ -11,10 +11,14 @@ use tracing::error;
 
 use crate::service::SwanFlightSqlService;
 
+/// Static registration hook for SqlInfo; currently unused because values are
+/// compiled in.
 pub(crate) async fn register_sql_info(_id: i32, _result: &SqlInfo) {
     // No-op: we don't need to register info dynamically
 }
 
+/// Builds `FlightInfo` for the SqlInfo metadata endpoint so clients can fetch
+/// supported capabilities via DoGet.
 pub(crate) async fn get_flight_info_sql_info(
     service: &SwanFlightSqlService,
     query: CommandGetSqlInfo,
@@ -54,6 +58,7 @@ pub(crate) async fn get_flight_info_sql_info(
     Ok(Response::new(info))
 }
 
+/// Streams SqlInfo metadata as record batches in response to a DoGet request.
 pub(crate) async fn do_get_sql_info(
     service: &SwanFlightSqlService,
     query: CommandGetSqlInfo,
