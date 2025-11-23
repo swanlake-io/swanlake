@@ -141,9 +141,8 @@ fn main() {
             );
         }
         "linux-amd64" | "linux-arm64" => {
-            env_content.push_str(
-                "export LD_LIBRARY_PATH=\"${DUCKDB_LIB_DIR}:${LD_LIBRARY_PATH:-}\"\n",
-            );
+            env_content
+                .push_str("export LD_LIBRARY_PATH=\"${DUCKDB_LIB_DIR}:${LD_LIBRARY_PATH:-}\"\n");
         }
         _ => {}
     }
