@@ -103,6 +103,9 @@ jobs:
           PGUSER: postgres
           SWANLAKE_DUCKDB_UI_SERVER_ENABLED: true
 
+      - name: Coveralls GitHub Action
+        uses: coverallsapp/github-action@v2.3.6
+
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v5
         with:
