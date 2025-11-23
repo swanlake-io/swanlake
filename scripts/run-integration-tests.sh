@@ -171,6 +171,8 @@ cd -
 # Give a moment for profraw files to be fully written
 sleep 2
 
+cleanup_server
+
 echo "Integration tests completed. Coverage data collected in target/llvm-cov-target/"
 
 # ============================================================================

@@ -5,6 +5,19 @@ use tracing::info;
 
 use crate::CliArgs;
 
+/// Transaction recovery tests
+///
+/// These tests verify auto-recovery when DuckDB enters an aborted transaction state.
+/// Current coverage:
+/// - Auto-rollback and retry when executing statements after transaction abort
+/// - Data consistency after recovery
+/// - Fresh sessions work after abort
+///
+/// NOT YET COVERED (requires Flight SQL action API support):
+/// - Explicit COMMIT via ActionEndTransaction on an aborted transaction
+///   (should return TransactionAborted error, not Ok)
+/// - Explicit ROLLBACK via ActionEndTransaction on an aborted transaction
+///   (should return TransactionAborted error, not TransactionNotFound)
 pub async fn run_transaction_recovery(args: &CliArgs) -> Result<()> {
     info!("Running transaction recovery tests");
 

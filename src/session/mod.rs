@@ -772,9 +772,8 @@ impl Session {
                 .lock()
                 .expect("transactions mutex poisoned");
             if !transactions.contains_key(&transaction_id) {
-                // Transaction doesn't exist - ignore it (idempotent commit)
-                debug!("transaction not found, ignoring commit");
-                return Ok(());
+                // Check if it was aborted before treating as "not found"
+                return self.transaction_absent_error(transaction_id);
             }
         }
 

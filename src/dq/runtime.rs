@@ -64,6 +64,22 @@ fn spawn_flush_workers(
 ) {
     let semaphore = Arc::new(Semaphore::new(settings.max_parallel_flushes));
     tokio::spawn(async move {
+        let handle_dlq_offload = |factory: Arc<Mutex<EngineFactory>>,
+                                  storage: Arc<DurableStorage>,
+                                  settings: Settings,
+                                  payload: FlushPayload| async move {
+            match tokio::task::spawn_blocking(move || {
+                attempt_dlq_offload(factory, storage, &settings, &payload)
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(join_err) => {
+                    warn!(error = %join_err, "duckling queue DLQ offload panicked");
+                    false
+                }
+            }
+        };
         while let Some(payload) = rx.recv().await {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let factory_for_flush = factory.clone();
@@ -93,39 +109,23 @@ fn spawn_flush_workers(
                     }
                     Ok(Err(err)) => {
                         warn!(error = %err, "duckling queue flush failed");
-                        match tokio::task::spawn_blocking({
-                            let factory = factory_for_dlq.clone();
-                            let storage = storage_for_dlq.clone();
-                            let settings = settings_for_dlq.clone();
-                            let payload = retry_payload.clone();
-                            move || attempt_dlq_offload(factory, storage, &settings, &payload)
-                        })
+                        handle_dlq_offload(
+                            factory_for_dlq.clone(),
+                            storage_for_dlq.clone(),
+                            settings_for_dlq.clone(),
+                            retry_payload.clone(),
+                        )
                         .await
-                        {
-                            Ok(result) => result,
-                            Err(join_err) => {
-                                warn!(error = %join_err, "duckling queue DLQ offload panicked");
-                                false
-                            }
-                        }
                     }
                     Err(join_err) => {
                         warn!(error = %join_err, "duckling queue flush panicked");
-                        match tokio::task::spawn_blocking({
-                            let factory = factory_for_dlq.clone();
-                            let storage = storage_for_dlq.clone();
-                            let settings = settings_for_dlq.clone();
-                            let payload = retry_payload.clone();
-                            move || attempt_dlq_offload(factory, storage, &settings, &payload)
-                        })
+                        handle_dlq_offload(
+                            factory_for_dlq.clone(),
+                            storage_for_dlq.clone(),
+                            settings_for_dlq.clone(),
+                            retry_payload.clone(),
+                        )
                         .await
-                        {
-                            Ok(result) => result,
-                            Err(join_err) => {
-                                warn!(error = %join_err, "duckling queue DLQ offload panicked");
-                                false
-                            }
-                        }
                     }
                 };
 
