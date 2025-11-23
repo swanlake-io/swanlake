@@ -70,7 +70,7 @@ jobs:
         run: cargo fmt
 
       - name: Fix clippy
-        run: cargo clippy --fix --allow-dirty --allow-staged -- -D warnings
+        run: cargo clippy --workspace --fix --allow-dirty --allow-staged -- -D warnings
 
       - uses: stefanzweifel/git-auto-commit-action@v7
         with:
@@ -132,12 +132,13 @@ jobs:
         with:
           context: .
           push: true
+          file: ./swanlake-server/Dockerfile
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
           cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
 
       - name: Run health check in Docker
-        run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} sh -c './swanlake & sleep 5 && grpc-health-probe -addr=localhost:4214'
+        run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} sh -c '/docker-entrypoint.sh & sleep 5 && grpc-health-probe -addr=localhost:4214'
 
       - name: Tag and push latest
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

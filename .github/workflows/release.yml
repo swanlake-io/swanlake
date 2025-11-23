@@ -30,7 +30,7 @@ jobs:
         with:
           path: |
             target
-            flight-sql-client/target
+            swanlake-client/target
           key: release-cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             release-cargo-build-${{ runner.os }}-
@@ -39,7 +39,7 @@ jobs:
       - name: publish crates
         uses: katyo/publish-crates@v2
         with:
-          path: "./flight-sql-client"
+          path: "./swanlake-client"
           args: --allow-dirty --all-features
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           ignore-unpublished-changes: true

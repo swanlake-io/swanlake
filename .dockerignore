@@ -1,12 +1,45 @@
+# Build artifacts
 target
 */target
+**/.duckdb
+
+# Git and CI
 .git
 .github
-Dockerfile
-docker-compose.yml
+
+# Documentation and media
 README.md
 AGENT.md
 CONFIGURATION.md
+*.md
 swanlake.jpeg
-tests
-examples
+*.png
+*.jpg
+
+# Docker files
+docker-compose.yml
+swanlake-server/Dockerfile
+
+# Development files
+.env
+.env.*
+*.log
+lcov.info
+.codecov.yml
+
+# Test and example code
+tests/sql
+examples/go*
+examples/python*
+# swanlake-client
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

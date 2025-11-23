@@ -27,7 +27,7 @@ export CARGO_LLVM_COV_TARGET_DIR="$ROOT_DIR/target/llvm-cov-target"
 export LLVM_PROFILE_FILE="$ROOT_DIR/target/llvm-cov-target/swanlake-%p-%m.profraw"
 
 # Server configuration
-export SERVER_BIN="$CARGO_TARGET_DIR/debug/swanlake-server"
+export SERVER_BIN="$CARGO_TARGET_DIR/debug/swanlake"
 CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.toml}"
 ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"

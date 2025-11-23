@@ -28,3 +28,8 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"], opt
 [features]
 default = []
 cli = ["clap", "comfy-table", "dirs", "rustyline", "tracing", "tracing-subscriber"]
+
+[[bin]]
+name = "swanlake-cli"
+path = "src/bin/cli.rs"
+required-features = ["cli"]

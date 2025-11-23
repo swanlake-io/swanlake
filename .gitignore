@@ -26,3 +26,5 @@ test_*
 .python-version
 uv.lock
 __marimo__
+
+recipe.json
