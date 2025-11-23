@@ -1,2 +1,0 @@
-[alias]
-run-cli = "run --manifest-path examples/rust-client/Cargo.toml -- --endpoint grpc://127.0.0.1:4214"

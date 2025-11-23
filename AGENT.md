@@ -9,11 +9,11 @@ Concise reference for language-model agents working on the SwanLake codebase.
 - **Performance**: Schema discovery executes queries as-is, relying on DuckDB's lazy streaming to avoid unnecessary data scanning.
 
 ## Code Map
-- `src/main.rs` — bootstrap: config load, tracing, gRPC server, session janitor.
-- `src/config.rs` — layered config (env > CLI `--config` > `.env`/defaults).
-- `src/session/` — session registry, per-session state, ID helpers.
-- `src/service/` — Arrow Flight SQL handlers (queries, updates, prepared flow).
-- `src/engine/` — DuckDB connection factory, schema extraction helpers.
+- `swanlake-server/src/main.rs` — bootstrap: config load, tracing, gRPC server, session janitor.
+- `swanlake-core/src/config.rs` — layered config (env > CLI `--config` > `.env`/defaults).
+- `swanlake-core/src/session/` — session registry, per-session state, ID helpers.
+- `swanlake-core/src/service/` — Arrow Flight SQL handlers (queries, updates, prepared flow).
+- `swanlake-core/src/engine/` — DuckDB connection factory, schema extraction helpers.
 - `tests/runner/` — integration harness using the same Flight API as clients.
 - `examples/go-*/` — Go ADBC and `sqlx` samples that double as smoke tests.
 

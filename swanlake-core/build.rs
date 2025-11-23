@@ -148,6 +148,11 @@ fn main() {
     }
     fs::write(&env_file, env_content).unwrap();
 
+    // Propagate metadata to dependent crates for easier runtime linking
+    println!("cargo:lib_dir={}", install_dir.display());
+    println!("cargo:env_file={}", env_file.display());
+    println!("cargo:duckdb_version={}", version);
+
     println!(
         "cargo:warning=DuckDB {} ready at {}",
         version,

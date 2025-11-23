@@ -22,7 +22,7 @@ docker run --rm -p 4214:4214  ghcr.io/swanlake-io/swanlake:latest
 Then run the Rust interactive client example:
 
 ```bash
-cargo run-cli
+cargo run --bin swanlake-cli --features="cli"
 ```
 
 ## Architecture

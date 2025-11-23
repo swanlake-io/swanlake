@@ -1,17 +1,15 @@
-# flight-sql-client
+# SwanLake Client
 
-A Rust client library for connecting to Arrow Flight SQL servers, built on top of ADBC drivers. Designed for use with [SwanLake](https://github.com/swanlake-io/swanlake), an Arrow Flight SQL server backed by DuckDB.
+A Rust client library and CLI for connecting to Arrow Flight SQL servers, designed for use with [SwanLake](https://github.com/swanlake-io/swanlake).
 
-## Installation
+## Library Usage
 
 Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-flight-sql-client = "0.1.0"
+swanlake-client = "0.1.1"
 ```
-
-## Usage
 
 Connect to a SwanLake server and execute a query:
 
@@ -34,13 +32,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## API Overview
+## CLI Usage
 
-- `FlightSQLClient`: Main client for executing queries and updates.
-- `QueryResult`: Holds query results with record batches.
-- `UpdateResult`: Holds update results with affected rows.
+You can use the provided interactive CLI to connect to a SwanLake server.
 
-See the [SwanLake repository](https://github.com/swanlake-io/swanlake) for more examples and server setup.
+To build and run the CLI:
+
+```bash
+cargo run --bin swanlake-cli --features="cli"
+```
+
+By default, it will attempt to connect to `grpc://127.0.0.1:4214`. You can specify a different endpoint:
+
+```bash
+cargo run --bin swanlake-cli -- --endpoint grpc://remote-host:4214
+```
 
 ## License
 
