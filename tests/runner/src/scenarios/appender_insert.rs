@@ -2,8 +2,8 @@ use crate::CliArgs;
 use anyhow::{bail, Context, Result};
 use arrow_array::{Int32Array, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use swanlake_client::FlightSQLClient;
 use std::sync::Arc;
+use swanlake_client::FlightSQLClient;
 use tracing::info;
 
 pub async fn run(args: &CliArgs) -> Result<()> {

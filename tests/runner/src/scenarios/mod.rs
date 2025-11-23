@@ -6,8 +6,8 @@ pub mod duckling_queue_dlq;
 pub mod duckling_queue_persistence;
 pub mod duckling_queue_recovery;
 mod duckling_queue_utils;
-pub mod parameter_types;
 pub mod execute_query_commands;
+pub mod parameter_types;
 pub mod prepared_statements;
 pub mod transaction_recovery;
 
