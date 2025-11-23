@@ -106,12 +106,6 @@ jobs:
       - name: Coveralls GitHub Action
         uses: coverallsapp/github-action@v2.3.6
 
-      - name: Upload coverage to codecov
-        uses: codecov/codecov-action@v5
-        with:
-          file: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-
   docker:
     runs-on: ubuntu-latest
     permissions:
@@ -141,7 +135,7 @@ jobs:
           cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
 
       - name: Run health check in Docker
-        run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} sh -c '/docker-entrypoint.sh & sleep 5 && grpc-health-probe -addr=localhost:4214'
+        run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} sh -c './swanlake & sleep 5 && grpc-health-probe -addr=localhost:4214'
 
       - name: Tag and push latest
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

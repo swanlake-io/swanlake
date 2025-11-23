@@ -1,4 +1,4 @@
-[![codecov](https://codecov.io/gh/swanlake-io/swanlake/graph/badge.svg)](https://codecov.io/gh/swanlake-io/swanlake)
+[![Coverage Status](https://coveralls.io/repos/github/swanlake-io/swanlake/badge.svg)](https://coveralls.io/github/swanlake-io/swanlake)
 
 # SwanLake
 
