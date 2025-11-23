@@ -1,4 +1,9 @@
 #!/bin/sh
 set -e
-export LD_LIBRARY_PATH="/app/.duckdb/1.4.1:${LD_LIBRARY_PATH:-}"
+DUCKDB_PREFIX="${DUCKDB_PREFIX:-/app/.duckdb}"
+if [ -f "${DUCKDB_PREFIX}/env.sh" ]; then
+  . "${DUCKDB_PREFIX}/env.sh"
+else
+  echo "Warning: ${DUCKDB_PREFIX}/env.sh missing; DuckDB may fail to load" >&2
+fi
 exec "$@"
