@@ -27,7 +27,7 @@ export CARGO_LLVM_COV_TARGET_DIR="$ROOT_DIR/target/llvm-cov-target"
 export LLVM_PROFILE_FILE="$ROOT_DIR/target/llvm-cov-target/swanlake-%p-%m.profraw"
 
 # Server configuration
-export SERVER_BIN="$CARGO_TARGET_DIR/debug/swanlake"
+export SERVER_BIN="$CARGO_TARGET_DIR/debug/swanlake-server"
 CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.toml}"
 ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"
@@ -94,10 +94,13 @@ source <(cargo llvm-cov show-env --export-prefix)
 # ============================================================================
 
 # Build with coverage
-cargo build --target-dir "$CARGO_TARGET_DIR"
+cargo build --package swanlake-server --package swanlake-core --target-dir "$CARGO_TARGET_DIR"
+
+# Source DuckDB environment to set library paths
+source "$ROOT_DIR/swanlake-core/.duckdb/env.sh"
 
 # Run Rust unit tests under coverage instrumentation
-cargo test --all --target-dir "$CARGO_TARGET_DIR"
+cargo test --package swanlake-server --package swanlake-core --target-dir "$CARGO_TARGET_DIR"
 
 # ============================================================================
 # SQL Tests
@@ -179,4 +182,4 @@ echo "Integration tests completed. Coverage data collected in target/llvm-cov-ta
 # Generate Coverage Report
 # ============================================================================
 
-cargo llvm-cov report --lcov --output-path "$ROOT_DIR/lcov.info"
+cargo llvm-cov report --lcov --output-path "$ROOT_DIR/lcov.info" --package swanlake-server --package swanlake-core

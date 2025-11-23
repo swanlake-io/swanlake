@@ -18,9 +18,13 @@ arrow-schema = "56"
 chrono = "0.4"
 
 # cli
-clap = { version = "4.5", features = ["derive"] }
-comfy-table = "7.1"
-dirs = "5.0"
-rustyline = "14.0"
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+clap = { version = "4.5", features = ["derive"], optional = true }
+comfy-table = { version = "7.1", optional = true }
+dirs = { version = "5.0", optional = true }
+rustyline = { version = "14.0", optional = true }
+tracing = { version = "0.1.41", optional = true }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"], optional = true }
+
+[features]
+default = []
+cli = ["clap", "comfy-table", "dirs", "rustyline", "tracing", "tracing-subscriber"]
