@@ -1,6 +1,6 @@
 use anyhow::{ensure, Context, Result};
 use arrow_array::Int32Array;
-use flight_sql_client::{FlightSQLClient, QueryResult};
+use swanlake_client::{FlightSQLClient, QueryResult};
 use tracing::info;
 
 use crate::CliArgs;

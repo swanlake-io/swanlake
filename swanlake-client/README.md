@@ -16,7 +16,7 @@ flight-sql-client = "0.1.0"
 Connect to a SwanLake server and execute a query:
 
 ```rust
-use flight_sql_client::FlightSQLClient;
+use swanlake_client::FlightSQLClient;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the server

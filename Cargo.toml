@@ -1,54 +1,9 @@
-[package]
-name = "swanlake"
-version = "0.1.0"
-edition = "2021"
-
-[[bin]]
-name = "swanlake"
-path = "src/main.rs"
-
-[features]
-default = []
-distributed-locks = [
-    "dep:native-tls",
-    "dep:postgres-native-tls",
-    "dep:tokio-postgres",
-    "dep:siphasher",
+[workspace]
+members = [
+    "swanlake-core",
+    "swanlake-server",
+    "swanlake-client",
+    "examples/rust-adbc",
+    "tests/runner",
 ]
-
-[dependencies]
-anyhow = "1.0"
-arrow-array = "57"
-arrow-flight = { version = "57", features = ["flight-sql"] }
-arrow-ipc = { version = "57" }
-arrow-schema = "57"
-arrow-cast = "57"
-arrow-select = "57"
-dotenvy = "0.15.7"
-duckdb = { git = "https://github.com/swanlake-io/duckdb-rs", branch = "wfj/cargo-version", default-features = false, features = ["appender-arrow"] }
-sqlparser = { version = "0.59.0", features = ["visitor"] }
-futures = "0.3.31"
-prost = "0.14.1"
-serde = { version = "1.0.228", features = ["derive"] }
-uuid = { version = "1.18.1", features = ["v4"] }
-serde_json = "1.0.145"
-thiserror = "2.0.17"
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal"] }
-tokio-postgres = { version = "0.7", optional = true }
-postgres-native-tls = { version = "0.5", optional = true }
-native-tls = { version = "0.2", optional = true }
-tonic = { version = "0.14.2", features = ["transport"] }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
-config = "0.15.19"
-tonic-health = "0.14.2"
-chrono = "0.4"
-siphasher = { version = "1.0", optional = true }
-parquet = { version = "57", features = ["arrow"] }
-
-[build-dependencies]
-reqwest = { version = "0.12", features = ["blocking"] }
-zip = "6"
-
-[dev-dependencies]
-tempfile = "3"
+resolver = "2"

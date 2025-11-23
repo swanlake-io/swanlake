@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use flight_sql_client::FlightSQLClient;
+use swanlake_client::FlightSQLClient;
 use tracing::info;
 
 use crate::scenarios::duckling_queue_utils::{reset_dir, wait_for_parquet_chunks};

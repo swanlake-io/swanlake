@@ -12,7 +12,7 @@ use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 use crate::CliArgs;
-use flight_sql_client::FlightSQLClient;
+use swanlake_client::FlightSQLClient;
 
 pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     let endpoint = &args.endpoint;
@@ -104,7 +104,7 @@ fn build_parameter_batch() -> Result<RecordBatch> {
     let timestamp_sec = base_datetime.and_utc().timestamp();
     let timestamp_ms = base_datetime.and_utc().timestamp_millis();
     let timestamp_us = base_datetime.and_utc().timestamp_micros();
-    let timestamp_ns = base_datetime.and_utc().timestamp_nanos_opt().unwrap() as i64;
+    let timestamp_ns = base_datetime.and_utc().timestamp_nanos_opt().unwrap();
 
     let date32_value = base_date.signed_duration_since(epoch_date).num_days() as i32;
     let date64_value = NaiveDateTime::new(base_date, NaiveTime::from_hms_opt(0, 0, 0).unwrap())

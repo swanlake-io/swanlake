@@ -18,6 +18,12 @@ pub struct FlushTracker {
     signal: Condvar,
 }
 
+impl Default for FlushTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FlushTracker {
     pub fn new() -> Self {
         Self {

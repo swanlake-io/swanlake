@@ -1,7 +1,7 @@
 use crate::CliArgs;
 use anyhow::{bail, Context, Result};
 use arrow_array::{Array, Int64Array};
-use flight_sql_client::FlightSQLClient;
+use swanlake_client::FlightSQLClient;
 use tracing::info;
 
 const TABLE_NAME: &str = "execute_query_accepts_commands";

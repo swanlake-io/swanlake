@@ -7,11 +7,11 @@ use comfy_table::{
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, CellAlignment, Color,
     ContentArrangement, Table,
 };
-use flight_sql_client::arrow::array_value_to_string;
-use flight_sql_client::FlightSQLClient;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::time::Instant;
+use swanlake_client::arrow::array_value_to_string;
+use swanlake_client::FlightSQLClient;
 
 /// SwanLake CLI - Interactive SQL client
 #[derive(Parser, Debug)]

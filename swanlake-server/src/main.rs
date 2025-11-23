@@ -1,24 +1,13 @@
 use std::sync::Arc;
 
-use crate::config::ServerConfig;
-use crate::service::SwanFlightSqlService;
 use anyhow::{anyhow, Context, Result};
+use swanlake_core::config::ServerConfig;
+use swanlake_core::engine::EngineFactory;
+use swanlake_core::service::SwanFlightSqlService;
 use tonic::transport::Server;
 
 use tracing::info;
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
-
-mod config;
-mod dq;
-mod engine;
-mod error;
-#[cfg(feature = "distributed-locks")]
-mod lock;
-mod service;
-mod session;
-mod sql_parser;
-mod types;
-mod ui;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -32,14 +21,14 @@ async fn main() -> Result<()> {
         .context("failed to resolve bind address")?;
 
     let factory = Arc::new(std::sync::Mutex::new(
-        crate::engine::EngineFactory::new(&config)
-            .context("failed to initialize engine factory")?,
+        EngineFactory::new(&config).context("failed to initialize engine factory")?,
     ));
 
     let (dq_coordinator, dq_runtime) = if config.duckling_queue_enabled {
-        let dq_settings = crate::dq::config::Settings::from_config(&config);
-        let (coordinator, runtime) = dq::QueueRuntime::bootstrap(factory.clone(), dq_settings)
-            .map_err(|err| anyhow!("failed to start duckling queue runtime: {err}"))?;
+        let dq_settings = swanlake_core::dq::config::Settings::from_config(&config);
+        let (coordinator, runtime) =
+            swanlake_core::dq::QueueRuntime::bootstrap(factory.clone(), dq_settings)
+                .map_err(|err| anyhow!("failed to start duckling queue runtime: {err}"))?;
         (Some(coordinator), Some(runtime))
     } else {
         info!("duckling queue disabled; skipping runtime bootstrap");
@@ -48,7 +37,7 @@ async fn main() -> Result<()> {
 
     // Create session registry (Phase 2: connection-based session persistence)
     let registry = Arc::new(
-        crate::session::registry::SessionRegistry::new(
+        swanlake_core::session::registry::SessionRegistry::new(
             &config,
             factory.clone(),
             dq_coordinator.clone(),
@@ -70,7 +59,7 @@ async fn main() -> Result<()> {
     });
 
     // Optionally start the DuckDB UI server in the background.
-    let _ui_server = ui::maybe_start_ui_server(&config, registry.engine_factory())
+    let _ui_server = swanlake_core::ui::maybe_start_ui_server(&config, registry.engine_factory())
         .context("failed to start DuckDB UI server")?;
 
     // Pass dq_runtime to the service to keep the QueueRuntime alive throughout the server's lifetime.

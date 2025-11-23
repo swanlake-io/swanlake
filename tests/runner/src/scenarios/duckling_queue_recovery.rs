@@ -6,7 +6,7 @@ use crate::scenarios::duckling_queue_utils::{
 };
 use crate::CliArgs;
 use anyhow::{anyhow, Context, Result};
-use flight_sql_client::FlightSQLClient;
+use swanlake_client::FlightSQLClient;
 use tracing::info;
 
 /// Ensure duckling_queue persistent files are readable and preserve data faithfully.

@@ -17,7 +17,7 @@ async-trait = "0.1.83"
 adbc_core = "0.20.0"
 adbc_driver_manager = "0.20.0"
 chrono = "0.4"
-flight-sql-client = { path = "../../flight-sql-client" }
+swanlake-client = { path = "../../swanlake-client" }
 sqllogictest = "0.28.4"
 thiserror = "2.0.6"
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "time"] }

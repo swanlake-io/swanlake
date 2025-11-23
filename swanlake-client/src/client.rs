@@ -44,7 +44,7 @@ static DRIVER_CACHE: OnceLock<Result<Arc<CachedDriver>>> = OnceLock::new();
 fn get_cached_driver() -> Result<Arc<CachedDriver>> {
     match DRIVER_CACHE.get_or_init(|| {
         ManagedDriver::load_dynamic_from_filename(
-            &PathBuf::from(DRIVER_PATH),
+            PathBuf::from(DRIVER_PATH),
             None,
             AdbcVersion::default(),
         )
@@ -197,9 +197,7 @@ impl FlightSQLClient {
     pub fn execute_update(&mut self, sql: &str) -> Result<UpdateResult> {
         let mut stmt = self.conn.new_statement()?;
         stmt.set_sql_query(sql)?;
-        let rows_affected = stmt
-            .execute_update()?
-            .and_then(|value| value.try_into().ok());
+        let rows_affected = stmt.execute_update()?;
         Ok(UpdateResult { rows_affected })
     }
 
@@ -298,7 +296,7 @@ impl FlightSQLClient {
             return Err(anyhow!("query returned empty result"));
         }
         let column = batch.column(0);
-        Ok(value_as_i64(column.as_ref(), 0)?)
+        value_as_i64(column.as_ref(), 0)
     }
 
     /// Execute a query that returns a single f64 value.
@@ -324,7 +322,7 @@ impl FlightSQLClient {
             return Err(anyhow!("query returned empty result"));
         }
         let column = batch.column(0);
-        Ok(value_as_f64(column.as_ref(), 0)?)
+        value_as_f64(column.as_ref(), 0)
     }
 
     /// Execute a query that returns a single bool value.
@@ -350,7 +348,7 @@ impl FlightSQLClient {
             return Err(anyhow!("query returned empty result"));
         }
         let column = batch.column(0);
-        Ok(value_as_bool(column.as_ref(), 0)?)
+        value_as_bool(column.as_ref(), 0)
     }
 
     /// Execute a query that returns a single string value.
@@ -376,7 +374,7 @@ impl FlightSQLClient {
             return Err(anyhow!("query returned empty result"));
         }
         let column = batch.column(0);
-        Ok(value_as_string(column.as_ref(), 0)?)
+        value_as_string(column.as_ref(), 0)
     }
 }
 

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use flight_sql_client::FlightSQLClient;
+use swanlake_client::FlightSQLClient;
 use tracing::info;
 
 #[derive(Debug)]

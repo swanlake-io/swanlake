@@ -8,7 +8,7 @@ use std::sync::Once;
 
 use anyhow::{anyhow, bail, Context, Result};
 use arrow_array::Array;
-use flight_sql_client::{arrow::array_value_to_string, FlightSQLClient};
+use swanlake_client::{arrow::array_value_to_string, FlightSQLClient};
 use tracing::info;
 
 mod scenarios;
@@ -23,7 +23,9 @@ struct CliArgs {
 
 #[derive(Debug)]
 enum RecordKind {
-    Statement { expect_error: bool },
+    Statement {
+        expect_error: bool,
+    },
     Query {
         expect_error: bool,
         expected_rows: Vec<String>,
@@ -76,7 +78,9 @@ fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
             .with_context(|| format!("failed to read {}", root.display()))?
         {
             let entry = entry?;
-            if entry.file_type()?.is_file() && entry.path().extension().and_then(|e| e.to_str()) == Some("test") {
+            if entry.file_type()?.is_file()
+                && entry.path().extension().and_then(|e| e.to_str()) == Some("test")
+            {
                 test_files.push(entry.path());
             }
         }
@@ -107,10 +111,7 @@ async fn run_entrypoint() -> Result<()> {
     let raw_args: Vec<String> = env::args().skip(1).collect();
     let args = parse_args(raw_args)?;
 
-    info!(
-        "Running SQL tests with {} script(s)",
-        args.test_files.len()
-    );
+    info!("Running SQL tests with {} script(s)", args.test_files.len());
     run_sql_tests(&args).await?;
     scenarios::run_all(&args).await?;
     Ok(())
@@ -199,12 +200,8 @@ fn parse_test_file(path: &Path) -> Result<Vec<TestRecord>> {
                 if line_owned.contains('\t') {
                     expected_rows.push(line_owned);
                 } else {
-                    expected_rows.push(
-                        line_owned
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join("\t"),
-                    );
+                    expected_rows
+                        .push(line_owned.split_whitespace().collect::<Vec<_>>().join("\t"));
                 }
             }
 
@@ -258,10 +255,8 @@ async fn execute_records(
                     (Ok(_res), true) => bail!("expected query to error but it succeeded: {sql}"),
                     (Ok(res), false) => {
                         let rows = collect_rows(&res)?;
-                        let normalized: Vec<String> = rows
-                            .into_iter()
-                            .map(|r| r.join("\t"))
-                            .collect();
+                        let normalized: Vec<String> =
+                            rows.into_iter().map(|r| r.join("\t")).collect();
                         if normalized != *expected_rows {
                             bail!(
                                 "unexpected rows for sql {}: got {:?}, expected {:?}",
@@ -287,7 +282,7 @@ fn apply_substitutions(sql: &str, subs: &HashMap<String, String>) -> String {
     substituted
 }
 
-fn collect_rows(result: &flight_sql_client::QueryResult) -> Result<Vec<Vec<String>>> {
+fn collect_rows(result: &swanlake_client::QueryResult) -> Result<Vec<Vec<String>>> {
     let mut rows = Vec::new();
     for batch in &result.batches {
         let cols = batch.num_columns();

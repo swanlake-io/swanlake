@@ -10,8 +10,8 @@ use arrow_array::{
 };
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-use flight_sql_client::arrow::{value_as_bool, value_as_f64, value_as_i64, value_as_string};
-use flight_sql_client::{FlightSQLClient, QueryResult};
+use swanlake_client::arrow::{value_as_bool, value_as_f64, value_as_i64, value_as_string};
+use swanlake_client::{FlightSQLClient, QueryResult};
 
 use crate::CliArgs;
 
@@ -173,8 +173,8 @@ impl<'a> PreparedStatementTester<'a> {
         self.expect_i64(batch, 4, 255, "uint8_col")?;
         self.expect_i64(batch, 5, 65000, "uint16_col")?;
         self.expect_i64(batch, 6, 4000000000, "uint32_col")?;
-        self.expect_f64(batch, 7, 3.14159, "float32_col")?;
-        self.expect_f64(batch, 8, 2.718281828, "float64_col")?;
+        self.expect_f64(batch, 7, std::f32::consts::PI as f64, "float32_col")?;
+        self.expect_f64(batch, 8, std::f64::consts::E, "float64_col")?;
         self.expect_bool(batch, 9, true, "bool_col")?;
         self.expect_string(batch, 10, "updated value", "string_col")?;
         self.expect_i64(batch, 11, 20081i64 * 24 * 3600 * 1000, "date64_col")?;
@@ -617,7 +617,9 @@ impl<'a> PreparedStatementTester<'a> {
         const TABLE: &str = "swanlake.dq_positional_multi";
         self.drop_table_if_exists(TABLE)?;
         let test_result = (|| -> Result<()> {
-            self.execute_update("CREATE TABLE swanlake.dq_positional_multi (id INTEGER, label VARCHAR)")?;
+            self.execute_update(
+                "CREATE TABLE swanlake.dq_positional_multi (id INTEGER, label VARCHAR)",
+            )?;
 
             // Simulate Go driver sending a single-row batch with positional field names ("1", "2", ...)
             // for a multi-row VALUES clause.
@@ -646,7 +648,10 @@ impl<'a> PreparedStatementTester<'a> {
             let queued_rows = self
                 .client
                 .query_scalar_i64("SELECT COUNT(*) FROM swanlake.dq_positional_multi")?;
-            ensure!(queued_rows == 0, "queued inserts should not be visible before flush");
+            ensure!(
+                queued_rows == 0,
+                "queued inserts should not be visible before flush"
+            );
 
             self.execute_update("PRAGMA duckling_queue.flush")?;
 
@@ -681,7 +686,10 @@ impl<'a> PreparedStatementTester<'a> {
             let read_attempt = self
                 .client
                 .execute("SELECT * FROM duckling_queue.dq_positional_multi");
-            ensure!(read_attempt.is_err(), "duckling_queue should stay write-only");
+            ensure!(
+                read_attempt.is_err(),
+                "duckling_queue should stay write-only"
+            );
             Ok(())
         })();
 
@@ -749,9 +757,9 @@ impl<'a> PreparedStatementTester<'a> {
 
             self.execute_update("PRAGMA duckling_queue.flush")?;
 
-            let result = self.client.execute(
-                "SELECT id, name FROM swanlake.dq_multi_batch_sink ORDER BY id",
-            )?;
+            let result = self
+                .client
+                .execute("SELECT id, name FROM swanlake.dq_multi_batch_sink ORDER BY id")?;
             let batch = result
                 .batches
                 .first()
@@ -768,7 +776,10 @@ impl<'a> PreparedStatementTester<'a> {
                 .downcast_ref::<StringArray>()
                 .context("expected names after multi-batch flush")?;
 
-            ensure!(ids.len() == 3, "expected three rows after multi-batch flush");
+            ensure!(
+                ids.len() == 3,
+                "expected three rows after multi-batch flush"
+            );
             ensure!(
                 ids.value(0) == 11 && ids.value(1) == 12 && ids.value(2) == 13,
                 "ids not preserved across multiple batches"
@@ -783,7 +794,10 @@ impl<'a> PreparedStatementTester<'a> {
             let read_attempt = self
                 .client
                 .execute("SELECT * FROM duckling_queue.dq_multi_batch_sink");
-            ensure!(read_attempt.is_err(), "duckling_queue should remain write-only");
+            ensure!(
+                read_attempt.is_err(),
+                "duckling_queue should remain write-only"
+            );
             Ok(())
         })();
 
@@ -819,9 +833,9 @@ impl<'a> PreparedStatementTester<'a> {
                 batch,
             )?;
 
-            let result = self.client.execute(
-                "SELECT id, name FROM swanlake.current_catalog_test ORDER BY id",
-            )?;
+            let result = self
+                .client
+                .execute("SELECT id, name FROM swanlake.current_catalog_test ORDER BY id")?;
             let batch = result
                 .batches
                 .first()
@@ -879,9 +893,9 @@ impl<'a> PreparedStatementTester<'a> {
                 batch,
             )?;
 
-            let result = self.client.execute(
-                "SELECT id, name FROM swanlake.default_catalog_test ORDER BY id",
-            )?;
+            let result = self
+                .client
+                .execute("SELECT id, name FROM swanlake.default_catalog_test ORDER BY id")?;
             let batch = result
                 .batches
                 .first()
@@ -940,9 +954,9 @@ impl<'a> PreparedStatementTester<'a> {
 
             self.execute_update("PRAGMA duckling_queue.flush")?;
 
-            let result = self.client.execute(
-                "SELECT id, ts FROM swanlake.dq_expr_sink ORDER BY id",
-            )?;
+            let result = self
+                .client
+                .execute("SELECT id, ts FROM swanlake.dq_expr_sink ORDER BY id")?;
             let batch = result
                 .batches
                 .first()
@@ -1157,7 +1171,7 @@ fn build_update_parameter_batch() -> Result<RecordBatch> {
 
     // Time: 14:30:45 in microseconds
     let time_us = (14 * 3600 + 30 * 60 + 45) * 1_000_000i64;
-    let time_ms = ((14 * 3600 + 30 * 60 + 45) * 1000) as i32;
+    let time_ms = (14 * 3600 + 30 * 60 + 45) * 1000;
     let time_ns = time_us * 1000;
 
     // Timestamp: 2024-12-25 14:30:45 in microseconds since epoch
@@ -1172,8 +1186,8 @@ fn build_update_parameter_batch() -> Result<RecordBatch> {
         Arc::new(UInt16Array::from(vec![65000])),
         Arc::new(UInt32Array::from(vec![4000000000])),
         Arc::new(UInt64Array::from(vec![18000000000000000000])),
-        Arc::new(Float32Array::from(vec![3.14159])),
-        Arc::new(Float64Array::from(vec![2.718281828])),
+        Arc::new(Float32Array::from(vec![std::f32::consts::PI])),
+        Arc::new(Float64Array::from(vec![std::f64::consts::E])),
         Arc::new(BooleanArray::from(vec![true])),
         Arc::new(StringArray::from(vec!["updated value"])),
         Arc::new(BinaryArray::from(vec![b"binary data" as &[u8]])),
