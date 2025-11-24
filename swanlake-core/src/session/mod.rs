@@ -292,7 +292,7 @@ impl Session {
         }
     }
 
-    fn transaction_absent_error(&self, transaction_id: TransactionId) -> Result<(), ServerError> {
+    fn transaction_absent(&self, transaction_id: TransactionId) -> Result<(), ServerError> {
         let mut aborted = self
             .aborted_transactions
             .lock()
@@ -300,7 +300,12 @@ impl Session {
         if aborted.remove(&transaction_id) {
             return Err(ServerError::TransactionAborted);
         }
-        Err(ServerError::TransactionNotFound)
+
+        debug!(
+            transaction_id = %transaction_id,
+            "transaction not found; treating as no-op"
+        );
+        Ok(())
     }
 
     /// Execute a SELECT query
@@ -763,55 +768,36 @@ impl Session {
     /// Commit a transaction
     #[instrument(skip(self), fields(session_id = %self.id, transaction_id = %transaction_id))]
     pub fn commit_transaction(&self, transaction_id: TransactionId) -> Result<(), ServerError> {
-        self.touch();
-
-        // Verify transaction exists (without holding the lock during the commit)
-        {
-            let transactions = self
-                .transactions
-                .lock()
-                .expect("transactions mutex poisoned");
-            if !transactions.contains_key(&transaction_id) {
-                // Check if it was aborted before treating as "not found"
-                return self.transaction_absent_error(transaction_id);
-            }
-        }
-
-        // Execute COMMIT on the connection
-        self.with_transaction_recovery(|| self.connection.execute_batch("COMMIT"))?;
-
-        let mut transactions = self
-            .transactions
-            .lock()
-            .expect("transactions mutex poisoned");
-        transactions.remove(&transaction_id);
-        let mut aborted = self
-            .aborted_transactions
-            .lock()
-            .expect("aborted_transactions mutex poisoned");
-        aborted.remove(&transaction_id);
-        debug!("committed transaction");
-        Ok(())
+        self.end_transaction(transaction_id, "COMMIT", "committed")
     }
 
     /// Rollback a transaction
     #[instrument(skip(self), fields(session_id = %self.id, transaction_id = %transaction_id))]
     pub fn rollback_transaction(&self, transaction_id: TransactionId) -> Result<(), ServerError> {
+        self.end_transaction(transaction_id, "ROLLBACK", "rolled back")
+    }
+
+    fn end_transaction(
+        &self,
+        transaction_id: TransactionId,
+        sql: &str,
+        op_name: &str,
+    ) -> Result<(), ServerError> {
         self.touch();
 
-        // Verify transaction exists (without holding the lock during the rollback)
+        // Verify transaction exists (without holding the lock during the commit/rollback)
         {
             let transactions = self
                 .transactions
                 .lock()
                 .expect("transactions mutex poisoned");
             if !transactions.contains_key(&transaction_id) {
-                return self.transaction_absent_error(transaction_id);
+                return self.transaction_absent(transaction_id);
             }
         }
 
-        // Execute ROLLBACK on the connection
-        self.with_transaction_recovery(|| self.connection.execute_batch("ROLLBACK"))?;
+        // Execute COMMIT/ROLLBACK on the connection
+        self.with_transaction_recovery(|| self.connection.execute_batch(sql))?;
 
         let mut transactions = self
             .transactions
@@ -823,7 +809,11 @@ impl Session {
             .lock()
             .expect("aborted_transactions mutex poisoned");
         aborted.remove(&transaction_id);
-        debug!("rolled back transaction");
+        debug!(
+            transaction_id = %transaction_id,
+            operation = op_name,
+            "completed transaction"
+        );
         Ok(())
     }
 }
