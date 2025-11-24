@@ -9,19 +9,19 @@ keywords = ["flight-sql", "arrow", "adbc", "database", "client"]
 categories = ["database", "api-bindings"]
 
 [dependencies]
-adbc_core = "0.20"
-adbc_driver_manager = "0.20"
+adbc_core = "0.21"
+adbc_driver_manager = "0.21"
 adbc-driver-flightsql = "0.1"
 anyhow = "1.0"
-arrow-array = "56"
-arrow-schema = "56"
+arrow-array = "57"
+arrow-schema = "57"
 chrono = "0.4"
 
 # cli
 clap = { version = "4.5", features = ["derive"], optional = true }
 comfy-table = { version = "7.1", optional = true }
-dirs = { version = "5.0", optional = true }
-rustyline = { version = "14.0", optional = true }
+dirs = { version = "6.0", optional = true }
+rustyline = { version = "17.0", optional = true }
 tracing = { version = "0.1.41", optional = true }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"], optional = true }
 

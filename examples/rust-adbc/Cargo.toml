@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-arrow-array = "56"
-arrow-schema = "56"
+arrow-array = "57"
+arrow-schema = "57"
 anyhow = "1.0"
 swanlake-client = { path = "../../swanlake-client" }
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
