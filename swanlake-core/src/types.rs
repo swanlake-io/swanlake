@@ -27,9 +27,7 @@ pub fn duckdb_type_to_arrow(duckdb_type: &str) -> Result<DataType, ServerError> 
     if let Some(element_type) = parse_array_type(&upper) {
         let inner_type = duckdb_type_to_arrow(&element_type)?;
         return Ok(DataType::List(Arc::new(Field::new(
-            "item",
-            inner_type,
-            true,
+            "item", inner_type, true,
         ))));
     }
 
