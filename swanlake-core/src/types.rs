@@ -25,7 +25,7 @@ pub fn duckdb_type_to_arrow(duckdb_type: &str) -> Result<DataType, ServerError> 
 
     // Handle array types (e.g., VARCHAR[], BIGINT[], INTEGER[])
     if let Some(element_type) = parse_array_type(&upper) {
-        let inner_type = duckdb_type_to_arrow(&element_type)?;
+        let inner_type = duckdb_type_to_arrow(element_type)?;
         return Ok(DataType::List(Arc::new(Field::new(
             "item", inner_type, true,
         ))));
@@ -97,12 +97,8 @@ pub fn duckdb_type_to_arrow(duckdb_type: &str) -> Result<DataType, ServerError> 
 /// Handles formats like "VARCHAR[]", "BIGINT[]", "INTEGER[][]" (multi-dimensional).
 fn parse_array_type(type_str: &str) -> Option<&str> {
     let trimmed = type_str.trim();
-    if trimmed.ends_with("[]") {
-        // Remove one level of [] to get the element type
-        Some(&trimmed[..trimmed.len() - 2])
-    } else {
-        None
-    }
+    // Remove one level of [] to get the element type
+    trimmed.strip_suffix("[]")
 }
 
 /// Parse precision and scale from a DECIMAL or NUMERIC type string.
