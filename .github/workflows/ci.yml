@@ -101,6 +101,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
@@ -121,18 +122,16 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          push: true
           file: ./swanlake-server/Dockerfile
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
           cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
 
       - name: Run health check in Docker
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} sh -c 'swanlake & sleep 5 && grpc-health-probe -addr=localhost:4214'
 
       - name: Tag and push latest
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           docker tag ghcr.io/${{ github.repository }}:${{ github.sha }} ghcr.io/${{ github.repository }}:latest
           docker push ghcr.io/${{ github.repository }}:latest
