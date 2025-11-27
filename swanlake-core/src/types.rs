@@ -97,11 +97,11 @@ pub fn duckdb_type_to_arrow(duckdb_type: &str) -> Result<DataType, ServerError> 
 
 /// Parse array type and return the element type if it's an array.
 /// Handles formats like "VARCHAR[]", "BIGINT[]", "INTEGER[][]" (multi-dimensional).
-fn parse_array_type(type_str: &str) -> Option<String> {
+fn parse_array_type(type_str: &str) -> Option<&str> {
     let trimmed = type_str.trim();
     if trimmed.ends_with("[]") {
         // Remove one level of [] to get the element type
-        Some(trimmed[..trimmed.len() - 2].to_string())
+        Some(&trimmed[..trimmed.len() - 2])
     } else {
         None
     }
