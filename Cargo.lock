@@ -219,7 +219,7 @@ dependencies = [
  "arrow-arith",
  "arrow-array 57.0.0",
  "arrow-buffer 57.0.0",
- "arrow-cast",
+ "arrow-cast 57.0.0",
  "arrow-data 57.0.0",
  "arrow-ord",
  "arrow-row",
@@ -301,6 +301,27 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
+version = "56.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "919418a0681298d3a77d1a315f625916cb5678ad0d74b9c60108eb15fd083023"
+dependencies = [
+ "arrow-array 56.2.0",
+ "arrow-buffer 56.2.0",
+ "arrow-data 56.2.0",
+ "arrow-schema 56.2.0",
+ "arrow-select 56.2.0",
+ "atoi",
+ "base64 0.22.1",
+ "chrono",
+ "comfy-table",
+ "half",
+ "lexical-core",
+ "num",
+ "ryu",
+]
+
+[[package]]
+name = "arrow-cast"
 version = "57.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c9ebb4c987e6b3b236fb4a14b20b34835abfdd80acead3ccf1f9bf399e1f168"
@@ -354,7 +375,7 @@ dependencies = [
  "arrow-arith",
  "arrow-array 57.0.0",
  "arrow-buffer 57.0.0",
- "arrow-cast",
+ "arrow-cast 57.0.0",
  "arrow-data 57.0.0",
  "arrow-ipc 57.0.0",
  "arrow-ord",
@@ -443,6 +464,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9cfa7a03d1eee2a4d061476e1840ad5c9867a544ca6c4c59256496af5d0a8be5"
 dependencies = [
  "bitflags 2.10.0",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -848,12 +871,12 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
 name = "comfy-table"
-version = "7.2.1"
+version = "7.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b03b7db8e0b4b2fdad6c551e634134e99ec000e5c8c3b6856c65e8bbaded7a3b"
+checksum = "e0d05af1e006a2407bedef5af410552494ce5be9090444dbbcb57258c1af3d56"
 dependencies = [
- "crossterm",
- "unicode-segmentation",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "unicode-width 0.2.2",
 ]
 
@@ -974,29 +997,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
-name = "crossterm"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8b9f2e4c67f833b660cdb0a3523065869fb35570177239812ed4c905aeff87b"
-dependencies = [
- "bitflags 2.10.0",
- "crossterm_winapi",
- "document-features",
- "parking_lot",
- "rustix",
- "winapi",
-]
-
-[[package]]
-name = "crossterm_winapi"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acdd7c62a3665c7f6830a51635d9ac9b23ed385797f70a83bb8bafe9c572ab2b"
-dependencies = [
- "winapi",
-]
-
-[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1091,15 +1091,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "document-features"
-version = "0.2.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
-dependencies = [
- "litrs",
-]
-
-[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1119,7 +1110,7 @@ dependencies = [
  "num",
  "num-integer",
  "rust_decimal",
- "strum",
+ "strum 0.27.2",
 ]
 
 [[package]]
@@ -2180,12 +2171,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
-name = "litrs"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2532,7 +2517,7 @@ dependencies = [
  "ahash 0.8.12",
  "arrow-array 57.0.0",
  "arrow-buffer 57.0.0",
- "arrow-cast",
+ "arrow-cast 57.0.0",
  "arrow-data 57.0.0",
  "arrow-ipc 57.0.0",
  "arrow-schema 57.0.0",
@@ -3628,11 +3613,30 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "strum"
+version = "0.26.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+
+[[package]]
+name = "strum"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.27.2",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.110",
 ]
 
 [[package]]
@@ -3672,10 +3676,9 @@ dependencies = [
  "adbc_driver_manager",
  "anyhow",
  "arrow-array 56.2.0",
+ "arrow-cast 56.2.0",
  "arrow-schema 56.2.0",
- "chrono",
  "clap",
- "comfy-table",
  "dirs",
  "rustyline",
  "tracing",
@@ -3688,7 +3691,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow-array 57.0.0",
- "arrow-cast",
+ "arrow-cast 57.0.0",
  "arrow-flight",
  "arrow-ipc 57.0.0",
  "arrow-schema 57.0.0",
@@ -3726,6 +3729,7 @@ dependencies = [
  "anyhow",
  "arrow-array 56.2.0",
  "arrow-buffer 56.2.0",
+ "arrow-cast 56.2.0",
  "arrow-ipc 56.2.0",
  "arrow-schema 56.2.0",
  "async-trait",
@@ -4553,28 +4557,6 @@ dependencies = [
  "wasite",
  "web-sys",
 ]
-
-[[package]]
-name = "winapi"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
-dependencies = [
- "winapi-i686-pc-windows-gnu",
- "winapi-x86_64-pc-windows-gnu",
-]
-
-[[package]]
-name = "winapi-i686-pc-windows-gnu"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
-
-[[package]]
-name = "winapi-x86_64-pc-windows-gnu"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-core"

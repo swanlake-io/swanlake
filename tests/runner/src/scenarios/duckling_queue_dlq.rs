@@ -34,16 +34,16 @@ pub async fn run_duckling_queue_dlq(args: &CliArgs) -> Result<()> {
     );
 
     let mut conn = FlightSQLClient::connect(&args.endpoint)?;
-    conn.execute_update(&attach_sql)?;
-    conn.execute_update("DROP TABLE IF EXISTS swanlake.dq_dlq_target;")?;
+    conn.update(&attach_sql)?;
+    conn.update("DROP TABLE IF EXISTS swanlake.dq_dlq_target;")?;
 
     // Insert into duckling_queue; the target table doesn't exist so the flush will fail.
-    conn.execute_update("INSERT INTO duckling_queue.dq_dlq_target SELECT 1 AS id;")?;
+    conn.update("INSERT INTO duckling_queue.dq_dlq_target SELECT 1 AS id;")?;
 
     wait_for_parquet_chunks(&dq_root, |count| count >= 1).await?;
 
     // Force a flush; this will fail because the target table is missing, triggering DLQ copy.
-    conn.execute_update("PRAGMA duckling_queue.flush;")?;
+    conn.update("PRAGMA duckling_queue.flush;")?;
 
     // After offload, local buffer should be cleaned up.
     wait_for_parquet_chunks(&dq_root, |count| count == 0).await?;

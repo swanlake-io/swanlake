@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use swanlake_client::FlightSQLClient;
 use tracing::info;
 
+use crate::scenarios::client_ext::FlightSqlClientExt;
 use crate::scenarios::duckling_queue_utils::{reset_dir, wait_for_parquet_chunks};
 use crate::CliArgs;
 
@@ -22,17 +23,17 @@ pub async fn run_duckling_queue_persistence(args: &CliArgs) -> Result<()> {
     reset_dir(&root)?;
 
     let mut conn = FlightSQLClient::connect(&args.endpoint)?;
-    conn.execute_update(&attach_sql)?;
-    conn.execute_update("DROP TABLE IF EXISTS swanlake.dq_persist_target;")?;
+    conn.update(&attach_sql)?;
+    conn.update("DROP TABLE IF EXISTS swanlake.dq_persist_target;")?;
 
-    conn.execute_update("CREATE TABLE swanlake.dq_persist_target (i INTEGER);")?;
-    conn.execute_update(
+    conn.update("CREATE TABLE swanlake.dq_persist_target (i INTEGER);")?;
+    conn.update(
         "INSERT INTO duckling_queue.dq_persist_target SELECT 1 AS id UNION ALL SELECT 2;",
     )?;
 
     wait_for_parquet_chunks(&root, |count| count >= 1).await?;
 
-    conn.execute_update("PRAGMA duckling_queue.flush;")?;
+    conn.update("PRAGMA duckling_queue.flush;")?;
 
     let total = conn.query_scalar_i64("SELECT COUNT(*) FROM swanlake.dq_persist_target")?;
     assert_eq!(
@@ -42,7 +43,7 @@ pub async fn run_duckling_queue_persistence(args: &CliArgs) -> Result<()> {
 
     wait_for_parquet_chunks(&root, |count| count == 0).await?;
 
-    conn.execute_update("DROP TABLE IF EXISTS swanlake.dq_persist_target;")?;
+    conn.update("DROP TABLE IF EXISTS swanlake.dq_persist_target;")?;
     info!("duckling queue persistence scenario passed");
     Ok(())
 }

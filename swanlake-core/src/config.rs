@@ -29,6 +29,10 @@ pub struct ServerConfig {
     pub duckling_queue_max_parallel_flushes: usize,
     /// Maximum number of buffered rows per target table before forcing a flush.
     pub duckling_queue_buffer_max_rows: usize,
+    /// Maximum number of rows to send per flush slice.
+    pub duckling_queue_flush_chunk_rows: usize,
+    /// Soft cap for buffer.duckdb size in bytes (0 = unlimited).
+    pub duckling_queue_max_db_bytes: u64,
     /// Target catalog name for flushing Duckling Queue data.
     pub duckling_queue_target_catalog: String,
     /// Directory where the Duckling Queue persists buffered batches.
@@ -53,6 +57,8 @@ impl Default for ServerConfig {
             duckling_queue_flush_interval_seconds: 60,
             duckling_queue_max_parallel_flushes: 2,
             duckling_queue_buffer_max_rows: 50_000,
+            duckling_queue_flush_chunk_rows: 50_000,
+            duckling_queue_max_db_bytes: 0,
 
             duckling_queue_target_catalog: "swanlake".to_string(),
             duckling_queue_root: "target/duckling_queue".to_string(),

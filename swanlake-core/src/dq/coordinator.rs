@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{mpsc, Arc, Condvar, Mutex};
-use std::thread;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
@@ -9,7 +8,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, info, warn};
 
 use crate::dq::config::Settings;
-use crate::dq::storage::{DurableChunk, DurableStorage};
+use crate::dq::duckdb_buffer::{DuckDbBuffer, FlushHandle, SelectedPayload};
+use crate::engine::EngineFactory;
 use crate::error::ServerError;
 
 #[derive(Debug)]
@@ -62,80 +62,43 @@ impl FlushTracker {
 pub struct FlushPayload {
     pub table: String,
     pub schema: SchemaRef,
-    chunks: Vec<BufferedChunk>,
+    pub batches: Vec<RecordBatch>,
+    pub handle: FlushHandle,
+    pub rows: usize,
+    pub bytes: u64,
 }
 
 impl FlushPayload {
     pub fn is_empty(&self) -> bool {
-        self.chunks.is_empty()
+        self.rows == 0
     }
-
     pub fn total_rows(&self) -> usize {
-        self.chunks.iter().map(|chunk| chunk.rows).sum()
+        self.rows
     }
-
-    pub fn chunk_handles(&self) -> Vec<DurableChunk> {
-        self.chunks
-            .iter()
-            .map(|chunk| chunk.handle.clone())
-            .collect()
-    }
-
-    pub fn into_batches_and_chunks(self) -> (Vec<RecordBatch>, Vec<DurableChunk>) {
-        let mut batches = Vec::new();
-        let mut handles = Vec::new();
-        for mut chunk in self.chunks {
-            handles.push(chunk.handle);
-            batches.append(&mut chunk.batches);
-        }
-        (batches, handles)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct BufferedChunk {
-    handle: DurableChunk,
-    batches: Vec<RecordBatch>,
-    rows: usize,
-    bytes: u64,
-}
-
-impl BufferedChunk {
-    fn new(handle: DurableChunk, batches: Vec<RecordBatch>) -> Self {
-        let mut rows = 0usize;
-        let mut bytes = 0u64;
-        for batch in &batches {
-            rows += batch.num_rows();
-            bytes += batch.get_array_memory_size() as u64;
-        }
-        Self {
-            handle,
-            batches,
-            rows,
-            bytes,
-        }
+    pub fn total_bytes(&self) -> u64 {
+        self.bytes
     }
 }
 
 struct BufferedTable {
     schema: SchemaRef,
-    chunks: Vec<BufferedChunk>,
     total_rows: usize,
     total_bytes: u64,
     last_flush: Instant,
     last_activity: Instant,
+    inflight: bool,
 }
 
 impl BufferedTable {
-    fn new(schema: SchemaRef) -> Self {
+    fn new(schema: SchemaRef, row_count: usize) -> Self {
         let now = Instant::now();
         Self {
             schema,
-            chunks: Vec::new(),
-            total_rows: 0,
+            total_rows: row_count,
             total_bytes: 0,
             last_flush: now,
             last_activity: now,
+            inflight: false,
         }
     }
 
@@ -148,16 +111,16 @@ impl BufferedTable {
         Ok(())
     }
 
-    fn push_chunk(&mut self, chunk: BufferedChunk) -> usize {
-        self.total_rows += chunk.rows;
-        self.total_bytes += chunk.bytes;
+    fn record_enqueue(&mut self, rows: usize, bytes: u64) {
+        self.total_rows += rows;
+        self.total_bytes += bytes;
         self.last_activity = Instant::now();
-        let inserted = chunk.rows;
-        self.chunks.push(chunk);
-        inserted
     }
 
     fn should_flush(&self, max_rows: usize, max_bytes: u64) -> bool {
+        if self.inflight {
+            return false;
+        }
         if max_rows > 0 && self.total_rows >= max_rows {
             return true;
         }
@@ -167,21 +130,20 @@ impl BufferedTable {
         false
     }
 
-    fn drain_payload(&mut self, table: &str) -> Option<FlushPayload> {
-        if self.total_rows == 0 {
-            return None;
-        }
-        let chunks = std::mem::take(&mut self.chunks);
-        let payload = FlushPayload {
-            table: table.to_string(),
-            schema: self.schema.clone(),
-            chunks,
-        };
-        self.total_rows = 0;
-        self.total_bytes = 0;
+    fn mark_inflight(&mut self) {
+        self.inflight = true;
+    }
+
+    fn mark_failed(&mut self) {
+        self.inflight = false;
+    }
+
+    fn mark_flushed(&mut self, rows: usize, bytes: u64) {
+        self.inflight = false;
         self.last_flush = Instant::now();
         self.last_activity = self.last_flush;
-        Some(payload)
+        self.total_rows = self.total_rows.saturating_sub(rows);
+        self.total_bytes = self.total_bytes.saturating_sub(bytes);
     }
 }
 
@@ -189,40 +151,41 @@ struct CoordinatorInner {
     tables: HashMap<String, BufferedTable>,
 }
 
-/// Coordinates in-memory buffering of duckling_queue inserts and schedules flushes.
+/// Coordinates buffering of duckling_queue inserts and schedules flushes.
 #[derive(Clone)]
 pub struct DqCoordinator {
     settings: Settings,
-    storage: Arc<DurableStorage>,
+    buffer: Arc<DuckDbBuffer>,
+    factory: Arc<Mutex<EngineFactory>>,
     tracker: Arc<FlushTracker>,
     flush_tx: UnboundedSender<FlushPayload>,
-    persist_tx: mpsc::Sender<PersistJob>,
     inner: Arc<Mutex<CoordinatorInner>>,
 }
 
 impl DqCoordinator {
     pub fn new(
         settings: Settings,
-        storage: Arc<DurableStorage>,
+        buffer: Arc<DuckDbBuffer>,
+        factory: Arc<Mutex<EngineFactory>>,
         tracker: Arc<FlushTracker>,
         flush_tx: UnboundedSender<FlushPayload>,
     ) -> Result<Self, ServerError> {
-        let inner = CoordinatorInner {
-            tables: HashMap::new(),
-        };
-        let persist_tx = spawn_persist_worker(storage.clone());
+        let mut tables = HashMap::new();
+        for state in buffer.load_table_states()? {
+            tables.insert(
+                state.table.clone(),
+                BufferedTable::new(state.schema.clone(), state.row_count),
+            );
+        }
         let coordinator = Self {
             settings,
-            storage,
+            buffer,
+            factory,
             tracker,
             flush_tx,
-            persist_tx,
-            inner: Arc::new(Mutex::new(inner)),
+            inner: Arc::new(Mutex::new(CoordinatorInner { tables })),
         };
-        let restored = coordinator.restore_from_storage()?;
-        if restored > 0 {
-            info!(restored, "restored duckling queue batches from disk");
-        }
+        coordinator.dispatch_pending_on_startup();
         Ok(coordinator)
     }
 
@@ -239,38 +202,42 @@ impl DqCoordinator {
         let schema_ref: SchemaRef = Arc::new(schema);
         let table_key = table.to_string();
 
+        self.ensure_schema_ready(&table_key, &schema_ref)?;
+
+        let (inserted_rows, inserted_bytes) =
+            self.buffer.enqueue(&table_key, &schema_ref, &batches)?;
+
+        let mut should_dispatch = false;
         {
             let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
             let entry = guard
                 .tables
                 .entry(table_key.clone())
-                .or_insert_with(|| BufferedTable::new(schema_ref.clone()));
+                .or_insert_with(|| BufferedTable::new(schema_ref.clone(), 0));
             entry.ensure_schema(&schema_ref)?;
-        }
-
-        let chunk = self.persist_chunk(table_key.clone(), schema_ref, batches)?;
-        let mut maybe_payload = None;
-        let inserted = {
-            let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
-            let entry = guard
-                .tables
-                .get_mut(&table_key)
-                .expect("duckling table entry missing during enqueue");
-            let inserted = entry.push_chunk(chunk);
+            entry.record_enqueue(inserted_rows, inserted_bytes);
             if entry.should_flush(
                 self.settings.buffer_max_rows,
                 self.settings.buffer_max_bytes,
             ) {
-                maybe_payload = entry.drain_payload(&table_key);
+                should_dispatch = true;
             }
-            inserted
-        };
-
-        if let Some(payload) = maybe_payload {
-            self.dispatch_payload(payload);
         }
 
-        Ok(inserted)
+        if should_dispatch {
+            self.try_dispatch_table(table_key);
+        }
+
+        // If buffer file grew beyond limit, trigger best-effort flush attempts.
+        if self.settings.max_db_bytes > 0 {
+            if let Ok(size) = self.buffer.database_size_bytes() {
+                if size > self.settings.max_db_bytes {
+                    self.try_dispatch_table(table.to_string());
+                }
+            }
+        }
+
+        Ok(inserted_rows)
     }
 
     /// Flush tables whose buffered data exceeded the max age.
@@ -278,74 +245,183 @@ impl DqCoordinator {
         if self.settings.buffer_max_age == Duration::ZERO {
             return;
         }
-        let mut payloads = Vec::new();
+        let mut candidates = Vec::new();
         {
-            let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
+            let guard = self.inner.lock().expect("dq coordinator mutex poisoned");
             let now = Instant::now();
-            for (table, info) in guard.tables.iter_mut() {
-                if info.total_rows == 0 {
+            for (table, info) in guard.tables.iter() {
+                if info.total_rows == 0 || info.inflight {
                     continue;
                 }
                 if now.duration_since(info.last_activity) >= self.settings.buffer_max_age {
-                    if let Some(payload) = info.drain_payload(table) {
-                        payloads.push(payload);
-                    }
+                    candidates.push(table.clone());
                 }
             }
         }
 
-        if !payloads.is_empty() {
+        if !candidates.is_empty() {
             debug!(
-                count = payloads.len(),
+                count = candidates.len(),
                 "flushing stale duckling queue buffers due to age"
             );
         }
 
-        for payload in payloads {
-            self.dispatch_payload(payload);
+        for table in candidates {
+            self.try_dispatch_table(table);
         }
     }
 
     /// Force flush every buffered table.
     pub fn force_flush_all(&self) {
-        let payloads = self.take_all_payloads();
-        if !payloads.is_empty() {
+        let tables: Vec<String> = {
+            let guard = self.inner.lock().expect("dq coordinator mutex poisoned");
+            guard.tables.keys().cloned().collect()
+        };
+        if !tables.is_empty() {
             info!(
-                count = payloads.len(),
+                count = tables.len(),
                 "force flushing all duckling queue buffers"
             );
         }
-        for payload in payloads {
-            self.dispatch_payload(payload);
+        for table in tables {
+            self.try_dispatch_table(table);
         }
         self.wait_for_idle();
     }
 
-    /// Re-queue payload data when a flush task fails.
-    pub fn requeue(&self, payload: FlushPayload) {
+    /// Re-dispatch a table after a failed flush attempt.
+    pub fn requeue(&self, table: &str) {
+        self.mark_failed(table);
+        self.try_dispatch_table(table.to_string());
+    }
+
+    /// Called by flush runtime when a flush attempt failed.
+    pub fn mark_failed(&self, table: &str) {
         let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
-        let entry = guard
-            .tables
-            .entry(payload.table.clone())
-            .or_insert_with(|| BufferedTable::new(payload.schema.clone()));
-        if let Err(err) = entry.ensure_schema(&payload.schema) {
-            warn!(error = %err, table = %payload.table, "failed to requeue duckling buffer due to schema mismatch");
-            return;
-        }
-        for chunk in payload.chunks {
-            entry.push_chunk(chunk);
+        if let Some(state) = guard.tables.get_mut(table) {
+            state.mark_failed();
         }
     }
 
-    fn take_all_payloads(&self) -> Vec<FlushPayload> {
+    /// Called by flush runtime when a payload has been durably flushed.
+    pub fn ack(
+        &self,
+        table: &str,
+        handle: &FlushHandle,
+        rows: usize,
+        bytes: u64,
+    ) -> Result<(), ServerError> {
+        self.buffer.ack(handle)?;
         let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
-        let mut payloads = Vec::new();
-        for (table, info) in guard.tables.iter_mut() {
-            if let Some(payload) = info.drain_payload(table) {
-                payloads.push(payload);
+        if let Some(state) = guard.tables.get_mut(table) {
+            state.mark_flushed(rows, bytes);
+        }
+        Ok(())
+    }
+
+    fn ensure_schema_ready(&self, table: &str, incoming: &SchemaRef) -> Result<(), ServerError> {
+        if let Some((stored, row_count)) = self.buffer.table_info(table)? {
+            if stored.as_ref() == incoming.as_ref() {
+                return Ok(());
+            }
+            // Try to refresh from SwanLake; only allow change if remote matches incoming.
+            let remote = self.fetch_remote_schema(table)?;
+            if remote.as_ref() != incoming.as_ref() {
+                return Err(ServerError::Internal(format!(
+                    "duckling queue schema mismatch for {table}; remote schema does not match incoming"
+                )));
+            }
+            if row_count > 0 {
+                self.flush_table_and_wait(table)?;
+                let remaining = {
+                    let guard = self.inner.lock().expect("dq coordinator mutex poisoned");
+                    guard.tables.get(table).map(|t| t.total_rows).unwrap_or(0)
+                };
+                if remaining > 0 {
+                    return Err(ServerError::Internal(format!(
+                        "duckling queue schema change for {table} blocked; buffered rows could not be flushed"
+                    )));
+                }
+            }
+            self.buffer.replace_table_schema(table, incoming.as_ref())?;
+            let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
+            let entry = guard
+                .tables
+                .entry(table.to_string())
+                .or_insert_with(|| BufferedTable::new(incoming.clone(), 0));
+            entry.schema = incoming.clone();
+            entry.total_rows = 0;
+            entry.total_bytes = 0;
+            entry.inflight = false;
+            return Ok(());
+        }
+
+        // No existing table; create on first use.
+        self.buffer.ensure_table(table, incoming.as_ref())
+    }
+
+    fn fetch_remote_schema(&self, table: &str) -> Result<SchemaRef, ServerError> {
+        let conn = self.factory.lock().unwrap().create_connection()?;
+        let qualified = format!("{}.{}", self.settings.target_catalog, table);
+        let schema = conn.table_schema(&qualified)?;
+        Ok(Arc::new(schema))
+    }
+
+    fn flush_table_and_wait(&self, table: &str) -> Result<(), ServerError> {
+        let mut attempts = 0;
+        loop {
+            let selection = self.buffer.select_for_flush(table)?;
+            if let Some(sel) = selection {
+                self.dispatch_payload(sel.into());
+                self.wait_for_idle();
+            }
+            let remaining = {
+                let guard = self.inner.lock().expect("dq coordinator mutex poisoned");
+                guard.tables.get(table).map(|t| t.total_rows).unwrap_or(0)
+            };
+            if remaining == 0 {
+                return Ok(());
+            }
+            attempts += 1;
+            if attempts >= 3 {
+                return Err(ServerError::Internal(format!(
+                    "duckling queue failed to drain buffered rows for {table} after retries"
+                )));
             }
         }
-        payloads
+    }
+
+    fn dispatch_pending_on_startup(&self) {
+        let tables: Vec<String> = {
+            let guard = self.inner.lock().expect("dq coordinator mutex poisoned");
+            guard.tables.keys().cloned().collect()
+        };
+        for table in tables {
+            self.try_dispatch_table(table);
+        }
+    }
+
+    fn try_dispatch_table(&self, table: String) {
+        let selection = match self.buffer.select_for_flush(&table) {
+            Ok(Some(payload)) => payload,
+            Ok(None) => return,
+            Err(err) => {
+                warn!(error = %err, table = %table, "failed to select duckling queue payload");
+                return;
+            }
+        };
+
+        let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
+        let Some(table_state) = guard.tables.get_mut(&table) else {
+            return;
+        };
+        if table_state.inflight {
+            return;
+        }
+        table_state.mark_inflight();
+        drop(guard);
+
+        self.dispatch_payload(selection.into());
     }
 
     fn dispatch_payload(&self, payload: FlushPayload) {
@@ -358,133 +434,33 @@ impl DqCoordinator {
 
     #[cfg(test)]
     pub fn take_all_payloads_for_test(&self) -> Vec<FlushPayload> {
-        self.take_all_payloads()
+        let mut out = Vec::new();
+        let tables: Vec<String> = {
+            let guard = self.inner.lock().expect("dq coordinator mutex poisoned");
+            guard.tables.keys().cloned().collect()
+        };
+        for table in tables {
+            if let Ok(Some(selection)) = self.buffer.select_for_flush(&table) {
+                out.push(selection.into());
+            }
+        }
+        out
     }
 
     pub fn wait_for_idle(&self) {
         self.tracker.wait_for_idle();
     }
-
-    fn restore_from_storage(&self) -> Result<usize, ServerError> {
-        let persisted = self.storage.load_pending()?;
-        if persisted.is_empty() {
-            return Ok(0);
-        }
-        let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
-        let mut restored = 0usize;
-        for chunk in persisted {
-            let entry = guard
-                .tables
-                .entry(chunk.table.clone())
-                .or_insert_with(|| BufferedTable::new(chunk.schema.clone()));
-            entry.ensure_schema(&chunk.schema)?;
-            entry.push_chunk(BufferedChunk::new(chunk.handle, chunk.batches));
-            restored += 1;
-        }
-        Ok(restored)
-    }
-
-    fn persist_chunk(
-        &self,
-        table: String,
-        schema: SchemaRef,
-        batches: Vec<RecordBatch>,
-    ) -> Result<BufferedChunk, ServerError> {
-        let (tx, rx) = mpsc::channel();
-        self.persist_tx
-            .send(PersistJob {
-                table,
-                schema,
-                batches,
-                respond_to: tx,
-            })
-            .map_err(|_| {
-                ServerError::Internal(
-                    "duckling queue persistence worker stopped unexpectedly".to_string(),
-                )
-            })?;
-        rx.recv().map_err(|_| {
-            ServerError::Internal("duckling queue persistence worker response dropped".to_string())
-        })?
-    }
 }
 
-struct PersistJob {
-    table: String,
-    schema: SchemaRef,
-    batches: Vec<RecordBatch>,
-    respond_to: mpsc::Sender<Result<BufferedChunk, ServerError>>,
-}
-
-fn spawn_persist_worker(storage: Arc<DurableStorage>) -> mpsc::Sender<PersistJob> {
-    let (tx, rx) = mpsc::channel::<PersistJob>();
-    thread::Builder::new()
-        .name("dq_persist_worker".to_string())
-        .spawn(move || {
-            while let Ok(job) = rx.recv() {
-                let result = storage
-                    .persist_chunk(&job.table, &job.schema, &job.batches)
-                    .map(|handle| BufferedChunk::new(handle, job.batches));
-                let _ = job.respond_to.send(result);
-            }
-        })
-        .expect("failed to spawn duckling queue persist worker");
-    tx
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow_array::{ArrayRef, Int32Array, RecordBatch};
-    use arrow_schema::{DataType, Field, Schema};
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use tempfile::TempDir;
-
-    fn test_settings(root: PathBuf) -> Settings {
-        Settings {
-            buffer_max_rows: usize::MAX,
-            buffer_max_bytes: u64::MAX,
-            buffer_max_age: Duration::from_secs(60),
-            flush_interval: Duration::from_secs(60),
-            max_parallel_flushes: 1,
-            target_catalog: "swanlake".to_string(),
-            root_dir: root,
-            dlq_target: None,
+impl From<SelectedPayload> for FlushPayload {
+    fn from(value: SelectedPayload) -> Self {
+        Self {
+            table: value.table,
+            schema: value.schema,
+            batches: value.batches,
+            handle: value.handle,
+            rows: value.rows,
+            bytes: value.bytes,
         }
-    }
-
-    fn sample_batch(schema: &Arc<Schema>) -> RecordBatch {
-        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-        RecordBatch::try_new(schema.clone(), vec![values]).expect("valid record batch")
-    }
-
-    #[test]
-    fn restores_chunks_after_restart() {
-        let temp = TempDir::new().expect("tempdir");
-        let settings = test_settings(temp.path().join("dq-root"));
-        let storage = Arc::new(DurableStorage::new(settings.root_dir.clone()).expect("storage"));
-        let tracker = Arc::new(FlushTracker::new());
-        let (flush_tx, _flush_rx) = tokio::sync::mpsc::unbounded_channel();
-        let coordinator = DqCoordinator::new(settings.clone(), storage.clone(), tracker, flush_tx)
-            .expect("coordinator");
-
-        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
-        let batch = sample_batch(&schema);
-        let rows = coordinator
-            .enqueue("dq_restart_test", schema.as_ref().clone(), vec![batch])
-            .expect("enqueue");
-        assert_eq!(rows, 2);
-        drop(coordinator);
-
-        let tracker2 = Arc::new(FlushTracker::new());
-        let (flush_tx2, _flush_rx2) = tokio::sync::mpsc::unbounded_channel();
-        let coordinator2 = DqCoordinator::new(settings, storage, tracker2, flush_tx2)
-            .expect("recreated coordinator");
-
-        let payloads = coordinator2.take_all_payloads_for_test();
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].table, "dq_restart_test");
-        assert_eq!(payloads[0].total_rows(), 2);
     }
 }

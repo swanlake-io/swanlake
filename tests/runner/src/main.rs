@@ -8,7 +8,8 @@ use std::sync::Once;
 
 use anyhow::{anyhow, bail, Context, Result};
 use arrow_array::Array;
-use swanlake_client::{arrow::array_value_to_string, FlightSQLClient};
+use arrow_cast::display::array_value_to_string;
+use swanlake_client::FlightSQLClient;
 use tracing::info;
 
 mod scenarios;
@@ -233,7 +234,7 @@ async fn execute_records(
         let sql = apply_substitutions(&rec.sql, substitutions);
         match &rec.kind {
             RecordKind::Statement { expect_error } => {
-                let result = client.execute_update(&sql);
+                let result = client.update(&sql);
                 if *expect_error {
                     if result.is_ok() {
                         bail!("expected error but statement succeeded: {sql}");
@@ -246,7 +247,7 @@ async fn execute_records(
                 expect_error,
                 expected_rows,
             } => {
-                let result = client.execute(&sql);
+                let result = client.query(&sql);
                 match (result, expect_error) {
                     (Err(_), true) => continue,
                     (Err(err), false) => {
@@ -303,7 +304,7 @@ fn collect_rows(result: &swanlake_client::QueryResult) -> Result<Vec<Vec<String>
 }
 
 fn format_value(array: &dyn Array, idx: usize) -> Result<String> {
-    array_value_to_string(array, idx).map_err(|e| anyhow!(e))
+    array_value_to_string(array, idx).map_err(|e| anyhow!(e.to_string()))
 }
 
 fn init_logging() {

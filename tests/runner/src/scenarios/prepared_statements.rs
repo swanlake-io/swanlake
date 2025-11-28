@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
@@ -10,9 +10,10 @@ use arrow_array::{
 };
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-use swanlake_client::arrow::{value_as_bool, value_as_f64, value_as_i64, value_as_string};
+use arrow_cast::display::array_value_to_string;
 use swanlake_client::{FlightSQLClient, QueryResult};
 
+use crate::scenarios::client_ext::FlightSqlClientExt;
 use crate::CliArgs;
 
 const PREPARED_UPDATE_TABLE: &str = "prepared_update_test";
@@ -141,7 +142,7 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn verify_update_results(&mut self) -> Result<()> {
-        let result = self.client.execute(
+        let result = self.client.query(
             r#"
             SELECT CAST(int8_col AS INTEGER) AS int8_col,
                    int16_col,
@@ -264,9 +265,9 @@ impl<'a> PreparedStatementTester<'a> {
                 "#,
             )?;
 
-            let result = self.client.execute_with_params(
+            let result = self.client.query_with_params(
                 "SELECT score, metadata FROM prepared_select_test WHERE name = ?",
-                vec!["Charlie".to_string()],
+                Some(vec!["Charlie".to_string()]),
             )?;
             self.verify_select_result(result)?;
             Ok(())
@@ -300,7 +301,7 @@ impl<'a> PreparedStatementTester<'a> {
                 batch,
             )?;
 
-            let result = self.client.execute(
+            let result = self.client.query(
                 "SELECT id, name, active FROM swanlake.prepared_alignment_test ORDER BY id",
             )?;
             let batch = result
@@ -377,7 +378,7 @@ impl<'a> PreparedStatementTester<'a> {
 
             self.execute_update("PRAGMA duckling_queue.flush")?;
 
-            let result = self.client.execute(
+            let result = self.client.query(
                 "SELECT id, label, processed FROM swanlake.dq_prepared_sink ORDER BY id",
             )?;
             let batch = result
@@ -414,7 +415,7 @@ impl<'a> PreparedStatementTester<'a> {
             );
             let read_attempt = self
                 .client
-                .execute("SELECT * FROM duckling_queue.dq_prepared_sink");
+                .query("SELECT * FROM duckling_queue.dq_prepared_sink");
             ensure!(
                 read_attempt.is_err(),
                 "duckling queue relations should remain write-only"
@@ -501,7 +502,7 @@ impl<'a> PreparedStatementTester<'a> {
             );
 
             // Verify large batch data (sample check)
-            let sample_result = self.client.execute(
+            let sample_result = self.client.query(
                 "SELECT id, name, value, active FROM swanlake.dq_batch_test WHERE id IN (1, 500, 1000) ORDER BY id",
             )?;
             let sample_batch = sample_result
@@ -546,7 +547,7 @@ impl<'a> PreparedStatementTester<'a> {
             // Flush and verify reordered data
             self.execute_update("PRAGMA duckling_queue.flush")?;
 
-            let reorder_result = self.client.execute(
+            let reorder_result = self.client.query(
                 "SELECT id, name, value, active FROM swanlake.dq_reorder_test ORDER BY id",
             )?;
             let reorder_batch = reorder_result
@@ -596,7 +597,7 @@ impl<'a> PreparedStatementTester<'a> {
             // Test Case 3: Verify read protection still works
             let read_attempt = self
                 .client
-                .execute("SELECT * FROM duckling_queue.dq_batch_test");
+                .query("SELECT * FROM duckling_queue.dq_batch_test");
             ensure!(
                 read_attempt.is_err(),
                 "duckling queue should remain write-only after batch optimization"
@@ -657,7 +658,7 @@ impl<'a> PreparedStatementTester<'a> {
 
             let result = self
                 .client
-                .execute("SELECT id, label FROM swanlake.dq_positional_multi ORDER BY id")?;
+                .query("SELECT id, label FROM swanlake.dq_positional_multi ORDER BY id")?;
             let batch = result
                 .batches
                 .first()
@@ -685,7 +686,7 @@ impl<'a> PreparedStatementTester<'a> {
 
             let read_attempt = self
                 .client
-                .execute("SELECT * FROM duckling_queue.dq_positional_multi");
+                .query("SELECT * FROM duckling_queue.dq_positional_multi");
             ensure!(
                 read_attempt.is_err(),
                 "duckling_queue should stay write-only"
@@ -759,7 +760,7 @@ impl<'a> PreparedStatementTester<'a> {
 
             let result = self
                 .client
-                .execute("SELECT id, name FROM swanlake.dq_multi_batch_sink ORDER BY id")?;
+                .query("SELECT id, name FROM swanlake.dq_multi_batch_sink ORDER BY id")?;
             let batch = result
                 .batches
                 .first()
@@ -793,7 +794,7 @@ impl<'a> PreparedStatementTester<'a> {
 
             let read_attempt = self
                 .client
-                .execute("SELECT * FROM duckling_queue.dq_multi_batch_sink");
+                .query("SELECT * FROM duckling_queue.dq_multi_batch_sink");
             ensure!(
                 read_attempt.is_err(),
                 "duckling_queue should remain write-only"
@@ -835,7 +836,7 @@ impl<'a> PreparedStatementTester<'a> {
 
             let result = self
                 .client
-                .execute("SELECT id, name FROM swanlake.current_catalog_test ORDER BY id")?;
+                .query("SELECT id, name FROM swanlake.current_catalog_test ORDER BY id")?;
             let batch = result
                 .batches
                 .first()
@@ -895,7 +896,7 @@ impl<'a> PreparedStatementTester<'a> {
 
             let result = self
                 .client
-                .execute("SELECT id, name FROM swanlake.default_catalog_test ORDER BY id")?;
+                .query("SELECT id, name FROM swanlake.default_catalog_test ORDER BY id")?;
             let batch = result
                 .batches
                 .first()
@@ -956,7 +957,7 @@ impl<'a> PreparedStatementTester<'a> {
 
             let result = self
                 .client
-                .execute("SELECT id, ts FROM swanlake.dq_expr_sink ORDER BY id")?;
+                .query("SELECT id, ts FROM swanlake.dq_expr_sink ORDER BY id")?;
             let batch = result
                 .batches
                 .first()
@@ -1025,7 +1026,7 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn collect_i64_column(&mut self, sql: &str) -> Result<Vec<i64>> {
-        let result = self.client.execute(sql)?;
+        let result = self.client.query(sql)?;
         let mut values = Vec::new();
         for batch in result.batches {
             let column = batch.column(0);
@@ -1097,13 +1098,13 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn execute_update(&mut self, sql: &str) -> Result<()> {
-        let _ = self.client.execute_update(sql)?;
+        let _ = self.client.update(sql)?;
         Ok(())
     }
 
     fn drop_table_if_exists(&mut self, table: &str) -> Result<()> {
         let drop_sql = format!("DROP TABLE IF EXISTS {table}");
-        let _ = self.client.execute_update(&drop_sql)?;
+        let _ = self.client.update(&drop_sql)?;
         Ok(())
     }
 
@@ -1114,6 +1115,32 @@ impl<'a> PreparedStatementTester<'a> {
             (Err(err), _) => Err(err),
             (Ok(()), Err(drop_err)) => Err(drop_err),
         }
+    }
+}
+
+fn value_as_string(array: &dyn Array, idx: usize) -> Result<String> {
+    array_value_to_string(array, idx)
+        .with_context(|| format!("failed to format value at index {idx}"))
+}
+
+fn value_as_i64(array: &dyn Array, idx: usize) -> Result<i64> {
+    let text = value_as_string(array, idx)?;
+    text.parse::<i64>()
+        .with_context(|| format!("failed to parse '{text}' as i64"))
+}
+
+fn value_as_f64(array: &dyn Array, idx: usize) -> Result<f64> {
+    let text = value_as_string(array, idx)?;
+    text.parse::<f64>()
+        .with_context(|| format!("failed to parse '{text}' as f64"))
+}
+
+fn value_as_bool(array: &dyn Array, idx: usize) -> Result<bool> {
+    let text = value_as_string(array, idx)?;
+    match text.to_ascii_lowercase().as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(anyhow!("failed to parse '{other}' as bool")),
     }
 }
 

@@ -16,6 +16,10 @@ pub struct Settings {
     pub flush_interval: Duration,
     /// Maximum number of concurrent flush tasks.
     pub max_parallel_flushes: usize,
+    /// Maximum rows per flush slice when reading from the buffer.
+    pub flush_chunk_rows: usize,
+    /// Soft cap for buffer.duckdb size in bytes (0 = unlimited).
+    pub max_db_bytes: u64,
     /// Target catalog in DuckLake that receives flushed data.
     pub target_catalog: String,
     /// Root directory for persisted buffered chunks.
@@ -32,6 +36,8 @@ impl Settings {
             buffer_max_age: Duration::from_secs(config.duckling_queue_rotate_interval_seconds),
             flush_interval: Duration::from_secs(config.duckling_queue_flush_interval_seconds),
             max_parallel_flushes: config.duckling_queue_max_parallel_flushes.max(1),
+            flush_chunk_rows: config.duckling_queue_flush_chunk_rows.max(1),
+            max_db_bytes: config.duckling_queue_max_db_bytes,
             target_catalog: config.duckling_queue_target_catalog.clone(),
             root_dir: PathBuf::from(&config.duckling_queue_root),
             dlq_target: config.duckling_queue_dlq_target.clone(),

@@ -29,11 +29,11 @@ pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
     );
 
     let mut conn = FlightSQLClient::connect(&args.endpoint)?;
-    conn.execute_update(&attach_sql)?;
-    conn.execute_update("DROP TABLE IF EXISTS swanlake.dq_recovery_target;")?;
+    conn.update(&attach_sql)?;
+    conn.update("DROP TABLE IF EXISTS swanlake.dq_recovery_target;")?;
 
     // Write buffered data but do not flush; we want to read the persisted chunk itself.
-    conn.execute_update(
+    conn.update(
         "INSERT INTO duckling_queue.dq_recovery_target \
          SELECT CAST(1 AS BIGINT) AS id, CAST('alpha' AS VARCHAR) AS label \
          UNION ALL SELECT CAST(2 AS BIGINT), CAST('beta' AS VARCHAR);",
@@ -47,7 +47,7 @@ pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
         "SELECT id, label FROM '{}' ORDER BY id",
         chunk.to_string_lossy()
     );
-    let result = conn.execute_query(&query)?;
+    let result = conn.query(&query)?;
     let mut values = Vec::new();
     for batch in result.batches {
         let id_col = batch

@@ -1,6 +1,7 @@
 use crate::CliArgs;
 use anyhow::Result;
 
+mod client_ext;
 pub mod appender_insert;
 pub mod duckling_queue_dlq;
 pub mod duckling_queue_persistence;

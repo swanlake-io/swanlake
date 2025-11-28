@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS place (
 )"#;
 
 fn execute_statement(client: &mut FlightSQLClient, sql: &str) -> Result<()> {
-    client.execute_update(sql)?;
+    client.update(sql)?;
     Ok(())
 }
 
@@ -236,7 +236,7 @@ fn select_people(
     let result = if params.is_empty() {
         client.execute(sql)?
     } else {
-        client.execute_with_params(sql, params)?
+        client.query_with_params(sql, Some(params))?
     };
     let mut people = Vec::new();
     for batch in &result.batches {

@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::arrow::{value_as_bool, value_as_f64, value_as_i64, value_as_string};
 use adbc_core::{
-    options::{AdbcVersion, OptionDatabase, OptionValue},
-    Connection, Database, Driver, Statement,
+    options::{AdbcVersion, OptionConnection, OptionDatabase, OptionValue},
+    Connection, Database, Driver, Optionable, Statement,
 };
 use adbc_driver_flightsql::DRIVER_PATH;
 use adbc_driver_manager::{ManagedConnection, ManagedDriver};
@@ -174,60 +173,44 @@ impl FlightSQLClient {
     }
 
     /// Execute a query and return results. Use when you expect rows.
-    pub fn execute_query(&mut self, sql: &str) -> Result<QueryResult> {
-        let mut stmt = self.conn.new_statement()?;
-        stmt.set_sql_query(sql)?;
-
-        let reader = stmt.execute()?;
-        let mut batches = Vec::new();
-        for batch in reader {
-            batches.push(batch?);
-        }
-        Ok(QueryResult::new(batches))
+    pub fn query(&mut self, sql: &str) -> Result<QueryResult> {
+        self.query_with_params(sql, None)
     }
 
-    /// Convenience wrapper that always calls `execute_query`. The server
-    /// accepts commands via ExecuteQuery, so callers that are unsure can use
-    /// this method.
+    /// Convenience wrapper that always calls `query`.
+    /// The server accepts commands via ExecuteQuery; updates are routed server-side.
     pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
-        self.execute_query(sql)
+        self.query(sql)
     }
 
     /// Execute an update/DDL statement (INSERT, UPDATE, DELETE, CREATE, etc.).
-    pub fn execute_update(&mut self, sql: &str) -> Result<UpdateResult> {
-        let mut stmt = self.conn.new_statement()?;
-        stmt.set_sql_query(sql)?;
-        let rows_affected = stmt.execute_update()?;
-        Ok(UpdateResult { rows_affected })
+    pub fn update(&mut self, sql: &str) -> Result<UpdateResult> {
+        self.update_with_params(sql, None)
     }
 
-    /// Execute a query with string parameters using prepared statements.
+    /// Execute a query with optional string parameters using prepared statements.
     ///
-    /// Binds the parameters as a single column of strings.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let params = vec!["value1".to_string(), "value2".to_string()];
-    /// let result = client.execute_with_params("SELECT * FROM table WHERE col = ?", params)?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn execute_with_params(&mut self, sql: &str, params: Vec<String>) -> Result<QueryResult> {
+    /// Binds the parameters as a single column of strings when provided.
+    pub fn query_with_params(
+        &mut self,
+        sql: &str,
+        params: Option<Vec<String>>,
+    ) -> Result<QueryResult> {
         let mut stmt = self.conn.new_statement()?;
         stmt.set_sql_query(sql)?;
         stmt.prepare()?;
 
-        if !params.is_empty() {
-            let schema = Arc::new(Schema::new(vec![Field::new(
-                "param",
-                DataType::Utf8,
-                false,
-            )]));
-            let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(params))])?;
-            stmt.bind(batch)?;
+        if let Some(params) = params {
+            if !params.is_empty() {
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "param",
+                    DataType::Utf8,
+                    false,
+                )]));
+                let batch =
+                    RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(params))])?;
+                stmt.bind(batch)?;
+            }
         }
 
         let reader = stmt.execute()?;
@@ -237,6 +220,33 @@ impl FlightSQLClient {
         }
 
         Ok(QueryResult::new(batches))
+    }
+
+    /// Execute an update with optional parameters.
+    pub fn update_with_params(
+        &mut self,
+        sql: &str,
+        params: Option<Vec<String>>,
+    ) -> Result<UpdateResult> {
+        let mut stmt = self.conn.new_statement()?;
+        stmt.set_sql_query(sql)?;
+        stmt.prepare()?;
+
+        if let Some(params) = params {
+            if !params.is_empty() {
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "param",
+                    DataType::Utf8,
+                    false,
+                )]));
+                let batch =
+                    RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(params))])?;
+                stmt.bind(batch)?;
+            }
+        }
+
+        let rows_affected = stmt.execute_update()?;
+        Ok(UpdateResult { rows_affected })
     }
 
     /// Execute an update with a record batch for batch inserts.
@@ -273,108 +283,34 @@ impl FlightSQLClient {
         &mut self.conn
     }
 
-    /// Execute a query that returns a single i64 value.
-    ///
-    /// Useful for COUNT(*) or similar scalar queries.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let count = client.query_scalar_i64("SELECT COUNT(*) FROM users")?;
-    /// println!("User count: {}", count);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn query_scalar_i64(&mut self, sql: &str) -> Result<i64> {
-        let batches = self.execute_query(sql)?.batches;
-        let batch = batches
-            .first()
-            .ok_or_else(|| anyhow!("query returned no rows"))?;
-        if batch.num_rows() == 0 || batch.num_columns() == 0 {
-            return Err(anyhow!("query returned empty result"));
-        }
-        let column = batch.column(0);
-        value_as_i64(column.as_ref(), 0)
+    /// Begin a transaction by disabling autocommit.
+    pub fn begin_transaction(&mut self) -> Result<()> {
+        self.conn
+            .set_option(OptionConnection::AutoCommit, OptionValue::from("false"))
+            .with_context(|| "failed to disable autocommit")?;
+        Ok(())
     }
 
-    /// Execute a query that returns a single f64 value.
-    ///
-    /// Useful for scalar float queries.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let value = client.query_scalar_f64("SELECT AVG(price) FROM products")?;
-    /// println!("Average price: {}", value);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn query_scalar_f64(&mut self, sql: &str) -> Result<f64> {
-        let batches = self.execute_query(sql)?.batches;
-        let batch = batches
-            .first()
-            .ok_or_else(|| anyhow!("query returned no rows"))?;
-        if batch.num_rows() == 0 || batch.num_columns() == 0 {
-            return Err(anyhow!("query returned empty result"));
-        }
-        let column = batch.column(0);
-        value_as_f64(column.as_ref(), 0)
+    /// Commit the current transaction and re-enable autocommit.
+    pub fn commit(&mut self) -> Result<()> {
+        self.conn
+            .commit()
+            .with_context(|| "failed to commit transaction")?;
+        self.conn
+            .set_option(OptionConnection::AutoCommit, OptionValue::from("true"))
+            .with_context(|| "failed to re-enable autocommit after commit")?;
+        Ok(())
     }
 
-    /// Execute a query that returns a single bool value.
-    ///
-    /// Useful for scalar boolean queries.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let exists = client.query_scalar_bool("SELECT EXISTS(SELECT 1 FROM users WHERE id = 1)")?;
-    /// println!("User exists: {}", exists);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn query_scalar_bool(&mut self, sql: &str) -> Result<bool> {
-        let batches = self.execute_query(sql)?.batches;
-        let batch = batches
-            .first()
-            .ok_or_else(|| anyhow!("query returned no rows"))?;
-        if batch.num_rows() == 0 || batch.num_columns() == 0 {
-            return Err(anyhow!("query returned empty result"));
-        }
-        let column = batch.column(0);
-        value_as_bool(column.as_ref(), 0)
-    }
-
-    /// Execute a query that returns a single string value.
-    ///
-    /// Useful for scalar string queries.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let name = client.query_scalar_string("SELECT name FROM users WHERE id = 1")?;
-    /// println!("User name: {}", name);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn query_scalar_string(&mut self, sql: &str) -> Result<String> {
-        let batches = self.execute_query(sql)?.batches;
-        let batch = batches
-            .first()
-            .ok_or_else(|| anyhow!("query returned no rows"))?;
-        if batch.num_rows() == 0 || batch.num_columns() == 0 {
-            return Err(anyhow!("query returned empty result"));
-        }
-        let column = batch.column(0);
-        value_as_string(column.as_ref(), 0)
+    /// Roll back the current transaction and re-enable autocommit.
+    pub fn rollback(&mut self) -> Result<()> {
+        self.conn
+            .rollback()
+            .with_context(|| "failed to roll back transaction")?;
+        self.conn
+            .set_option(OptionConnection::AutoCommit, OptionValue::from("true"))
+            .with_context(|| "failed to re-enable autocommit after rollback")?;
+        Ok(())
     }
 }
 

@@ -18,7 +18,7 @@ anyhow = "1.0"
 arrow-array = "57"
 arrow-flight = { version = "57", features = ["flight-sql"] }
 arrow-ipc = { version = "57" }
-arrow-schema = "57"
+arrow-schema = { version = "57", features = ["serde"] }
 arrow-cast = "57"
 arrow-select = "57"
 duckdb = { git = "https://github.com/swanlake-io/duckdb-rs", rev = "017cf3c", default-features = false, features = ["appender-arrow"] }

@@ -1,16 +1,12 @@
 //! SwanLake CLI - Interactive SQL client for SwanLake Flight SQL servers
 
 use anyhow::{Context, Result};
-use arrow_array::{Array, RecordBatch};
+use arrow_array::RecordBatch;
+use arrow_cast::pretty::pretty_format_batches;
 use clap::Parser;
-use comfy_table::{
-    modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, CellAlignment, Color,
-    ContentArrangement, Table,
-};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::time::Instant;
-use swanlake_client::arrow::array_value_to_string;
 use swanlake_client::FlightSQLClient;
 
 /// SwanLake CLI - Interactive SQL client
@@ -147,7 +143,7 @@ fn execute_and_display(client: &mut FlightSQLClient, query: &str) -> Result<()> 
     let is_query = is_query_statement(query);
 
     if is_query {
-        let result = client.execute(query)?;
+        let result = client.query(query)?;
         let elapsed = start.elapsed();
 
         if result.is_empty() {
@@ -163,7 +159,7 @@ fn execute_and_display(client: &mut FlightSQLClient, query: &str) -> Result<()> 
             elapsed.as_secs_f64()
         );
     } else {
-        let result = client.execute_update(query)?;
+        let result = client.update(query)?;
         let elapsed = start.elapsed();
 
         if let Some(rows) = result.rows_affected {
@@ -208,43 +204,7 @@ fn display_results(batches: &[RecordBatch]) -> Result<()> {
         return Ok(());
     }
 
-    let schema = batches[0].schema();
-    let mut table = Table::new();
-
-    // Configure table appearance
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_content_arrangement(ContentArrangement::Dynamic);
-
-    // Add header row
-    let mut header_cells = Vec::new();
-    for field in schema.fields() {
-        header_cells.push(
-            Cell::new(field.name())
-                .fg(Color::Cyan)
-                .set_alignment(CellAlignment::Center),
-        );
-    }
-    table.set_header(header_cells);
-
-    // Add data rows
-    for batch in batches {
-        for row_idx in 0..batch.num_rows() {
-            let mut row_cells = Vec::new();
-            for col_idx in 0..batch.num_columns() {
-                let column = batch.column(col_idx);
-                let value = format_cell_value(column.as_ref(), row_idx)?;
-                row_cells.push(Cell::new(value));
-            }
-            table.add_row(row_cells);
-        }
-    }
-
-    println!("{}", table);
+    let formatted = pretty_format_batches(batches)?;
+    println!("{}", formatted);
     Ok(())
-}
-
-fn format_cell_value(column: &dyn Array, row_idx: usize) -> Result<String> {
-    array_value_to_string(column, row_idx)
 }

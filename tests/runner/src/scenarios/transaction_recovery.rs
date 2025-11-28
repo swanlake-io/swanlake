@@ -23,7 +23,7 @@ pub async fn run_transaction_recovery(args: &CliArgs) -> Result<()> {
 
     let mut client = FlightSQLClient::connect(&args.endpoint)
         .context("failed to connect to FlightSQL server")?;
-    client.execute_update("use swanlake")?;
+    client.update("use swanlake")?;
 
     test_auto_rollback_after_abort(&mut client, "tx_recovery")?;
     test_auto_rollback_after_abort(&mut client, "swanlake.tx_recovery_catalog")?;
@@ -35,16 +35,16 @@ pub async fn run_transaction_recovery(args: &CliArgs) -> Result<()> {
 }
 
 fn test_auto_rollback_after_abort(client: &mut FlightSQLClient, table: &str) -> Result<()> {
-    client.execute_update(&format!("DROP TABLE IF EXISTS {table}"))?;
+    client.update(&format!("DROP TABLE IF EXISTS {table}"))?;
     let result = (|| -> Result<()> {
-        client.execute_update(&format!("CREATE TABLE {table} (id INT)"))?;
+        client.update(&format!("CREATE TABLE {table} (id INT)"))?;
 
-        client.execute_update("BEGIN")?;
-        client.execute_update(&format!("INSERT INTO {table} VALUES (1)"))?;
+        client.update("BEGIN")?;
+        client.update(&format!("INSERT INTO {table} VALUES (1)"))?;
 
         // Cause an error inside the transaction so the context is marked aborted.
         let type_err = client
-            .execute_update(&format!("INSERT INTO {table} VALUES ('oops')"))
+            .update(&format!("INSERT INTO {table} VALUES ('oops')"))
             .expect_err("expected type error inside transaction");
         let err_text = type_err.to_string().to_lowercase();
         ensure!(
@@ -56,10 +56,10 @@ fn test_auto_rollback_after_abort(client: &mut FlightSQLClient, table: &str) -> 
 
         // Next statement will detect the aborted transaction, auto-rollback, and retry.
         // The retry succeeds in autocommit mode (outside the transaction).
-        client.execute_update(&format!("INSERT INTO {table} VALUES (2)"))?;
+        client.update(&format!("INSERT INTO {table} VALUES (2)"))?;
 
         // After the auto-rollback and retry, fresh statements should continue to work.
-        client.execute_update(&format!("INSERT INTO {table} VALUES (3)"))?;
+        client.update(&format!("INSERT INTO {table} VALUES (3)"))?;
 
         let ids = fetch_ids(client, &format!("SELECT id FROM {table} ORDER BY id"))?;
         ensure!(
@@ -69,7 +69,7 @@ fn test_auto_rollback_after_abort(client: &mut FlightSQLClient, table: &str) -> 
         Ok(())
     })();
 
-    client.execute_update(&format!("DROP TABLE IF EXISTS {table}"))?;
+    client.update(&format!("DROP TABLE IF EXISTS {table}"))?;
     result
 }
 
@@ -78,14 +78,14 @@ fn test_auto_retry_after_schema_error(client: &mut FlightSQLClient) -> Result<()
     // 1. A query with an error (e.g., missing file) puts DuckDB in aborted transaction state
     // 2. The next query should auto-retry after rollback and succeed
 
-    client.execute_update("DROP TABLE IF EXISTS auto_retry_test")?;
-    client.execute_update("CREATE TABLE auto_retry_test (id INT, name VARCHAR)")?;
-    client.execute_update("INSERT INTO auto_retry_test VALUES (1, 'test')")?;
+    client.update("DROP TABLE IF EXISTS auto_retry_test")?;
+    client.update("CREATE TABLE auto_retry_test (id INT, name VARCHAR)")?;
+    client.update("INSERT INTO auto_retry_test VALUES (1, 'test')")?;
 
     // First, cause an error that puts the transaction in aborted state.
     // We'll try to query a non-existent table.
     let err = client
-        .execute("SELECT * FROM non_existent_table_xyz LIMIT 10")
+        .query("SELECT * FROM non_existent_table_xyz LIMIT 10")
         .expect_err("expected error for non-existent table");
     let err_text = err.to_string().to_lowercase();
     ensure!(
@@ -97,20 +97,20 @@ fn test_auto_retry_after_schema_error(client: &mut FlightSQLClient) -> Result<()
 
     // Now execute a valid query. This should trigger auto-retry after detecting
     // the aborted transaction state, roll back, and succeed on the retry.
-    let result = client.execute("SHOW TABLES")?;
+    let result = client.query("SHOW TABLES")?;
     ensure!(
         result.total_rows > 0,
         "expected SHOW TABLES to succeed after auto-retry"
     );
 
     // Verify we can still query the table that exists
-    let result = client.execute("SELECT COUNT(*) FROM auto_retry_test")?;
+    let result = client.query("SELECT COUNT(*) FROM auto_retry_test")?;
     ensure!(
         result.total_rows == 1,
         "expected to query existing table after recovery"
     );
 
-    client.execute_update("DROP TABLE IF EXISTS auto_retry_test")?;
+    client.update("DROP TABLE IF EXISTS auto_retry_test")?;
     info!("Auto-retry after schema error test passed");
     Ok(())
 }
@@ -119,14 +119,14 @@ fn test_new_session_after_abort(args: &CliArgs) -> Result<()> {
     // Ensure a fresh connection works even after a previous session experienced an abort.
     let mut client = FlightSQLClient::connect(&args.endpoint)
         .context("failed to connect to FlightSQL server for new session test")?;
-    client.execute_update("use swanlake")?;
-    let QueryResult { total_rows, .. } = client.execute("SELECT 1")?;
+    client.update("use swanlake")?;
+    let QueryResult { total_rows, .. } = client.query("SELECT 1")?;
     ensure!(total_rows == 1, "expected SELECT 1 to return a single row");
     Ok(())
 }
 
 fn fetch_ids(client: &mut FlightSQLClient, sql: &str) -> Result<Vec<i32>> {
-    let QueryResult { batches, .. } = client.execute(sql)?;
+    let QueryResult { batches, .. } = client.query(sql)?;
     let batch = batches
         .first()
         .context("expected at least one batch for id fetch")?;

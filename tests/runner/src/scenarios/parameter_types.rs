@@ -11,16 +11,17 @@ use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
+use crate::scenarios::client_ext::FlightSqlClientExt;
 use crate::CliArgs;
 use swanlake_client::FlightSQLClient;
 
 pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     let endpoint = &args.endpoint;
     let mut client = FlightSQLClient::connect(endpoint)?;
-    client.execute_update("use swanlake")?;
+    client.update("use swanlake")?;
 
     // Create test table with various supported types
-    client.execute_update(
+    client.update(
         r#"
         CREATE TABLE IF NOT EXISTS parameter_types_test (
             id INTEGER,
@@ -42,7 +43,7 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     )?;
 
     // Clear table
-    client.execute_update("DELETE FROM parameter_types_test")?;
+    client.update("DELETE FROM parameter_types_test")?;
 
     // Insert row via prepared statement to exercise Arrow->DuckDB conversions
     let params = build_parameter_batch()?;
@@ -91,7 +92,7 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     }
 
     // Clean up
-    client.execute_update("DROP TABLE parameter_types_test")?;
+    client.update("DROP TABLE parameter_types_test")?;
 
     Ok(())
 }
