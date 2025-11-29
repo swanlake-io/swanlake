@@ -47,11 +47,11 @@ DETACH dqbuf;
 
 # make remote schema incompatible
 statement ok
-ALTER TABLE swanlake.dq_schema_mismatch ADD COLUMN name TEXT;
+ALTER TABLE swanlake.dq_schema_mismatch ADD COLUMN id2 INTEGER;
 
 # enqueue with stale schema should be rejected and buffered row should remain
 statement error
-INSERT INTO duckling_queue.dq_schema_mismatch VALUES (2, 3);
+INSERT INTO duckling_queue.dq_schema_mismatch VALUES (2, "a-string-id");
 
 statement ok
 ATTACH '__TEST_DIR__/duckling_queue/buffer.duckdb' AS dqbuf (READ_ONLY);

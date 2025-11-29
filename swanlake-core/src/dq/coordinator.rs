@@ -198,8 +198,32 @@ impl DqCoordinator {
         let table_key = table.to_string();
 
         // Buffer handles all schema validation and table setup
-        let (inserted_rows, inserted_bytes) =
-            self.buffer.enqueue(&table_key, &schema_ref, &batches)?;
+        let (inserted_rows, inserted_bytes) = match self.buffer.enqueue(
+            &table_key,
+            &schema_ref,
+            &batches,
+        ) {
+            Ok(res) => res,
+            Err(err) if is_schema_mismatch(&err) => {
+                warn!(
+                    table = %table_key,
+                    error = %err,
+                    "duckling queue schema mismatch detected; flushing buffered rows and retrying"
+                );
+                self.flush_table_blocking(&table_key)?;
+                // Refresh staging schema from target catalog before retrying
+                self.buffer.replace_table_schema(&table_key, &schema_ref)?;
+                let retry = self.buffer.enqueue(&table_key, &schema_ref, &batches)?;
+                info!(
+                    table = %table_key,
+                    rows = retry.0,
+                    bytes = retry.1,
+                    "duckling queue schema refreshed and enqueue retry succeeded"
+                );
+                retry
+            }
+            Err(err) => return Err(err),
+        };
 
         let mut should_dispatch = false;
         {
@@ -405,6 +429,37 @@ impl DqCoordinator {
             debug!("duckling queue flush tasks finished");
         }
     }
+
+    /// Flush a single table synchronously (blocking until idle) to clear buffered rows.
+    fn flush_table_blocking(&self, table: &str) -> Result<(), ServerError> {
+        // Avoid infinite loops by tracking progress; give a few attempts to drain chunks.
+        let mut last_rows: Option<usize> = None;
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            self.try_dispatch_table(table.to_string());
+            self.wait_for_idle();
+
+            let remaining_rows = match self.buffer.table_info(table) {
+                Ok(Some((_, rows))) => rows,
+                Ok(None) => 0,
+                Err(err) => return Err(err),
+            };
+
+            if remaining_rows == 0 {
+                debug!(table = %table, "flush_table_blocking: buffer drained");
+                return Ok(());
+            }
+
+            if last_rows == Some(remaining_rows) || attempts >= 5 {
+                return Err(ServerError::Internal(format!(
+                    "duckling queue schema refresh could not flush buffered rows for {table}"
+                )));
+            }
+
+            last_rows = Some(remaining_rows);
+        }
+    }
 }
 
 impl From<SelectedPayload> for FlushPayload {
@@ -417,5 +472,18 @@ impl From<SelectedPayload> for FlushPayload {
             rows: value.rows,
             bytes: value.bytes,
         }
+    }
+}
+
+fn is_schema_mismatch(err: &ServerError) -> bool {
+    match err {
+        ServerError::Internal(msg) => msg.to_ascii_lowercase().contains("schema mismatch"),
+        ServerError::DuckDb(db) => {
+            let msg = db.to_string().to_ascii_lowercase();
+            msg.contains("schema mismatch")
+                || msg.contains("appenddatachunk")
+                || msg.contains("column count")
+        }
+        _ => false,
     }
 }
