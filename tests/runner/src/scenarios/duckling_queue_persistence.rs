@@ -27,9 +27,7 @@ pub async fn run_duckling_queue_persistence(args: &CliArgs) -> Result<()> {
     conn.update("DROP TABLE IF EXISTS swanlake.dq_persist_target;")?;
 
     conn.update("CREATE TABLE swanlake.dq_persist_target (i INTEGER);")?;
-    conn.update(
-        "INSERT INTO duckling_queue.dq_persist_target SELECT 1 AS id UNION ALL SELECT 2;",
-    )?;
+    conn.update("INSERT INTO duckling_queue.dq_persist_target SELECT 1 AS id UNION ALL SELECT 2;")?;
 
     wait_for_parquet_chunks(&root, |count| count >= 1).await?;
 

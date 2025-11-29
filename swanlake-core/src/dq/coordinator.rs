@@ -35,12 +35,20 @@ impl FlushTracker {
     pub fn track(&self) {
         let mut guard = self.pending.lock().expect("flush tracker mutex poisoned");
         *guard += 1;
+        debug!(
+            pending = *guard,
+            "duckling queue tracker: tracked new flush task"
+        );
     }
 
     pub fn complete(&self) {
         let mut guard = self.pending.lock().expect("flush tracker mutex poisoned");
         if *guard > 0 {
             *guard -= 1;
+            debug!(
+                pending = *guard,
+                "duckling queue tracker: flush task completed"
+            );
             if *guard == 0 {
                 self.signal.notify_all();
             }
@@ -216,6 +224,14 @@ impl DqCoordinator {
                 .or_insert_with(|| BufferedTable::new(schema_ref.clone(), 0));
             entry.ensure_schema(&schema_ref)?;
             entry.record_enqueue(inserted_rows, inserted_bytes);
+            debug!(
+                table = %table_key,
+                total_rows = entry.total_rows,
+                total_bytes = entry.total_bytes,
+                inserted_rows,
+                inserted_bytes,
+                "duckling queue buffered rows"
+            );
             if entry.should_flush(
                 self.settings.buffer_max_rows,
                 self.settings.buffer_max_bytes,
@@ -284,6 +300,7 @@ impl DqCoordinator {
             );
         }
         for table in tables {
+            debug!(table = %table, "force flush: dispatching table");
             self.try_dispatch_table(table);
         }
         self.wait_for_idle();
@@ -404,7 +421,10 @@ impl DqCoordinator {
     fn try_dispatch_table(&self, table: String) {
         let selection = match self.buffer.select_for_flush(&table) {
             Ok(Some(payload)) => payload,
-            Ok(None) => return,
+            Ok(None) => {
+                debug!(table = %table, "dispatch skipped: no buffered rows");
+                return;
+            }
             Err(err) => {
                 warn!(error = %err, table = %table, "failed to select duckling queue payload");
                 return;
@@ -413,14 +433,22 @@ impl DqCoordinator {
 
         let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
         let Some(table_state) = guard.tables.get_mut(&table) else {
+            warn!(table = %table, "dispatch skipped: table state missing");
             return;
         };
         if table_state.inflight {
+            debug!(table = %table, "dispatch skipped: table already inflight");
             return;
         }
         table_state.mark_inflight();
         drop(guard);
 
+        debug!(
+            table = %table,
+            rows = selection.rows,
+            bytes = selection.bytes,
+            "dispatching duckling queue payload"
+        );
         self.dispatch_payload(selection.into());
     }
 
@@ -448,7 +476,20 @@ impl DqCoordinator {
     }
 
     pub fn wait_for_idle(&self) {
+        let pending = {
+            *self
+                .tracker
+                .pending
+                .lock()
+                .expect("flush tracker mutex poisoned")
+        };
+        if pending > 0 {
+            debug!(pending, "duckling queue waiting for flush tasks to finish");
+        }
         self.tracker.wait_for_idle();
+        if pending > 0 {
+            debug!("duckling queue flush tasks finished");
+        }
     }
 }
 

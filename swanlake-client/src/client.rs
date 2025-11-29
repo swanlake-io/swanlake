@@ -198,19 +198,18 @@ impl FlightSQLClient {
     ) -> Result<QueryResult> {
         let mut stmt = self.conn.new_statement()?;
         stmt.set_sql_query(sql)?;
-        stmt.prepare()?;
+        let has_params = params.as_ref().is_some_and(|p| !p.is_empty());
 
-        if let Some(params) = params {
-            if !params.is_empty() {
-                let schema = Arc::new(Schema::new(vec![Field::new(
-                    "param",
-                    DataType::Utf8,
-                    false,
-                )]));
-                let batch =
-                    RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(params))])?;
-                stmt.bind(batch)?;
-            }
+        if has_params {
+            stmt.prepare()?;
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "param",
+                DataType::Utf8,
+                false,
+            )]));
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(params.unwrap()))])?;
+            stmt.bind(batch)?;
         }
 
         let reader = stmt.execute()?;
@@ -230,19 +229,18 @@ impl FlightSQLClient {
     ) -> Result<UpdateResult> {
         let mut stmt = self.conn.new_statement()?;
         stmt.set_sql_query(sql)?;
-        stmt.prepare()?;
+        let has_params = params.as_ref().is_some_and(|p| !p.is_empty());
 
-        if let Some(params) = params {
-            if !params.is_empty() {
-                let schema = Arc::new(Schema::new(vec![Field::new(
-                    "param",
-                    DataType::Utf8,
-                    false,
-                )]));
-                let batch =
-                    RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(params))])?;
-                stmt.bind(batch)?;
-            }
+        if has_params {
+            stmt.prepare()?;
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "param",
+                DataType::Utf8,
+                false,
+            )]));
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(params.unwrap()))])?;
+            stmt.bind(batch)?;
         }
 
         let rows_affected = stmt.execute_update()?;

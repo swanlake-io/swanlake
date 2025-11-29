@@ -9,8 +9,8 @@ use arrow_array::{
     UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow_cast::display::array_value_to_string;
+use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use swanlake_client::{FlightSQLClient, QueryResult};
 
 use crate::scenarios::client_ext::FlightSqlClientExt;
@@ -378,9 +378,9 @@ impl<'a> PreparedStatementTester<'a> {
 
             self.execute_update("PRAGMA duckling_queue.flush")?;
 
-            let result = self.client.query(
-                "SELECT id, label, processed FROM swanlake.dq_prepared_sink ORDER BY id",
-            )?;
+            let result = self
+                .client
+                .query("SELECT id, label, processed FROM swanlake.dq_prepared_sink ORDER BY id")?;
             let batch = result
                 .batches
                 .first()

@@ -74,6 +74,12 @@ fn spawn_flush_workers(
     let semaphore = Arc::new(Semaphore::new(settings.max_parallel_flushes));
     tokio::spawn(async move {
         while let Some(payload) = rx.recv().await {
+            debug!(
+                table = %payload.table,
+                rows = payload.rows,
+                bytes = payload.bytes,
+                "duckling queue flush worker received payload"
+            );
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let factory_for_flush = factory.clone();
             let factory_for_dlq = factory.clone();
@@ -85,6 +91,12 @@ fn spawn_flush_workers(
             let payload_for_dlq = payload.clone();
             let table_name = payload.table.clone();
             tokio::spawn(async move {
+                debug!(
+                    table = %payload.table,
+                    rows = payload.rows,
+                    bytes = payload.bytes,
+                    "duckling queue flush worker started"
+                );
                 let res = tokio::task::spawn_blocking(move || {
                     flush_payload(
                         factory_for_flush,
@@ -162,12 +174,31 @@ fn flush_payload(
     let conn = factory.lock().unwrap().create_connection()?;
     let qualified_table = format!("{}.{}", settings.target_catalog, table);
     let table_schema = Arc::new(conn.table_schema(&qualified_table)?);
+    debug!(
+        table = %table,
+        qualified = %qualified_table,
+        rows = rows,
+        bytes = bytes,
+        "flush_payload: fetched table schema"
+    );
     let aligned_batches = batches
         .iter()
         .map(|batch| align_batch_to_table_schema(batch, &table_schema, None))
         .collect::<Result<Vec<_>, ServerError>>()?;
+    debug!(
+        table = %table,
+        batches = aligned_batches.len(),
+        "flush_payload: aligned batches"
+    );
     conn.insert_with_appender(&settings.target_catalog, &table, aligned_batches)?;
+    debug!(table = %table, rows = rows, "flush_payload: inserted into target");
     coordinator.ack(&table, &handle, rows, bytes)?;
+    info!(
+        table = %table,
+        rows = rows,
+        bytes = bytes,
+        "duckling queue payload flushed and acked"
+    );
     Ok(())
 }
 
