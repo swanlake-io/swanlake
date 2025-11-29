@@ -20,10 +20,11 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     let mut client = FlightSQLClient::connect(endpoint)?;
     client.update("use swanlake")?;
 
-    // Create test table with various supported types
+    // Drop and recreate test table to avoid dirty ducklake metadata
+    client.update("DROP TABLE IF EXISTS parameter_types_test")?;
     client.update(
         r#"
-        CREATE TABLE IF NOT EXISTS parameter_types_test (
+        CREATE TABLE parameter_types_test (
             id INTEGER,
             date32_col DATE,
             date64_col DATE,
@@ -42,9 +43,6 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
         "#,
     )?;
 
-    // Clear table
-    client.update("DELETE FROM parameter_types_test")?;
-
     // Insert row via prepared statement to exercise Arrow->DuckDB conversions
     let params = build_parameter_batch()?;
     client.execute_batch_update(
@@ -59,7 +57,7 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     }
 
     // Query back and verify values (basic check for non-null)
-    let id = client.query_scalar_i64("SELECT id FROM parameter_types_test")?;
+    let id = client.query_scalar_i64("SELECT CAST(id AS BIGINT) FROM parameter_types_test")?;
     if id != 1 {
         return Err(anyhow!("Expected id 1, got {}", id));
     }

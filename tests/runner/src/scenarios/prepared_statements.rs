@@ -266,7 +266,7 @@ impl<'a> PreparedStatementTester<'a> {
             )?;
 
             let result = self.client.query_with_params(
-                "SELECT score, metadata FROM prepared_select_test WHERE name = ?",
+                "SELECT score, metadata::VARCHAR FROM prepared_select_test WHERE name = ?",
                 Some(vec!["Charlie".to_string()]),
             )?;
             self.verify_select_result(result)?;

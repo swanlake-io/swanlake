@@ -7,6 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use arrow_array::{Array, Int64Array, StringArray};
 use swanlake_client::FlightSQLClient;
 use tokio::time::sleep;
+use tracing::info;
 
 pub fn reset_dir(dir: &Path) -> Result<()> {
     if dir.exists() {
@@ -39,7 +40,8 @@ where
                 "timed out waiting for duckling queue staging rows (last count: {count})"
             ));
         }
-        sleep(Duration::from_millis(50)).await;
+        info!(table=%table, buffer_path=%buffer_path.to_string_lossy(), "wait_for_staging_rows");
+        sleep(Duration::from_millis(1000)).await;
     }
 }
 
@@ -51,13 +53,9 @@ pub fn count_staging_rows(
     attach_buffer(conn, buffer_path)?;
     let staging = staging_table_name(table);
     let sql = format!("SELECT COUNT(*) FROM dqbuf.\"{}\"", staging);
-    let count = conn.query_scalar_i64(&sql).map_err(|err| {
-        anyhow!(
-            "failed to count staging rows in {}: {}",
-            staging,
-            err
-        )
-    })?;
+    let count = conn
+        .query_scalar_i64(&sql)
+        .map_err(|err| anyhow!("failed to count staging rows in {}: {}", staging, err))?;
     Ok(count as usize)
 }
 
@@ -109,7 +107,7 @@ fn staging_table_name(table: &str) -> String {
 
 fn attach_buffer(conn: &mut FlightSQLClient, buffer_path: &Path) -> Result<()> {
     let attach_sql = format!(
-        "ATTACH IF NOT EXISTS '{}' AS dqbuf (READ_ONLY);",
+        "DETACH DATABASE IF EXISTS dqbuf; ATTACH '{}' AS dqbuf (READ_ONLY);",
         buffer_path.display()
     );
     conn.update(&attach_sql)?;

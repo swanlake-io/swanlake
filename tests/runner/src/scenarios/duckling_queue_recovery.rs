@@ -34,6 +34,8 @@ pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
     let mut conn = FlightSQLClient::connect(&args.endpoint)?;
     conn.update(&attach_sql)?;
     conn.update("DROP TABLE IF EXISTS swanlake.dq_recovery_target;")?;
+    // Staging tables are cloned from the target schema; ensure it exists before buffering.
+    conn.update("CREATE TABLE swanlake.dq_recovery_target (id BIGINT, label VARCHAR);")?;
 
     // Write buffered data but do not flush; we want to read the persisted chunk itself.
     conn.update(
@@ -47,7 +49,8 @@ pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
     let mut values = read_staging_rows(&mut conn, &buffer, "dq_recovery_target", &["id", "label"])?
         .into_iter()
         .map(|row| {
-            let id = row.first()
+            let id = row
+                .first()
                 .ok_or_else(|| anyhow!("missing id column"))?
                 .parse::<i64>()
                 .map_err(|err| anyhow!("failed to parse id: {err}"))?;
@@ -65,6 +68,7 @@ pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
         "persisted chunk should preserve all rows and types"
     );
 
+    conn.update("DROP TABLE IF EXISTS swanlake.dq_recovery_target;")?;
     info!("duckling queue recovery scenario passed");
     Ok(())
 }
