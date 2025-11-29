@@ -266,15 +266,15 @@ impl DuckDbBuffer {
         self.with_conn(|conn| {
             let staging = staging_table_name(table);
 
-            // Try to open appender first (fast path)
-            // Check if table exists first to avoid borrow checker issues
-            let needs_creation = conn.appender(&staging).is_err();
-            if needs_creation {
+            let mut appender_result = conn.appender(&staging);
+            if appender_result.is_err() {
                 debug!(table = %table, staging = %staging, "appender failed; ensuring table exists");
+                drop(appender_result);
                 self.ensure_table_with_conn(conn, table, schema)?;
+                appender_result = conn.appender(&staging);
             }
 
-            let mut appender = conn.appender(&staging).map_err(|err| {
+            let mut appender = appender_result.map_err(|err| {
                 error!(
                     table = %table,
                     staging = %staging,
