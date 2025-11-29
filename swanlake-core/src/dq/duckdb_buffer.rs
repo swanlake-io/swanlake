@@ -209,9 +209,14 @@ impl DuckDbBuffer {
         schema_json: &str,
     ) -> Result<(), ServerError> {
         let staging = staging_table_name(table);
+        let seq_name = staging_sequence_name(table);
         let create_sql = build_create_table_sql(&staging, schema)?;
         let tx = conn.transaction()?;
-        tx.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_ident(&staging)))?;
+        tx.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {}; DROP SEQUENCE IF EXISTS {};",
+            quote_ident(&staging),
+            quote_ident(&seq_name)
+        ))?;
         tx.execute_batch(&create_sql)?;
         tx.execute(
             "UPDATE dq_meta SET schema_json = ?, last_flushed_seq = 0 WHERE table_name = ?",
@@ -381,13 +386,22 @@ fn staging_table_name(table: &str) -> String {
     format!("dq_{}", table)
 }
 
+fn staging_sequence_name(table: &str) -> String {
+    format!("dq_seq_{}", table)
+}
+
 fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 fn build_create_table_sql(table: &str, schema: &Schema) -> Result<String, ServerError> {
+    let seq_name = staging_sequence_name(table);
+    let quoted_seq = quote_ident(&seq_name);
     let mut cols = Vec::with_capacity(schema.fields().len() + 1);
-    cols.push("dq_seq BIGINT GENERATED ALWAYS AS IDENTITY".to_string());
+    cols.push(format!(
+        "dq_seq BIGINT DEFAULT nextval('{}')",
+        seq_name.replace('\'', "''")
+    ));
     for field in schema.fields() {
         let col_type = arrow_type_to_duckdb(field.data_type())?;
         let nullable = if field.is_nullable() { "" } else { " NOT NULL" };
@@ -399,7 +413,8 @@ fn build_create_table_sql(table: &str, schema: &Schema) -> Result<String, Server
         ));
     }
     Ok(format!(
-        "CREATE TABLE IF NOT EXISTS {} ({});",
+        "CREATE SEQUENCE IF NOT EXISTS {};\nCREATE TABLE IF NOT EXISTS {} ({});",
+        quoted_seq,
         quote_ident(table),
         cols.join(", ")
     ))
