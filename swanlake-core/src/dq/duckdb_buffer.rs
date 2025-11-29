@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use arrow_array::{Int64Array, RecordBatch};
-use arrow_schema::{DataType, Schema, SchemaRef};
+use arrow_schema::{Schema, SchemaRef};
 use duckdb::{params_from_iter, Connection};
 use tracing::{debug, error};
 
+use crate::engine::EngineFactory;
 use crate::error::ServerError;
 
 /// Handle that identifies which rows were flushed for a table.
@@ -40,6 +41,7 @@ pub struct DuckDbBuffer {
     conn: Mutex<Connection>,
     path: PathBuf,
     flush_chunk_rows: usize,
+    target_catalog: String,
 }
 
 impl DuckDbBuffer {
@@ -54,7 +56,12 @@ impl DuckDbBuffer {
         f(&mut conn)
     }
 
-    pub fn new(root: PathBuf, flush_chunk_rows: usize) -> Result<Self, ServerError> {
+    pub fn new(
+        root: PathBuf,
+        flush_chunk_rows: usize,
+        target_catalog: String,
+        factory: &EngineFactory,
+    ) -> Result<Self, ServerError> {
         fs::create_dir_all(&root).map_err(|err| {
             ServerError::Internal(format!(
                 "failed to create duckling queue root {}: {err}",
@@ -62,66 +69,78 @@ impl DuckDbBuffer {
             ))
         })?;
         let path = root.join("buffer.duckdb");
-        let conn = Connection::open(&path)?;
+
+        // Use factory to create connection with all extensions and init SQL
+        let conn = factory.create_connection_with_path(&path)?;
+
         let buffer = Self {
             conn: Mutex::new(conn),
             path,
             flush_chunk_rows: flush_chunk_rows.max(1),
+            target_catalog,
         };
-        buffer.init_meta_table()?;
         Ok(buffer)
-    }
-
-    fn init_meta_table(&self) -> Result<(), ServerError> {
-        self.with_conn(|conn| {
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS dq_meta (
-                    table_name TEXT PRIMARY KEY,
-                    schema_json TEXT NOT NULL,
-                    last_flushed_seq BIGINT DEFAULT 0
-                );",
-            )?;
-            Ok(())
-        })
     }
 
     /// Load known tables and their schemas/row counts from the buffer.
     pub fn load_table_states(&self) -> Result<Vec<TableState>, ServerError> {
         self.with_conn(|conn| {
             let mut states = Vec::new();
-            let mut stmt =
-                conn.prepare("SELECT table_name, schema_json FROM dq_meta ORDER BY table_name")?;
+            let mut stmt = conn.prepare(
+                "SELECT table_name FROM information_schema.tables
+                 WHERE table_catalog = 'buffer' AND table_schema = 'main' AND table_name LIKE 'dq_%'
+                 ORDER BY table_name",
+            )?;
             let rows = stmt.query_map([], |row| {
-                let table: String = row.get(0)?;
-                let schema_json: String = row.get(1)?;
-                Ok((table, schema_json))
+                let staging_name: String = row.get(0)?;
+                Ok(staging_name)
             })?;
-            let entries = rows
+            let staging_names = rows
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(ServerError::DuckDb)?;
 
-            for (table, schema_json) in entries {
-                let schema = decode_schema(&schema_json)?;
-                let staging = staging_table_name(&table);
-                let count: i64 = if staging_exists(conn, &table)? {
-                    conn.query_row(
-                        &format!("SELECT COUNT(*) FROM {}", quote_ident(&staging)),
-                        [],
-                        |row| row.get(0),
-                    )
-                    .map_err(ServerError::DuckDb)?
-                } else {
-                    error!(
-                        table = %table,
-                        staging = %staging,
-                        "staging table missing during load; recreating from metadata"
-                    );
-                    self.recreate_staging_table(conn, &table, &schema, &schema_json)?;
-                    0
+            for staging_name in staging_names {
+                // Extract table name from staging name (remove "dq_" prefix)
+                let table = staging_name
+                    .strip_prefix("dq_")
+                    .unwrap_or(&staging_name)
+                    .to_string();
+
+                // Get schema directly from the staging table - skip if it fails
+                // (table might have been dropped externally or corrupted)
+                let schema = match fetch_schema_from_table(conn, &staging_name) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(
+                            table = %table,
+                            staging = %staging_name,
+                            error = %e,
+                            "failed to fetch schema for staging table; skipping"
+                        );
+                        continue;
+                    }
                 };
+
+                let count: i64 = match conn.query_row(
+                    &format!("SELECT COUNT(*) FROM main.{}", quote_ident(&staging_name)),
+                    [],
+                    |row| row.get(0),
+                ) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!(
+                            table = %table,
+                            staging = %staging_name,
+                            error = %e,
+                            "failed to count rows in staging table; skipping"
+                        );
+                        continue;
+                    }
+                };
+
                 states.push(TableState {
                     table,
-                    schema: Arc::new(schema),
+                    schema,
                     row_count: count as usize,
                 });
             }
@@ -133,37 +152,23 @@ impl DuckDbBuffer {
     /// Retrieve current schema and row count for a table if it exists.
     pub fn table_info(&self, table: &str) -> Result<Option<(SchemaRef, usize)>, ServerError> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT schema_json, last_flushed_seq FROM dq_meta WHERE table_name = ?",
-            )?;
-            let stored: Option<String> = stmt
-                .query_row(params_from_iter([table]), |row| row.get(0))
-                .optional()
-                .map_err(ServerError::DuckDb)?;
-            let Some(schema_json) = stored else {
-                debug!(table = %table, "table_info: no metadata found");
-                return Ok(None);
-            };
-            let schema = decode_schema(&schema_json)?;
             let staging = staging_table_name(table);
             if !staging_exists(conn, table)? {
-                // Heal metadata if the staging table was dropped manually.
-                error!(
-                    table = %table,
-                    staging = %staging,
-                    "staging table missing in table_info; recreating"
-                );
-                self.recreate_staging_table(conn, table, &schema, &schema_json)?;
-                return Ok(Some((Arc::new(schema), 0)));
+                debug!(table = %table, "table_info: staging table does not exist");
+                return Ok(None);
             }
+
+            // Get schema directly from the staging table
+            let schema = fetch_schema_from_table(conn, &staging)?;
+
             let row_count: i64 = conn
                 .query_row(
-                    &format!("SELECT COUNT(*) FROM {}", quote_ident(&staging)),
+                    &format!("SELECT COUNT(*) FROM main.{}", quote_ident(&staging)),
                     [],
                     |row| row.get(0),
                 )
                 .map_err(ServerError::DuckDb)?;
-            Ok(Some((Arc::new(schema), row_count as usize)))
+            Ok(Some((schema, row_count as usize)))
         })
     }
 
@@ -171,8 +176,7 @@ impl DuckDbBuffer {
     /// a different schema and still holds buffered rows, an error is returned to avoid dropping
     /// data implicitly. Callers should flush pending rows first.
     pub fn ensure_table(&self, table: &str, schema: &Schema) -> Result<(), ServerError> {
-        let schema_json = encode_schema(schema)?;
-        self.with_conn(|conn| self.ensure_table_with_conn(conn, table, schema, &schema_json))
+        self.with_conn(|conn| self.ensure_table_with_conn(conn, table, schema))
     }
 
     fn create_staging_table(
@@ -180,16 +184,9 @@ impl DuckDbBuffer {
         conn: &mut Connection,
         table: &str,
         schema: &Schema,
-        schema_json: &str,
     ) -> Result<(), ServerError> {
-        let create_sql = build_create_table_sql(table, schema)?;
-        let tx = conn.transaction()?;
-        tx.execute_batch(&create_sql)?;
-        tx.execute(
-            "INSERT OR REPLACE INTO dq_meta(table_name, schema_json, last_flushed_seq) VALUES(?, ?, 0)",
-            params_from_iter([table, schema_json]),
-        )?;
-        tx.commit()?;
+        let create_sql = build_create_table_sql(table, schema, &self.target_catalog)?;
+        conn.execute_batch(&create_sql)?;
         Ok(())
     }
 
@@ -198,18 +195,14 @@ impl DuckDbBuffer {
         conn: &mut Connection,
         table: &str,
         schema: &Schema,
-        schema_json: &str,
     ) -> Result<(), ServerError> {
         let staging = staging_table_name(table);
-        let create_sql = build_create_table_sql(table, schema)?;
-        let tx = conn.transaction()?;
-        tx.execute_batch(&format!("DROP TABLE IF EXISTS {};", quote_ident(&staging)))?;
-        tx.execute_batch(&create_sql)?;
-        tx.execute(
-            "UPDATE dq_meta SET schema_json = ?, last_flushed_seq = 0 WHERE table_name = ?",
-            params_from_iter([schema_json, table]),
-        )?;
-        tx.commit()?;
+        let create_sql = build_create_table_sql(table, schema, &self.target_catalog)?;
+        conn.execute_batch(&format!(
+            "DROP TABLE IF EXISTS main.{};",
+            quote_ident(&staging)
+        ))?;
+        conn.execute_batch(&create_sql)?;
         Ok(())
     }
 
@@ -218,62 +211,49 @@ impl DuckDbBuffer {
         conn: &mut Connection,
         table: &str,
         schema: &Schema,
-        schema_json: &str,
     ) -> Result<(), ServerError> {
         let staging = staging_table_name(table);
-        let mut stmt = conn.prepare("SELECT schema_json FROM dq_meta WHERE table_name = ?")?;
-        let stored: Option<String> = stmt
-            .query_row(params_from_iter([table]), |row| row.get(0))
-            .optional()
-            .map_err(ServerError::DuckDb)?;
 
-        match stored {
-            Some(stored_schema) => {
-                // If metadata exists but the staging table was dropped externally, recreate it.
-                if !staging_exists(conn, table)? {
-                    error!(
-                        table = %table,
-                        staging = %staging,
-                        "staging table missing in ensure_table; recreating"
-                    );
-                    self.recreate_staging_table(conn, table, schema, schema_json)?;
-                    return Ok(());
-                }
-
-                if stored_schema != schema_json {
-                    let row_count: i64 = conn
-                        .query_row(
-                            &format!("SELECT COUNT(*) FROM {}", quote_ident(&staging)),
-                            [],
-                            |row| row.get(0),
-                        )
-                        .map_err(ServerError::DuckDb)?;
-                    if row_count > 0 {
-                        error!(
-                            table = %table,
-                            staging = %staging,
-                            row_count,
-                            "schema mismatch with buffered rows; refusing to recreate staging table"
-                        );
-                        return Err(ServerError::Internal(format!(
-                            "duckling queue schema mismatch for {table}; flush existing buffered rows before schema change"
-                        )));
-                    }
-                    // Safe to recreate the empty staging table with the new schema.
-                    self.recreate_staging_table(conn, table, schema, schema_json)?;
-                }
-            }
-            None => {
-                self.create_staging_table(conn, table, schema, schema_json)?;
-            }
+        if !staging_exists(conn, table)? {
+            // Table doesn't exist, create it
+            self.create_staging_table(conn, table, schema)?;
+            return Ok(());
         }
+
+        // Table exists, check if schema matches
+        let existing_schema = fetch_schema_from_table(conn, &staging)?;
+        let schema_json = encode_schema(schema)?;
+        let existing_schema_json = encode_schema(&existing_schema)?;
+
+        if existing_schema_json != schema_json {
+            let row_count: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM main.{}", quote_ident(&staging)),
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(ServerError::DuckDb)?;
+            if row_count > 0 {
+                error!(
+                    table = %table,
+                    staging = %staging,
+                    row_count,
+                    "schema mismatch with buffered rows; refusing to recreate staging table"
+                );
+                return Err(ServerError::Internal(format!(
+                    "duckling queue schema mismatch for {table}; flush existing buffered rows before schema change"
+                )));
+            }
+            // Safe to recreate the empty staging table with the new schema.
+            self.recreate_staging_table(conn, table, schema)?;
+        }
+
         Ok(())
     }
 
     /// Replace the staging table with the given schema, dropping any existing table.
     pub fn replace_table_schema(&self, table: &str, schema: &Schema) -> Result<(), ServerError> {
-        let schema_json = encode_schema(schema)?;
-        self.with_conn(|conn| self.recreate_staging_table(conn, table, schema, &schema_json))
+        self.with_conn(|conn| self.recreate_staging_table(conn, table, schema))
     }
 
     /// Append RecordBatches into the staging table. Returns (rows, bytes).
@@ -283,30 +263,27 @@ impl DuckDbBuffer {
         schema: &Schema,
         batches: &[RecordBatch],
     ) -> Result<(usize, u64), ServerError> {
-        let schema_json = encode_schema(schema)?;
         self.with_conn(|conn| {
-            self.ensure_table_with_conn(conn, table, schema, &schema_json)?;
             let staging = staging_table_name(table);
-            let ident = staging.clone();
-            let exists = staging_exists(conn, table)?;
-            if !exists {
-                error!(table = %table, staging = %staging, "staging table missing before enqueue; recreating");
-                self.recreate_staging_table(conn, table, schema, &schema_json)?;
+
+            // Try to open appender first (fast path)
+            // Check if table exists first to avoid borrow checker issues
+            let needs_creation = conn.appender(&staging).is_err();
+            if needs_creation {
+                debug!(table = %table, staging = %staging, "appender failed; ensuring table exists");
+                self.ensure_table_with_conn(conn, table, schema)?;
             }
-            let mut appender = match conn.appender(&ident) {
-                Ok(appender) => appender,
-                Err(err) => {
-                    error!(
-                        table = %table,
-                        staging = %staging,
-                        ident = %ident,
-                        %err,
-                        exists,
-                        "failed to open appender for duckling_queue staging table"
-                    );
-                    return Err(ServerError::DuckDb(err));
-                }
-            };
+
+            let mut appender = conn.appender(&staging).map_err(|err| {
+                error!(
+                    table = %table,
+                    staging = %staging,
+                    %err,
+                    "failed to open appender for duckling_queue staging table"
+                );
+                ServerError::DuckDb(err)
+            })?;
+
             let mut rows = 0usize;
             let mut bytes = 0u64;
             for batch in batches {
@@ -332,7 +309,7 @@ impl DuckDbBuffer {
 
             debug!(table = %table, staging = %staging, "select_for_flush: preparing statement");
             let mut stmt = conn.prepare(&format!(
-                "SELECT rowid, * FROM {} ORDER BY rowid LIMIT {}",
+                "SELECT rowid, * FROM main.{} ORDER BY rowid LIMIT {}",
                 quote_ident(&staging),
                 self.flush_chunk_rows
             ))?;
@@ -407,7 +384,7 @@ impl DuckDbBuffer {
                 "select_for_flush: built payload"
             );
 
-            let stored_schema = fetch_schema_with_conn(conn, table)?;
+            let stored_schema = fetch_schema_from_table(conn, &staging)?;
             let handle = FlushHandle {
                 table: table.to_string(),
                 max_seq: max_seq.expect("rowid present when rows > 0"),
@@ -429,7 +406,10 @@ impl DuckDbBuffer {
         let staging = staging_table_name(&handle.table);
         self.with_conn(|conn| {
             let deleted = conn.execute(
-                &format!("DELETE FROM {} WHERE rowid <= ?", quote_ident(&staging)),
+                &format!(
+                    "DELETE FROM main.{} WHERE rowid <= ?",
+                    quote_ident(&staging)
+                ),
                 params_from_iter([handle.max_seq]),
             )?;
             debug!(
@@ -459,43 +439,39 @@ fn staging_table_name(table: &str) -> String {
     format!("dq_{}", table)
 }
 
-fn fetch_schema_with_conn(conn: &Connection, table: &str) -> Result<SchemaRef, ServerError> {
-    let schema_json: String = conn
-        .query_row(
-            "SELECT schema_json FROM dq_meta WHERE table_name = ?",
-            params_from_iter([table]),
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(ServerError::DuckDb)?
-        .ok_or_else(|| {
-            ServerError::Internal(format!("duckling queue metadata missing for table {table}"))
-        })?;
-    let schema = decode_schema(&schema_json)?;
-    Ok(Arc::new(schema))
+fn fetch_schema_from_table(
+    conn: &Connection,
+    staging_name: &str,
+) -> Result<SchemaRef, ServerError> {
+    // Use DuckDB's query_arrow to get the schema directly from the table
+    // Explicitly use main schema to avoid catalog confusion when catalogs are attached
+    let mut stmt = conn.prepare(&format!(
+        "SELECT * FROM main.{} LIMIT 0",
+        quote_ident(staging_name)
+    ))?;
+    let arrow = stmt.query_arrow([])?;
+    Ok(arrow.get_schema())
 }
 
 fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-fn build_create_table_sql(table: &str, schema: &Schema) -> Result<String, ServerError> {
+fn quote_qualified_name(catalog: &str, table: &str) -> String {
+    format!("{}.{}", quote_ident(catalog), quote_ident(table))
+}
+
+fn build_create_table_sql(
+    table: &str,
+    _schema: &Schema,
+    target_catalog: &str,
+) -> Result<String, ServerError> {
     let staging = staging_table_name(table);
-    let mut cols = Vec::with_capacity(schema.fields().len());
-    for field in schema.fields() {
-        let col_type = arrow_type_to_duckdb(field.data_type())?;
-        let nullable = if field.is_nullable() { "" } else { " NOT NULL" };
-        cols.push(format!(
-            "{} {}{}",
-            quote_ident(field.name()),
-            col_type,
-            nullable
-        ));
-    }
+    // Use CREATE TABLE AS SELECT to copy schema from target table
     Ok(format!(
-        "CREATE TABLE IF NOT EXISTS {} ({});",
+        "CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM {} WHERE 1=0;",
         quote_ident(&staging),
-        cols.join(", ")
+        quote_qualified_name(target_catalog, table)
     ))
 }
 
@@ -505,48 +481,6 @@ fn encode_schema(schema: &Schema) -> Result<String, ServerError> {
             "failed to serialize schema for duckling queue: {err}"
         ))
     })
-}
-
-fn decode_schema(encoded: &str) -> Result<Schema, ServerError> {
-    serde_json::from_str(encoded).map_err(|err| {
-        ServerError::Internal(format!("failed to decode schema for duckling queue: {err}"))
-    })
-}
-
-fn arrow_type_to_duckdb(dt: &DataType) -> Result<String, ServerError> {
-    let t = match dt {
-        DataType::Int8 => "TINYINT",
-        DataType::Int16 => "SMALLINT",
-        DataType::Int32 => "INTEGER",
-        DataType::Int64 => "BIGINT",
-        DataType::UInt8 => "UTINYINT",
-        DataType::UInt16 => "USMALLINT",
-        DataType::UInt32 => "UINTEGER",
-        DataType::UInt64 => "UBIGINT",
-        DataType::Float16 | DataType::Float32 => "FLOAT",
-        DataType::Float64 => "DOUBLE",
-        DataType::Utf8 | DataType::LargeUtf8 => "VARCHAR",
-        DataType::Binary | DataType::FixedSizeBinary(_) | DataType::LargeBinary => "BLOB",
-        DataType::Boolean => "BOOLEAN",
-        DataType::Date32 => "DATE",
-        DataType::Date64 => "TIMESTAMP",
-        DataType::Timestamp(_, _) => "TIMESTAMP",
-        DataType::Time32(_) | DataType::Time64(_) => "TIME",
-        DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
-            let scale = (*s).max(0);
-            return Ok(format!("DECIMAL({}, {})", p, scale));
-        }
-        DataType::List(field) => {
-            let inner = arrow_type_to_duckdb(field.data_type())?;
-            return Ok(format!("{}[]", inner));
-        }
-        _ => {
-            return Err(ServerError::Internal(format!(
-                "unsupported arrow type in duckling queue buffer: {dt:?}"
-            )))
-        }
-    };
-    Ok(t.to_string())
 }
 
 fn staging_exists(conn: &Connection, table: &str) -> Result<bool, ServerError> {
@@ -562,20 +496,3 @@ fn staging_exists(conn: &Connection, table: &str) -> Result<bool, ServerError> {
         .map_err(ServerError::DuckDb)?;
     Ok(exists > 0)
 }
-
-trait OptionalRow<T> {
-    fn optional(self) -> Result<Option<T>, duckdb::Error>;
-}
-
-impl<T> OptionalRow<T> for Result<T, duckdb::Error> {
-    fn optional(self) -> Result<Option<T>, duckdb::Error> {
-        match self {
-            Ok(v) => Ok(Some(v)),
-            Err(duckdb::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-}
-
-// Allow referencing Arc without importing everywhere above.
-use std::sync::Arc;

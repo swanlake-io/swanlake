@@ -1,0 +1,54 @@
+# name: tests/sql/duckling_queue_schema_compat.test
+# description: duckling_queue tolerates compatible remote schema additions
+# group: [sql]
+
+require ducklake
+
+statement ok
+DROP TABLE IF EXISTS swanlake.dq_schema_ok;
+
+statement ok
+CREATE TABLE swanlake.dq_schema_ok(id INT, name TEXT);
+
+statement ok
+INSERT INTO duckling_queue.dq_schema_ok VALUES (1, 'alpha'), (2, 'beta');
+
+statement ok
+ATTACH '__TEST_DIR__/duckling_queue/buffer.duckdb' AS dqbuf (READ_ONLY);
+
+query I
+SELECT COUNT(*) FROM dqbuf.dq_dq_schema_ok
+----
+2
+
+statement ok
+ALTER TABLE swanlake.dq_schema_ok ADD COLUMN extra TEXT;
+
+statement ok
+INSERT INTO duckling_queue.dq_schema_ok (id, name) VALUES (3, 'gamma'), (4, 'delta');
+
+statement ok
+PRAGMA duckling_queue.flush;
+
+query III
+SELECT id, name, extra FROM swanlake.dq_schema_ok ORDER BY id
+----
+1	alpha	NULL
+2	beta	NULL
+3	gamma	NULL
+4	delta	NULL
+
+# ensure buffer was drained
+statement ok
+DETACH dqbuf;
+
+statement ok
+ATTACH '__TEST_DIR__/duckling_queue/buffer.duckdb' AS dqbuf (READ_ONLY);
+
+query I
+SELECT COUNT(*) FROM dqbuf.dq_dq_schema_ok
+----
+0
+
+statement ok
+DROP TABLE IF EXISTS swanlake.dq_schema_ok;

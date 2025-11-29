@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use arrow_array::RecordBatch;
+use arrow_cast::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use chrono::Utc;
 use parquet::arrow::arrow_writer::ArrowWriter;
@@ -27,15 +28,18 @@ impl QueueRuntime {
         settings: Settings,
     ) -> Result<(Arc<DqCoordinator>, Arc<Self>), ServerError> {
         let (tx, rx) = mpsc::unbounded_channel::<FlushPayload>();
+        let factory_guard = factory.lock().unwrap();
         let buffer = Arc::new(DuckDbBuffer::new(
             settings.root_dir.clone(),
             settings.flush_chunk_rows,
+            settings.target_catalog.clone(),
+            &factory_guard,
         )?);
+        drop(factory_guard);
         let tracker = Arc::new(FlushTracker::new());
         let coordinator = Arc::new(DqCoordinator::new(
             settings.clone(),
             buffer.clone(),
-            factory.clone(),
             tracker.clone(),
             tx,
         )?);
@@ -181,14 +185,56 @@ fn flush_payload(
         bytes = bytes,
         "flush_payload: fetched table schema"
     );
+    // Pretty-print original batches
+    if let Ok(formatted) = pretty_format_batches(&batches) {
+        debug!(
+            table = %table,
+            "Original batches before alignment:\n{}",
+            formatted
+        );
+    }
+
     let aligned_batches = batches
         .iter()
         .map(|batch| align_batch_to_table_schema(batch, &table_schema, None))
         .collect::<Result<Vec<_>, ServerError>>()?;
+
+    // Pretty-print aligned batches
+    if let Ok(formatted) = pretty_format_batches(&aligned_batches) {
+        debug!(
+            table = %table,
+            "Aligned batches after alignment:\n{}",
+            formatted
+        );
+    }
+
+    // Defensive checks: validate alignment preserved data integrity
+    let original_row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+    let aligned_row_count: usize = aligned_batches.iter().map(|b| b.num_rows()).sum();
+    if original_row_count != aligned_row_count {
+        return Err(ServerError::Internal(format!(
+            "Row count mismatch after alignment: original={} aligned={}",
+            original_row_count, aligned_row_count
+        )));
+    }
+
+    // Validate column count matches table schema
+    for (idx, batch) in aligned_batches.iter().enumerate() {
+        if batch.num_columns() != table_schema.fields().len() {
+            return Err(ServerError::Internal(format!(
+                "Column count mismatch in batch {}: expected={} got={}",
+                idx,
+                table_schema.fields().len(),
+                batch.num_columns()
+            )));
+        }
+    }
+
     debug!(
         table = %table,
         batches = aligned_batches.len(),
-        "flush_payload: aligned batches"
+        rows = aligned_row_count,
+        "flush_payload: aligned batches validated"
     );
     conn.insert_with_appender(&settings.target_catalog, &table, aligned_batches)?;
     debug!(table = %table, rows = rows, "flush_payload: inserted into target");

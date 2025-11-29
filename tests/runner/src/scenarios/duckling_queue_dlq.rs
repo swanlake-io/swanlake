@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use swanlake_client::FlightSQLClient;
 use tracing::info;
 
-use crate::scenarios::duckling_queue_utils::{reset_dir, wait_for_parquet_chunks};
+use crate::scenarios::duckling_queue_utils::{buffer_path, reset_dir, wait_for_staging_rows};
 use crate::CliArgs;
 
 pub async fn run_duckling_queue_dlq(args: &CliArgs) -> Result<()> {
@@ -25,8 +25,12 @@ pub async fn run_duckling_queue_dlq(args: &CliArgs) -> Result<()> {
             .unwrap_or_else(|_| format!("{test_dir}/duckling_dlq")),
     );
 
-    reset_dir(&dq_root)?;
+    // The buffer root is managed by the server; keep it intact but ensure it exists.
+    std::fs::create_dir_all(&dq_root)
+        .with_context(|| format!("failed to ensure dq root {}", dq_root.display()))?;
+    // DLQ target is used only by tests, safe to clear between runs.
     reset_dir(&dlq_dir)?;
+    let buffer = buffer_path(&dq_root);
 
     let attach_sql = format!(
         "ATTACH IF NOT EXISTS 'ducklake:postgres:dbname=swanlake_test' AS swanlake \
@@ -40,13 +44,13 @@ pub async fn run_duckling_queue_dlq(args: &CliArgs) -> Result<()> {
     // Insert into duckling_queue; the target table doesn't exist so the flush will fail.
     conn.update("INSERT INTO duckling_queue.dq_dlq_target SELECT 1 AS id;")?;
 
-    wait_for_parquet_chunks(&dq_root, |count| count >= 1).await?;
+    wait_for_staging_rows(&mut conn, &buffer, "dq_dlq_target", |count| count >= 1).await?;
 
     // Force a flush; this will fail because the target table is missing, triggering DLQ copy.
     conn.update("PRAGMA duckling_queue.flush;")?;
 
     // After offload, local buffer should be cleaned up.
-    wait_for_parquet_chunks(&dq_root, |count| count == 0).await?;
+    wait_for_staging_rows(&mut conn, &buffer, "dq_dlq_target", |count| count == 0).await?;
 
     let copied = count_dlq_chunks(&dlq_dir.join("dq_dlq_target"))?;
     assert!(

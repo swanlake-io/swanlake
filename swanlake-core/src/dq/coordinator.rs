@@ -9,7 +9,6 @@ use tracing::{debug, info, warn};
 
 use crate::dq::config::Settings;
 use crate::dq::duckdb_buffer::{DuckDbBuffer, FlushHandle, SelectedPayload};
-use crate::engine::EngineFactory;
 use crate::error::ServerError;
 
 #[derive(Debug)]
@@ -110,15 +109,6 @@ impl BufferedTable {
         }
     }
 
-    fn ensure_schema(&self, schema: &SchemaRef) -> Result<(), ServerError> {
-        if self.schema.as_ref() != schema.as_ref() {
-            return Err(ServerError::Internal(
-                "duckling queue received mismatched schema for buffered table".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
     fn record_enqueue(&mut self, rows: usize, bytes: u64) {
         self.total_rows += rows;
         self.total_bytes += bytes;
@@ -164,7 +154,6 @@ struct CoordinatorInner {
 pub struct DqCoordinator {
     settings: Settings,
     buffer: Arc<DuckDbBuffer>,
-    factory: Arc<Mutex<EngineFactory>>,
     tracker: Arc<FlushTracker>,
     flush_tx: UnboundedSender<FlushPayload>,
     inner: Arc<Mutex<CoordinatorInner>>,
@@ -174,7 +163,6 @@ impl DqCoordinator {
     pub fn new(
         settings: Settings,
         buffer: Arc<DuckDbBuffer>,
-        factory: Arc<Mutex<EngineFactory>>,
         tracker: Arc<FlushTracker>,
         flush_tx: UnboundedSender<FlushPayload>,
     ) -> Result<Self, ServerError> {
@@ -188,7 +176,6 @@ impl DqCoordinator {
         let coordinator = Self {
             settings,
             buffer,
-            factory,
             tracker,
             flush_tx,
             inner: Arc::new(Mutex::new(CoordinatorInner { tables })),
@@ -210,8 +197,7 @@ impl DqCoordinator {
         let schema_ref: SchemaRef = Arc::new(schema);
         let table_key = table.to_string();
 
-        self.ensure_schema_ready(&table_key, &schema_ref)?;
-
+        // Buffer handles all schema validation and table setup
         let (inserted_rows, inserted_bytes) =
             self.buffer.enqueue(&table_key, &schema_ref, &batches)?;
 
@@ -222,7 +208,7 @@ impl DqCoordinator {
                 .tables
                 .entry(table_key.clone())
                 .or_insert_with(|| BufferedTable::new(schema_ref.clone(), 0));
-            entry.ensure_schema(&schema_ref)?;
+            entry.schema = schema_ref;
             entry.record_enqueue(inserted_rows, inserted_bytes);
             debug!(
                 table = %table_key,
@@ -334,78 +320,6 @@ impl DqCoordinator {
             state.mark_flushed(rows, bytes);
         }
         Ok(())
-    }
-
-    fn ensure_schema_ready(&self, table: &str, incoming: &SchemaRef) -> Result<(), ServerError> {
-        if let Some((stored, row_count)) = self.buffer.table_info(table)? {
-            if stored.as_ref() == incoming.as_ref() {
-                return Ok(());
-            }
-            // Try to refresh from SwanLake; only allow change if remote matches incoming.
-            let remote = self.fetch_remote_schema(table)?;
-            if remote.as_ref() != incoming.as_ref() {
-                return Err(ServerError::Internal(format!(
-                    "duckling queue schema mismatch for {table}; remote schema does not match incoming"
-                )));
-            }
-            if row_count > 0 {
-                self.flush_table_and_wait(table)?;
-                let remaining = {
-                    let guard = self.inner.lock().expect("dq coordinator mutex poisoned");
-                    guard.tables.get(table).map(|t| t.total_rows).unwrap_or(0)
-                };
-                if remaining > 0 {
-                    return Err(ServerError::Internal(format!(
-                        "duckling queue schema change for {table} blocked; buffered rows could not be flushed"
-                    )));
-                }
-            }
-            self.buffer.replace_table_schema(table, incoming.as_ref())?;
-            let mut guard = self.inner.lock().expect("dq coordinator mutex poisoned");
-            let entry = guard
-                .tables
-                .entry(table.to_string())
-                .or_insert_with(|| BufferedTable::new(incoming.clone(), 0));
-            entry.schema = incoming.clone();
-            entry.total_rows = 0;
-            entry.total_bytes = 0;
-            entry.inflight = false;
-            return Ok(());
-        }
-
-        // No existing table; create on first use.
-        self.buffer.ensure_table(table, incoming.as_ref())
-    }
-
-    fn fetch_remote_schema(&self, table: &str) -> Result<SchemaRef, ServerError> {
-        let conn = self.factory.lock().unwrap().create_connection()?;
-        let qualified = format!("{}.{}", self.settings.target_catalog, table);
-        let schema = conn.table_schema(&qualified)?;
-        Ok(Arc::new(schema))
-    }
-
-    fn flush_table_and_wait(&self, table: &str) -> Result<(), ServerError> {
-        let mut attempts = 0;
-        loop {
-            let selection = self.buffer.select_for_flush(table)?;
-            if let Some(sel) = selection {
-                self.dispatch_payload(sel.into());
-                self.wait_for_idle();
-            }
-            let remaining = {
-                let guard = self.inner.lock().expect("dq coordinator mutex poisoned");
-                guard.tables.get(table).map(|t| t.total_rows).unwrap_or(0)
-            };
-            if remaining == 0 {
-                return Ok(());
-            }
-            attempts += 1;
-            if attempts >= 3 {
-                return Err(ServerError::Internal(format!(
-                    "duckling queue failed to drain buffered rows for {table} after retries"
-                )));
-            }
-        }
     }
 
     fn dispatch_pending_on_startup(&self) {

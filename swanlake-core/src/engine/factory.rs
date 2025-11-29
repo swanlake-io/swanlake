@@ -60,6 +60,24 @@ impl EngineFactory {
         Ok(conn)
     }
 
+    /// Create a new initialized DuckDB connection with a specific database file path
+    ///
+    /// This is used by the buffer to create a persistent connection with the same
+    /// initialization as session connections (extensions, ATTACH statements, etc.).
+    #[instrument(skip(self))]
+    pub fn create_connection_with_path(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Connection, ServerError> {
+        let config = Config::default()
+            .enable_autoload_extension(true)?
+            .allow_unsigned_extensions()?;
+        let conn = Connection::open_with_flags(path, config)?;
+        conn.execute_batch(&self.init_sql)?;
+        info!(path = %path.display(), "created DuckDB connection with path");
+        Ok(conn)
+    }
+
     /// Create a new initialized DuckDB connection
     ///
     /// Each connection is created fresh with its own in-memory database.

@@ -1,0 +1,57 @@
+# name: tests/sql/duckling_queue_schema_refresh.test
+# description: duckling_queue refreshes buffer schema after flushing old rows
+# group: [sql]
+
+require ducklake
+
+statement ok
+DROP TABLE IF EXISTS swanlake.dq_schema_refresh;
+
+statement ok
+CREATE TABLE swanlake.dq_schema_refresh(id INT, name TEXT);
+
+statement ok
+INSERT INTO duckling_queue.dq_schema_refresh VALUES (1, 'old');
+
+statement ok
+ATTACH '__TEST_DIR__/duckling_queue/buffer.duckdb' AS dqbuf (READ_ONLY);
+
+query I
+SELECT COUNT(*) FROM dqbuf.dq_dq_schema_refresh
+----
+1
+
+statement ok
+ALTER TABLE swanlake.dq_schema_refresh ADD COLUMN name2 TEXT DEFAULT 'defaulted';
+
+statement ok
+INSERT INTO duckling_queue.dq_schema_refresh (id, name, name2) VALUES (2, 'new', 'provided');
+
+statement ok
+PRAGMA duckling_queue.flush;
+
+query III
+SELECT id, name, name2 FROM swanlake.dq_schema_refresh ORDER BY id
+----
+1	old	defaulted
+2	new	provided
+
+# staging should be empty and schema should now include name2
+statement ok
+DETACH dqbuf;
+
+statement ok
+ATTACH '__TEST_DIR__/duckling_queue/buffer.duckdb' AS dqbuf (READ_ONLY);
+
+query I
+SELECT COUNT(*) FROM dqbuf.dq_dq_schema_refresh
+----
+0
+
+query I
+SELECT COUNT(*) FROM dqbuf.pragma_table_info('dq_dq_schema_refresh') WHERE name = 'name2'
+----
+1
+
+statement ok
+DROP TABLE IF EXISTS swanlake.dq_schema_refresh;

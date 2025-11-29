@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 
 use crate::scenarios::duckling_queue_utils::{
-    first_parquet_chunk, reset_dir, wait_for_parquet_chunks,
+    buffer_path, read_staging_rows, wait_for_staging_rows,
 };
 use crate::CliArgs;
 use anyhow::{anyhow, Context, Result};
@@ -21,7 +21,10 @@ pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
         env::var("SWANLAKE_DUCKLING_QUEUE_ROOT")
             .unwrap_or_else(|_| format!("{test_dir}/duckling_queue")),
     );
-    reset_dir(&dq_root)?;
+    // Buffer root is managed by the server; ensure it exists without clearing it.
+    std::fs::create_dir_all(&dq_root)
+        .with_context(|| format!("failed to ensure dq root {}", dq_root.display()))?;
+    let buffer = buffer_path(&dq_root);
 
     let attach_sql = format!(
         "ATTACH IF NOT EXISTS 'ducklake:postgres:dbname=swanlake_test' AS swanlake \
@@ -39,36 +42,22 @@ pub async fn run_duckling_queue_recovery(args: &CliArgs) -> Result<()> {
          UNION ALL SELECT CAST(2 AS BIGINT), CAST('beta' AS VARCHAR);",
     )?;
 
-    wait_for_parquet_chunks(&dq_root, |count| count >= 1).await?;
-    let chunk = first_parquet_chunk(&dq_root)?;
+    wait_for_staging_rows(&mut conn, &buffer, "dq_recovery_target", |count| count >= 1).await?;
 
-    // Read back from the persisted Parquet file via DuckDB to ensure the data is recoverable.
-    let query = format!(
-        "SELECT id, label FROM '{}' ORDER BY id",
-        chunk.to_string_lossy()
-    );
-    let result = conn.query(&query)?;
-    let mut values = Vec::new();
-    for batch in result.batches {
-        let id_col = batch
-            .column_by_name("id")
-            .ok_or_else(|| anyhow!("id column missing in recovered batch"))?;
-        let label_col = batch
-            .column_by_name("label")
-            .ok_or_else(|| anyhow!("label column missing in recovered batch"))?;
-
-        let ids = id_col
-            .as_any()
-            .downcast_ref::<arrow_array::Int64Array>()
-            .ok_or_else(|| anyhow!("id column is not Int64"))?;
-        let labels = label_col
-            .as_any()
-            .downcast_ref::<arrow_array::StringArray>()
-            .ok_or_else(|| anyhow!("label column is not Utf8"))?;
-        for row_idx in 0..batch.num_rows() {
-            values.push((ids.value(row_idx), labels.value(row_idx).to_string()));
-        }
-    }
+    let mut values = read_staging_rows(&mut conn, &buffer, "dq_recovery_target", &["id", "label"])?
+        .into_iter()
+        .map(|row| {
+            let id = row.first()
+                .ok_or_else(|| anyhow!("missing id column"))?
+                .parse::<i64>()
+                .map_err(|err| anyhow!("failed to parse id: {err}"))?;
+            let label = row
+                .get(1)
+                .cloned()
+                .ok_or_else(|| anyhow!("missing label"))?;
+            Ok((id, label))
+        })
+        .collect::<Result<Vec<_>>>()?;
     values.sort_by_key(|(id, _)| *id);
     assert_eq!(
         values,

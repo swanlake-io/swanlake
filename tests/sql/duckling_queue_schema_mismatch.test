@@ -1,0 +1,68 @@
+# name: tests/sql/duckling_queue_schema_mismatch.test
+# description: duckling_queue rejects incompatible schemas and preserves buffered rows
+# group: [sql]
+
+require ducklake
+
+statement ok
+DROP TABLE IF EXISTS swanlake.dq_schema_mismatch;
+
+statement ok
+CREATE TABLE swanlake.dq_schema_mismatch(id INT);
+
+# creation with incompatible schema should fail
+statement error
+INSERT INTO duckling_queue.dq_schema_mismatch (id) VALUES ('abc');
+
+statement ok
+ATTACH '__TEST_DIR__/duckling_queue/buffer.duckdb' AS dqbuf (READ_ONLY);
+
+query I
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'main' AND table_name = 'dq_dq_schema_mismatch'
+----
+1
+
+query I
+SELECT COUNT(*) FROM dqbuf.dq_dq_schema_mismatch
+----
+0
+
+statement ok
+DETACH dqbuf;
+
+# buffer a valid row
+statement ok
+INSERT INTO duckling_queue.dq_schema_mismatch VALUES (1);
+
+statement ok
+ATTACH '__TEST_DIR__/duckling_queue/buffer.duckdb' AS dqbuf (READ_ONLY);
+
+query I
+SELECT COUNT(*) FROM dqbuf.dq_dq_schema_mismatch
+----
+1
+
+statement ok
+DETACH dqbuf;
+
+# make remote schema incompatible
+statement ok
+ALTER TABLE swanlake.dq_schema_mismatch ADD COLUMN name TEXT;
+
+# enqueue with stale schema should be rejected and buffered row should remain
+statement error
+INSERT INTO duckling_queue.dq_schema_mismatch VALUES (2, 3);
+
+statement ok
+ATTACH '__TEST_DIR__/duckling_queue/buffer.duckdb' AS dqbuf (READ_ONLY);
+
+query I
+SELECT COUNT(*) FROM dqbuf.dq_dq_schema_mismatch
+----
+1
+
+statement ok
+DETACH dqbuf;
+
+statement ok
+DROP TABLE IF EXISTS swanlake.dq_schema_mismatch;
