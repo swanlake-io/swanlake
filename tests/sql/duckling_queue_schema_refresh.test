@@ -27,13 +27,16 @@ ALTER TABLE swanlake.dq_schema_refresh ADD COLUMN name2 TEXT DEFAULT 'defaulted'
 statement ok
 INSERT INTO duckling_queue.dq_schema_refresh (id, name, name2) VALUES (2, 'new', 'provided');
 
+statement error
+INSERT INTO duckling_queue.dq_schema_refresh (id, name) VALUES (3, 'new2');
+
 statement ok
 PRAGMA duckling_queue.flush;
 
 query III
 SELECT id, name, name2 FROM swanlake.dq_schema_refresh ORDER BY id
 ----
-1	old	defaulted
+1	old	NULL
 2	new	provided
 
 # staging should be empty and schema should now include name2
@@ -49,7 +52,7 @@ SELECT COUNT(*) FROM dqbuf.dq_dq_schema_refresh
 0
 
 query I
-SELECT COUNT(*) FROM dqbuf.pragma_table_info('dq_dq_schema_refresh') WHERE name = 'name2'
+select COUNT(*) from duckdb_columns() where database_name = 'dqbuf' AND table_name = 'dq_dq_schema_refresh' and column_name = 'name2';
 ----
 1
 
