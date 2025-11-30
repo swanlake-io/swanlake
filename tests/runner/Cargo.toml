@@ -9,13 +9,13 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
-arrow-array = "56"
-arrow-buffer = "56"
-arrow-schema = "56"
-arrow = { version = "56", features = ["prettyprint"] }
+arrow-array = "57"
+arrow-buffer = "57"
+arrow-schema = "57"
+arrow = { version = "57", features = ["prettyprint"] }
 chrono = "0.4"
 swanlake-client = { path = "../../swanlake-client" }
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "time"] }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+tracing = "0.1.43"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 hex = "0.4"
