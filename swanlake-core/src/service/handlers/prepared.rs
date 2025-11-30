@@ -19,7 +19,9 @@ use crate::engine::batch::align_batch_to_table_schema;
 use crate::service::SwanFlightSqlService;
 use crate::session::id::StatementHandle;
 use crate::session::{PreparedStatementMeta, PreparedStatementOptions};
-use crate::sql_parser::{ParsedStatement, TableReference};
+use crate::sql_parser::ParsedStatement;
+
+const DEFAULT_CATALOG: &str = "swanlake";
 
 fn parse_statement_handle(bytes: &[u8], context: &str) -> Result<StatementHandle, Status> {
     StatementHandle::from_bytes(bytes).ok_or_else(|| {
@@ -254,35 +256,6 @@ pub(crate) async fn do_action_close_prepared_statement(
 }
 
 /// Handle DoPut for prepared statement updates (INSERT, UPDATE, DELETE, DDL).
-///
-/// This is the entry point when clients send Arrow batches via DoPut to execute
-/// a prepared statement that modifies data or schema.
-///
-/// # Execution Paths
-///
-/// ## 1. Duckling Queue INSERT (Optimized)
-/// For `INSERT INTO duckling_queue.<table>`:
-/// - Directly enqueues Arrow batches without conversion
-/// - Avoids wasteful Arrow → params → VALUES → Arrow round-trip
-/// - Aligns batch schema if INSERT specifies column list
-///
-/// ## 2. Regular Table INSERT (Appender)
-/// For `INSERT INTO <regular_table>`:
-/// - Uses DuckDB appender API for efficient bulk insert
-/// - Aligns batch schema to match table schema
-/// - Handles column reordering if needed
-///
-/// ## 3. Other Statements (Parameter Batching)
-/// For UPDATE, DELETE, DDL, etc.:
-/// - Converts Arrow batches to parameter sets
-/// - Executes statement once per parameter set
-/// - Standard SQL execution path
-///
-/// # Flow
-/// 1. Parse the prepared statement SQL
-/// 2. Detect statement type (INSERT vs others)
-/// 3. Route to appropriate execution path
-/// 4. Return total affected rows
 pub(crate) async fn do_put_prepared_statement_update(
     service: &SwanFlightSqlService,
     query: CommandPreparedStatementUpdate,
@@ -319,157 +292,71 @@ pub(crate) async fn do_put_prepared_statement_update(
         .filter(|p| p.is_insert())
         .and_then(|p| p.get_insert_table().map(|t| (p, t)))
     {
-        if is_duckling_queue_table(&table_ref) {
-            // If the INSERT contains server-side expressions/defaults in the VALUES list,
-            // fall back to executing the statement so those expressions are evaluated.
-            let values_all_placeholders = parsed.insert_values_all_placeholders();
-            if !values_all_placeholders {
-                let params = SwanFlightSqlService::collect_parameter_sets(request).await?;
-                info!(
-                    handle = %handle,
-                    sql = %sql,
-                    "falling back to parameter execution for duckling_queue (expressions/defaults present)"
-                );
-                let session_clone = Arc::clone(&session);
-                return tokio::task::spawn_blocking(move || {
-                    SwanFlightSqlService::execute_statement_batches(&sql, &params, &session_clone)
-                })
-                .await
-                .map_err(SwanFlightSqlService::status_from_join)?
-                .map_err(SwanFlightSqlService::status_from_error);
-            }
+        // Uses DuckDB appender API for efficient bulk inserts.
+        let batches = SwanFlightSqlService::collect_record_batches(request).await?;
+        if batches.is_empty() {
+            // No batches sent, execute the statement with empty params.
+            let session_clone = Arc::clone(&session);
+            tokio::task::spawn_blocking(move || {
+                SwanFlightSqlService::execute_statement_batches(&sql, &[], &session_clone)
+            })
+            .await
+            .map_err(SwanFlightSqlService::status_from_join)?
+            .map_err(SwanFlightSqlService::status_from_error)?
+        } else {
+            let parts = table_ref.parts();
 
-            // Optimized path for duckling_queue: directly enqueue Arrow batches
-            // instead of converting Arrow → params → VALUES → Arrow (wasteful)
-            //
-            // Flow:
-            // 1. Collect Arrow batches from DoPut stream
-            // 2. Align batches to match INSERT column order if needed
-            // 3. Enqueue directly to duckling_queue coordinator
-            let batches = SwanFlightSqlService::collect_record_batches(request).await?;
+            // Extract catalog and table name from the parsed reference
+            // Format: "catalog.table" or just "table" (uses default catalog)
+            let (catalog_name, table_name) =
+                session.resolve_catalog_and_table(parts, DEFAULT_CATALOG);
+            let insert_columns = parsed.get_insert_columns();
 
-            if batches.is_empty() {
-                // No data to enqueue
-                0
-            } else {
-                let parts = table_ref.parts();
-                let target_table = parts[1].to_string(); // Extract "events" from "duckling_queue.events"
-                let target_catalog = service.registry.target_catalog().to_string();
-                let insert_columns = parsed.get_insert_columns();
+            info!(
+                handle = %handle,
+                table_name = %table_name,
+                batch_count = batches.len(),
+                total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+                "using appender optimization for INSERT"
+            );
 
-                info!(
-                    handle = %handle,
-                    sql = %sql,
-                    target_table = %target_table,
-                    batch_count = batches.len(),
-                    total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>(),
-                    "enqueuing duckling_queue batches directly (optimized path)"
-                );
+            let session_clone = Arc::clone(&session);
+            tokio::task::spawn_blocking(move || {
+                // Get the target table schema for validation and alignment
+                let qualified_table = format!("{}.{}", catalog_name, table_name);
+                let table_schema = Arc::new(session_clone.table_schema(&qualified_table)?);
 
-                let session_clone = Arc::clone(&session);
-                tokio::task::spawn_blocking(move || {
-                    // If INSERT specifies columns like "INSERT INTO t (id, name) VALUES (?)",
-                    // we need to align the Arrow batch schema to match the column order
-                    // Get the destination table schema from the target catalog (duckling_queue is write-only envelope)
-                    let qualified_table = format!("{}.{}", target_catalog, target_table);
-                    let table_schema = Arc::new(session_clone.table_schema(&qualified_table)?);
-
-                    // Align each batch to match the destination schema; fail fast on mismatches so we
-                    // don't enqueue data that would later fail during async flush.
-                    let batches_to_enqueue = batches
+                // Align batches if INSERT specifies column list
+                // Example: "INSERT INTO t (col2, col1)" needs column reordering
+                let batches_to_use = if let Some(cols) = insert_columns.as_ref() {
+                    batches
                         .iter()
                         .map(|batch| {
-                            align_batch_to_table_schema(
-                                batch,
-                                &table_schema,
-                                insert_columns.as_deref(),
-                            )
+                            align_batch_to_table_schema(batch, &table_schema, Some(cols.as_slice()))
                         })
-                        .collect::<Result<Vec<_>, crate::error::ServerError>>()?;
+                        .collect::<Result<Vec<_>, crate::error::ServerError>>()?
+                } else {
+                    batches
+                };
 
-                    session_clone.enqueue_duckling_batches(&target_table, batches_to_enqueue)
-                })
-                .await
-                .map_err(SwanFlightSqlService::status_from_join)?
-                .map_err(SwanFlightSqlService::status_from_error)?
-            }
-        } else {
-            // Regular table INSERT path (not duckling_queue)
-            // Uses DuckDB appender API for efficient bulk inserts
-            //
-            // Flow:
-            // 1. Collect Arrow batches from DoPut stream
-            // 2. Align batches to match table schema if needed
-            // 3. Use DuckDB appender to insert efficiently
-            let batches = SwanFlightSqlService::collect_record_batches(request).await?;
-            if batches.is_empty() {
-                // No batches sent, execute the statement with empty params
-                let session_clone = Arc::clone(&session);
-                tokio::task::spawn_blocking(move || {
-                    SwanFlightSqlService::execute_statement_batches(&sql, &[], &session_clone)
-                })
-                .await
-                .map_err(SwanFlightSqlService::status_from_join)?
-                .map_err(SwanFlightSqlService::status_from_error)?
-            } else {
-                let parts = table_ref.parts();
-
-                // Extract catalog and table name from the parsed reference
-                // Format: "catalog.table" or just "table" (uses default catalog)
-                let (catalog_name, table_name) =
-                    session.resolve_catalog_and_table(parts, service.registry.target_catalog());
-                let insert_columns = parsed.get_insert_columns();
-
-                info!(
-                    handle = %handle,
-                    table_name = %table_name,
-                    batch_count = batches.len(),
-                    total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>(),
-                    "using appender optimization for INSERT"
-                );
-
-                let session_clone = Arc::clone(&session);
-                tokio::task::spawn_blocking(move || {
-                    // Get the target table schema for validation and alignment
-                    let qualified_table = format!("{}.{}", catalog_name, table_name);
-                    let table_schema = Arc::new(session_clone.table_schema(&qualified_table)?);
-
-                    // Align batches if INSERT specifies column list
-                    // Example: "INSERT INTO t (col2, col1)" needs column reordering
-                    let batches_to_use = if let Some(cols) = insert_columns.as_ref() {
-                        batches
-                            .iter()
-                            .map(|batch| {
-                                align_batch_to_table_schema(
-                                    batch,
-                                    &table_schema,
-                                    Some(cols.as_slice()),
-                                )
-                            })
-                            .collect::<Result<Vec<_>, crate::error::ServerError>>()?
-                    } else {
-                        batches
-                    };
-
-                    // Use DuckDB appender API for efficient bulk insert
-                    let total_rows = session_clone
-                        .insert_with_appender(&catalog_name, &table_name, batches_to_use)
-                        .map_err(|e| {
-                            error!(
-                                %e,
-                                "appender insert failed sql {} for table {}.{}",
-                                sql,
-                                catalog_name,
-                                table_name
-                            );
-                            e
-                        })?;
-                    Ok::<_, crate::error::ServerError>(total_rows as i64)
-                })
-                .await
-                .map_err(SwanFlightSqlService::status_from_join)?
-                .map_err(SwanFlightSqlService::status_from_error)?
-            }
+                // Use DuckDB appender API for efficient bulk insert
+                let total_rows = session_clone
+                    .insert_with_appender(&catalog_name, &table_name, batches_to_use)
+                    .map_err(|e| {
+                        error!(
+                            %e,
+                            "appender insert failed sql {} for table {}.{}",
+                            sql,
+                            catalog_name,
+                            table_name
+                        );
+                        e
+                    })?;
+                Ok::<_, crate::error::ServerError>(total_rows as i64)
+            })
+            .await
+            .map_err(SwanFlightSqlService::status_from_join)?
+            .map_err(SwanFlightSqlService::status_from_error)?
         }
     } else {
         // Non-INSERT statements (UPDATE, DELETE, DDL, etc.)
@@ -496,9 +383,4 @@ pub(crate) async fn do_put_prepared_statement_update(
         "prepared statement update complete"
     );
     Ok(affected_rows)
-}
-
-fn is_duckling_queue_table(table_ref: &TableReference) -> bool {
-    let parts = table_ref.parts();
-    parts.len() == 2 && parts[0].eq_ignore_ascii_case("duckling_queue")
 }

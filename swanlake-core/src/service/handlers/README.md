@@ -18,7 +18,7 @@ CommandStatementQuery / CommandPreparedStatementQuery
 CommandStatementUpdate / CommandPreparedStatementUpdate
                 │
                 ▼
-            DoPut update (handles parameters, appender/duckling queue fast paths)
+            DoPut update (handles parameters, appender fast paths)
 ```
 
 ### Statement Handlers (`statement.rs`)
@@ -30,7 +30,7 @@ CommandStatementUpdate / CommandPreparedStatementUpdate
 - `do_action_create_prepared_statement`: Creates a prepared statement, infers whether it is a query, and caches schema when possible.
 - `get_flight_info_prepared_statement`/`do_get_prepared_statement`: Fetch schema and stream results for query prepared statements; execute updates/DDL via DoGet with affected-row metadata when a prepared statement does not return rows.
 - `do_put_prepared_statement_query`: Binds parameters for prepared statements (query or command) without executing them.
-- `do_put_prepared_statement_update`: Executes prepared statements that mutate data/schema, with optimized paths for inserts (duckling queue and regular tables) and fallback parameter batching for other updates/DDL.
+- `do_put_prepared_statement_update`: Executes prepared statements that mutate data/schema, with optimized paths for inserts and fallback parameter batching for other updates/DDL.
 - `do_action_close_prepared_statement`: Closes a prepared statement handle.
 
 ### Ticket Helpers (`ticket.rs`)

@@ -97,7 +97,7 @@ jobs:
           SWANLAKE_DUCKDB_UI_SERVER_ENABLED: true
 
       - name: Coveralls GitHub Action
-        uses: coverallsapp/github-action@v2.3.7
+        uses: coverallsapp/github-action@v2
 
   docker:
     runs-on: ubuntu-latest

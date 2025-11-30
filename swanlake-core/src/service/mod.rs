@@ -8,7 +8,6 @@ use tonic::{Request, Status};
 use tracing::{error, Span};
 use uuid::Uuid;
 
-use crate::dq::QueueRuntime;
 use crate::error::ServerError;
 use crate::session::{registry::SessionRegistry, Session, SessionId};
 
@@ -25,19 +24,11 @@ mod handlers;
 #[derive(Clone)]
 pub struct SwanFlightSqlService {
     registry: Arc<SessionRegistry>,
-    /// Holds the QueueRuntime to keep background queue management tasks (rotation, flushing, cleanup) alive.
-    #[allow(dead_code)]
-    dq_runtime: Option<Arc<QueueRuntime>>,
 }
 
 impl SwanFlightSqlService {
-    /// Creates a new SwanFlightSqlService, holding the QueueRuntime to ensure background
-    /// queue management tasks (rotation, flushing, cleanup) remain active.
-    pub fn new(registry: Arc<SessionRegistry>, dq_runtime: Option<Arc<QueueRuntime>>) -> Self {
-        Self {
-            registry,
-            dq_runtime,
-        }
+    pub fn new(registry: Arc<SessionRegistry>) -> Self {
+        Self { registry }
     }
 
     /// Extract session ID from tonic Request for session tracking (Phase 2)
@@ -112,18 +103,6 @@ impl SwanFlightSqlService {
             ServerError::UnsupportedParameter(param) => {
                 error!(param = %param, "unsupported parameter type");
                 Status::invalid_argument(format!("unsupported parameter type: {param}"))
-            }
-            ServerError::DucklingQueueDisabled => {
-                error!("duckling queue runtime is disabled");
-                Status::failed_precondition(
-                    "duckling queue runtime is disabled; set SWANLAKE_DUCKLING_QUEUE_ENABLED=true",
-                )
-            }
-            ServerError::DucklingQueueWriteOnly => {
-                error!("duckling queue tables are write-only");
-                Status::invalid_argument(
-                    "duckling queue tables are write-only; only INSERT INTO duckling_queue.* is allowed",
-                )
             }
             ServerError::Internal(msg) => {
                 error!(msg = %msg, "internal error");

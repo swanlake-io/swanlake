@@ -3,16 +3,13 @@
 //! This module provides lightweight SQL parsing to extract information
 //! needed for optimizations, such as the table name from INSERT statements.
 
-use std::ops::ControlFlow;
-
-use sqlparser::ast::{visit_relations, ObjectName, ObjectNamePart, Statement, TableObject};
+use sqlparser::ast::{ObjectName, Statement, TableObject};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
 /// Represents a parsed SQL statement with extracted metadata.
 ///
-/// This provides an object-oriented interface for working with parsed SQL,
-/// making it easier to extend for DQ statements and other use cases.
+/// This provides an object-oriented interface for working with parsed SQL
 pub struct ParsedStatement {
     statement: Statement,
 }
@@ -113,11 +110,6 @@ impl ParsedStatement {
         }
     }
 
-    /// Returns true if any relation in the statement references the duckling_queue schema.
-    pub fn references_duckling_queue_relation(&self) -> bool {
-        statement_references_duckling_queue(&self.statement)
-    }
-
     /// Returns true if INSERT uses plain VALUES and every value is a placeholder (e.g., ?, $1).
     ///
     /// Used to decide whether DoPut batches contain all data or whether server-side expressions/defaults
@@ -161,24 +153,6 @@ impl TableReference {
     }
 }
 
-fn statement_references_duckling_queue(statement: &Statement) -> bool {
-    let mut found = false;
-    let _ = visit_relations(statement, |relation| {
-        if relation
-            .0
-            .first()
-            .and_then(ObjectNamePart::as_ident)
-            .is_some_and(|ident| ident.value.eq_ignore_ascii_case("duckling_queue"))
-        {
-            found = true;
-            ControlFlow::Break(())
-        } else {
-            ControlFlow::Continue(())
-        }
-    });
-    found
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,15 +182,6 @@ mod tests {
         assert!(parsed.is_insert());
         let table_ref = parsed.get_insert_table().expect("should have table");
         assert_eq!(table_ref.parts(), &["public", "users"]);
-    }
-
-    #[test]
-    fn test_parsed_statement_duckling_queue() {
-        let sql = "INSERT INTO duckling_queue.events VALUES (1, 'test')";
-        let parsed = ParsedStatement::parse(sql).expect("should parse");
-        assert!(parsed.is_insert());
-        let table_ref = parsed.get_insert_table().expect("should have table");
-        assert_eq!(table_ref.parts(), &["duckling_queue", "events"]);
     }
 
     #[test]
@@ -271,26 +236,5 @@ mod tests {
         // Last statement is INSERT, so is_query should be false
         assert!(parsed.is_insert());
         assert!(!parsed.is_query());
-    }
-
-    #[test]
-    fn test_detects_duckling_queue_in_select() {
-        let sql = "SELECT * FROM duckling_queue.events";
-        let parsed = ParsedStatement::parse(sql).expect("should parse");
-        assert!(parsed.references_duckling_queue_relation());
-    }
-
-    #[test]
-    fn test_detects_duckling_queue_in_insert_source() {
-        let sql = "INSERT INTO analytics.events SELECT * FROM duckling_queue.buffer";
-        let parsed = ParsedStatement::parse(sql).expect("should parse");
-        assert!(parsed.references_duckling_queue_relation());
-    }
-
-    #[test]
-    fn test_duckling_queue_not_detected_in_literals() {
-        let sql = "SELECT 'duckling_queue' AS label";
-        let parsed = ParsedStatement::parse(sql).expect("should parse");
-        assert!(!parsed.references_duckling_queue_relation());
     }
 }

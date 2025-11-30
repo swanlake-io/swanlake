@@ -76,33 +76,6 @@ Configuration is loaded once at startup and reused for the lifetime of the proce
 
 See `src/lock/README.md` for detailed documentation on the distributed lock implementation.
 
-## Duckling Queue Buffering
-
-SwanLake’s Duckling Queue buffers `INSERT INTO duckling_queue.*` statements in memory per target
-table and flushes the accumulated batches into DuckLake/Postgres when thresholds are exceeded. These
-settings control when flushes happen and how aggressive the runtime should be.
-
-| Env Var | Description | Default |
-| --- | --- | --- |
-| `SWANLAKE_DUCKLING_QUEUE_BUFFER_MAX_ROWS` | Flush once a table buffers this many rows | `50_000` |
-| `SWANLAKE_DUCKLING_QUEUE_ENABLED` | Start the Duckling Queue runtime and intercept `INSERT INTO duckling_queue.*` statements | `false` |
-| `SWANLAKE_DUCKLING_QUEUE_ROTATE_SIZE_BYTES` | Flush when buffered bytes exceed this value | `100_000_000` |
-| `SWANLAKE_DUCKLING_QUEUE_ROTATE_INTERVAL_SECONDS` | Maximum age (seconds) to hold buffered data before the sweeper flushes it | `300` |
-| `SWANLAKE_DUCKLING_QUEUE_FLUSH_INTERVAL_SECONDS` | How often the sweeper checks for stale buffers | `60` |
-| `SWANLAKE_DUCKLING_QUEUE_MAX_PARALLEL_FLUSHES` | Concurrent flush workers | `2` |
-| `SWANLAKE_DUCKLING_QUEUE_TARGET_CATALOG` | Target catalog for flushed tables | `swanlake` |
-| `SWANLAKE_DUCKLING_QUEUE_ROOT` | Directory used to persist buffered batches so they survive crashes | `target/duckling_queue` |
-| `SWANLAKE_DUCKLING_QUEUE_DLQ_TARGET` | Optional destination (e.g. `r2://bucket/path`) to copy failed chunks instead of endlessly retrying | unset |
-
-Admin commands:
-
-- `PRAGMA duckling_queue.flush;` / `CALL duckling_queue_flush()` — force every buffer to flush
-  immediately.
-
-If the server logs that a flush failed, check DuckLake connectivity (the runtime retries and
-requeues the payload). When clients receive “duckling queue runtime is disabled…”, set
-`SWANLAKE_DUCKLING_QUEUE_ENABLED=true` and restart the service.
-
 ## Validation
 
 `ServerConfig::validate()` currently performs only lightweight checks; the remaining options are
