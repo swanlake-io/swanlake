@@ -15,12 +15,7 @@ mkdir -p "$TEST_DIR"
 export SWANLAKE_DUCKLAKE_INIT_SQL="ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '$TEST_DIR/swanlake_files', OVERRIDE_DATA_PATH true);"
 export RUST_LOG="${RUST_LOG:-info}"
 
-# Coverage configuration
-export CARGO_TARGET_DIR="$ROOT_DIR/target/llvm-cov-target"
-export CARGO_LLVM_COV_TARGET_DIR="$ROOT_DIR/target/llvm-cov-target"
-export LLVM_PROFILE_FILE="$ROOT_DIR/target/llvm-cov-target/swanlake-%p-%m.profraw"
-
-# Server configuration
+export CARGO_TARGET_DIR="$ROOT_DIR/target"
 export SERVER_BIN="$CARGO_TARGET_DIR/debug/swanlake"
 CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.toml}"
 ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
@@ -70,31 +65,23 @@ cleanup_server() {
 # Coverage Cleanup
 # ============================================================================
 
-if [[ "${SWANLAKE_FORCE_LLVM_COV_CLEAN:-0}" == "1" ]]; then
-  cargo llvm-cov clean --workspace
-else
-  COV_TARGET="$ROOT_DIR/target/llvm-cov-target"
-  if [[ -d "$COV_TARGET" ]]; then
-    find "$COV_TARGET" -name "*.profraw" -delete || true
-    find "$COV_TARGET" -name "*.profdata" -delete || true
-  fi
-fi
-
 # Export llvm-cov environment for coverage instrumentation
 source <(cargo llvm-cov show-env --export-prefix)
+
+cargo llvm-cov clean --workspace
 
 # ============================================================================
 # Build and Test
 # ============================================================================
 
 # Build with coverage
-cargo build --package swanlake-server --package swanlake-core --target-dir "$CARGO_TARGET_DIR"
+cargo build --package swanlake-server --package swanlake-core
 
 # Source DuckDB environment to set library paths
 source "$ROOT_DIR/swanlake-core/.duckdb/env.sh"
 
 # Run Rust unit tests under coverage instrumentation
-cargo test --package swanlake-server --package swanlake-core --target-dir "$CARGO_TARGET_DIR"
+cargo test --package swanlake-server --package swanlake-core
 
 # ============================================================================
 # SQL Tests
