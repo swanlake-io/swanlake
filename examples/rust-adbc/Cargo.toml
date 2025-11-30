@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-arrow-array = "57"
-arrow-schema = "57"
-anyhow = "1.0"
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+anyhow = { workspace = true }
 swanlake-client = { path = "../../swanlake-client" }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -8,14 +8,14 @@ name = "runner"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1.0"
-arrow-array = "57"
+anyhow = { workspace = true }
+arrow-array = { workspace = true }
 arrow-buffer = "57"
-arrow-schema = "57"
+arrow-schema = { workspace = true }
 arrow = { version = "57", features = ["prettyprint"] }
 chrono = "0.4"
 swanlake-client = { path = "../../swanlake-client" }
-tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "time"] }
-tracing = "0.1.43"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 hex = "0.4"

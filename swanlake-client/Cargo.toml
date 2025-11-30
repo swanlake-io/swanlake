@@ -12,9 +12,9 @@ categories = ["database", "api-bindings"]
 adbc_core = "0.21"
 adbc_driver_manager = "0.21"
 adbc-driver-flightsql = "0.1"
-anyhow = "1.0"
-arrow-array = "57"
-arrow-schema = "57"
+anyhow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
 arrow = { version = "57", features = ["prettyprint"] }
 
 # cli
