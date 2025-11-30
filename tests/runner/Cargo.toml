@@ -12,15 +12,9 @@ anyhow = "1.0"
 arrow-array = "56"
 arrow-buffer = "56"
 arrow-schema = "56"
-arrow-ipc = "56"
 arrow = { version = "56", features = ["prettyprint"] }
-async-trait = "0.1.83"
-adbc_core = "0.20.0"
-adbc_driver_manager = "0.20.0"
 chrono = "0.4"
 swanlake-client = { path = "../../swanlake-client" }
-sqllogictest = "0.28.4"
-thiserror = "2.0.6"
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }

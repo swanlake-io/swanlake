@@ -8,6 +8,5 @@ arrow-array = "56"
 arrow-schema = "56"
 anyhow = "1.0"
 swanlake-client = { path = "../../swanlake-client" }
-tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
