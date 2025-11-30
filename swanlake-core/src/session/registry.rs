@@ -36,7 +36,10 @@ struct RegistryInner {
 impl SessionRegistry {
     /// Create a new session registry
     #[instrument(skip(config, factory))]
-    pub fn new(config: &ServerConfig, factory: Arc<Mutex<EngineFactory>>) -> Result<Self, ServerError> {
+    pub fn new(
+        config: &ServerConfig,
+        factory: Arc<Mutex<EngineFactory>>,
+    ) -> Result<Self, ServerError> {
         let max_sessions = config.max_sessions.unwrap_or(100);
         let session_timeout = Duration::from_secs(config.session_timeout_seconds.unwrap_or(1800)); // 30min default
 
