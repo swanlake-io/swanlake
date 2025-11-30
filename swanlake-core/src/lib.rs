@@ -17,4 +17,3 @@ pub mod service;
 pub mod session;
 pub mod sql_parser;
 pub mod types;
-pub mod ui;

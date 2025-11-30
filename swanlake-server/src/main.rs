@@ -43,10 +43,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Optionally start the DuckDB UI server in the background.
-    let _ui_server = swanlake_core::ui::maybe_start_ui_server(&config, registry.engine_factory())
-        .context("failed to start DuckDB UI server")?;
-
     let flight_service = SwanFlightSqlService::new(registry);
 
     // Set up gRPC health service
