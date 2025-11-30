@@ -44,9 +44,9 @@ jobs:
             cargo-build-${{ runner.os }}-
 
       # temp fix "No space left on device (os error 28)"
-      - name: Clean workspace (build artifacts, caches, etc.)
-        run: |
-          rm -rf target
+      # - name: Clean workspace (build artifacts, caches, etc.)
+      #   run: |
+      #     rm -rf target
 
       - name: Setup Go
         uses: actions/setup-go@v6
