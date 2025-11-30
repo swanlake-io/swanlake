@@ -28,7 +28,6 @@ cargo run --bin swanlake-cli --features="cli"
 ## Architecture
 
 - **Arrow Flight SQL Server**: High-performance SQL interface over gRPC for efficient querying.
-- **Duckling Queue**: Staging layer for fast insertion of small files, ensuring crash-resilient buffering.
 - **DuckLake**: Extensions for datalake integrations, supporting scalable storage solutions.
 
 ## Use Cases

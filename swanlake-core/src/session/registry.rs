@@ -15,7 +15,6 @@ use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
 
 use crate::config::ServerConfig;
-use crate::dq::DqCoordinator;
 use crate::engine::EngineFactory;
 use crate::error::ServerError;
 use crate::session::id::SessionId;
@@ -28,22 +27,16 @@ pub struct SessionRegistry {
     factory: Arc<Mutex<EngineFactory>>,
     max_sessions: usize,
     session_timeout: Duration,
-    target_catalog: String,
 }
 
 struct RegistryInner {
     sessions: HashMap<SessionId, Arc<Session>>,
-    dq_coordinator: Option<Arc<DqCoordinator>>,
 }
 
 impl SessionRegistry {
     /// Create a new session registry
-    #[instrument(skip(config, factory, dq_coordinator))]
-    pub fn new(
-        config: &ServerConfig,
-        factory: Arc<Mutex<EngineFactory>>,
-        dq_coordinator: Option<Arc<DqCoordinator>>,
-    ) -> Result<Self, ServerError> {
+    #[instrument(skip(config, factory))]
+    pub fn new(config: &ServerConfig, factory: Arc<Mutex<EngineFactory>>) -> Result<Self, ServerError> {
         let max_sessions = config.max_sessions.unwrap_or(100);
         let session_timeout = Duration::from_secs(config.session_timeout_seconds.unwrap_or(1800)); // 30min default
 
@@ -56,21 +49,15 @@ impl SessionRegistry {
         Ok(Self {
             inner: Arc::new(RwLock::new(RegistryInner {
                 sessions: HashMap::new(),
-                dq_coordinator,
             })),
             factory,
             max_sessions,
             session_timeout,
-            target_catalog: config.duckling_queue_target_catalog.clone(),
         })
     }
 
     pub fn engine_factory(&self) -> Arc<Mutex<EngineFactory>> {
         self.factory.clone()
-    }
-
-    pub fn target_catalog(&self) -> &str {
-        &self.target_catalog
     }
 
     /// Clean up idle sessions that have exceeded the timeout
@@ -143,20 +130,7 @@ impl SessionRegistry {
         let connection = self.factory.lock().unwrap().create_connection()?;
 
         // Create session with the specified ID
-        let dq_coordinator = {
-            let inner = self.inner.read().expect("registry lock poisoned");
-            inner.dq_coordinator.clone()
-        };
-
-        let session = if let Some(dq_coord) = dq_coordinator {
-            Arc::new(Session::new_with_id_and_dq(
-                session_id.clone(),
-                connection,
-                dq_coord,
-            )?)
-        } else {
-            Arc::new(Session::new_with_id(session_id.clone(), connection))
-        };
+        let session = Arc::new(Session::new_with_id(session_id.clone(), connection));
 
         // Register session
         {

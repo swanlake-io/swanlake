@@ -4,7 +4,7 @@ Rust-based runner that drives the SwanLake Flight SQL endpoint and our Go-in-the
 
 ## What it Runs
 - **SQL scripts** in `tests/sql/*.test`: simple format (`statement ok/error` and `query <types|error>`). See `tests/sql/README.md` for details.
-- **Scenarios** in `tests/runner/src/scenarios`: Rust integration checks for duckling_queue, appender, prepared statements, etc.
+- **Scenarios** in `tests/runner/src/scenarios`: Rust integration checks for appender, prepared statements, etc.
 
 ## Usage
 ```bash

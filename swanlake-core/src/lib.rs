@@ -9,7 +9,6 @@
 // use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 pub mod config;
-pub mod dq;
 pub mod engine;
 pub mod error;
 #[cfg(feature = "distributed-locks")]

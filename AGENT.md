@@ -29,7 +29,6 @@ table covering defaults and descriptions. Quick reminders:
 - Host/port/pool sizes influence the Flight endpoint + DuckDB pools.
 - `ENABLE_WRITES`, `MAX_SESSIONS`, and `SESSION_TIMEOUT_SECONDS` gate write workloads and cleanup.
 - `DUCKLAKE_INIT_SQL` runs immediately after DuckDB boots (attach remote storage, etc.).
-- Duckling Queue knobs (`DUCKLING_QUEUE_*`) control staging paths plus rotation/flush behavior.
 
 Precedence: env > CLI `--config` > `config.toml` > `.env`.
 
@@ -40,7 +39,6 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 - **Tickets**: `TicketStatementQuery` payloads carry `{version, kind, returns_rows, statement_handle? , fallback_sql?}` so DoGet knows whether to stream rows or execute a command.
 - **Ephemeral handles**: `get_flight_info_statement` registers ad-hoc queries with ephemeral handles; `do_get_statement` executes and auto-closes them.
 - **Metadata**: Responses attach `x-swanlake-total-rows` / `x-swanlake-total-bytes` (queries) and `x-swanlake-affected-rows` (commands) when available.
-- **Duckling Queue**: inserts via SQL or Arrow batches; optimized paths live in `do_put_prepared_statement_update`.
 - See `src/service/handlers/README.md` for handler entrypoints and flow, and `tests/sql/README.md` for the SQL test format.
 
 ## Testing & Tooling

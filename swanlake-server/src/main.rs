@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use swanlake_core::config::ServerConfig;
 use swanlake_core::engine::EngineFactory;
 use swanlake_core::service::SwanFlightSqlService;
@@ -24,25 +24,10 @@ async fn main() -> Result<()> {
         EngineFactory::new(&config).context("failed to initialize engine factory")?,
     ));
 
-    let (dq_coordinator, dq_runtime) = if config.duckling_queue_enabled {
-        let dq_settings = swanlake_core::dq::config::Settings::from_config(&config);
-        let (coordinator, runtime) =
-            swanlake_core::dq::QueueRuntime::bootstrap(factory.clone(), dq_settings)
-                .map_err(|err| anyhow!("failed to start duckling queue runtime: {err}"))?;
-        (Some(coordinator), Some(runtime))
-    } else {
-        info!("duckling queue disabled; skipping runtime bootstrap");
-        (None, None)
-    };
-
     // Create session registry (Phase 2: connection-based session persistence)
     let registry = Arc::new(
-        swanlake_core::session::registry::SessionRegistry::new(
-            &config,
-            factory.clone(),
-            dq_coordinator.clone(),
-        )
-        .context("failed to initialize session registry")?,
+        swanlake_core::session::registry::SessionRegistry::new(&config, factory.clone())
+            .context("failed to initialize session registry")?,
     );
 
     // Spawn periodic session cleanup task
@@ -62,8 +47,7 @@ async fn main() -> Result<()> {
     let _ui_server = swanlake_core::ui::maybe_start_ui_server(&config, registry.engine_factory())
         .context("failed to start DuckDB UI server")?;
 
-    // Pass dq_runtime to the service to keep the QueueRuntime alive throughout the server's lifetime.
-    let flight_service = SwanFlightSqlService::new(registry, dq_runtime);
+    let flight_service = SwanFlightSqlService::new(registry);
 
     // Set up gRPC health service
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -117,7 +101,6 @@ async fn main() -> Result<()> {
         .context("Flight SQL server terminated unexpectedly")?;
 
     info!("server shutdown complete");
-    // Locks held by dq_manager are released here as it goes out of scope
     Ok(())
 }
 
