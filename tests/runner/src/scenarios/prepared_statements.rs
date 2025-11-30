@@ -1,16 +1,15 @@
 use std::sync::Arc;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, RecordBatch, StringArray, Time32MillisecondArray,
-    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    IntervalMonthDayNanoArray, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
+    Time32MillisecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-use swanlake_client::arrow::{value_as_bool, value_as_f64, value_as_i64, value_as_string};
 use swanlake_client::{FlightSQLClient, QueryResult};
 
 use crate::CliArgs;
@@ -45,7 +44,7 @@ impl<'a> PreparedStatementTester<'a> {
     fn test_update_with_parameters(&mut self) -> Result<()> {
         self.drop_table_if_exists(PREPARED_UPDATE_TABLE)?;
         let test_result = (|| -> Result<()> {
-            self.execute_update(
+            self.update(
                 r#"
                 CREATE TABLE prepared_update_test (
                     id INTEGER PRIMARY KEY,
@@ -74,7 +73,7 @@ impl<'a> PreparedStatementTester<'a> {
                 )
                 "#,
             )?;
-            self.execute_update(
+            self.update(
                 r#"
                 INSERT INTO prepared_update_test VALUES (
                     1,
@@ -98,7 +97,7 @@ impl<'a> PreparedStatementTester<'a> {
             )?;
 
             let update_params = build_update_parameter_batch()?;
-            self.client.execute_batch_update(
+            self.client.update_with_record_batch(
                 r#"
                 UPDATE prepared_update_test SET
                     int8_col = ?,
@@ -136,7 +135,7 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn verify_update_results(&mut self) -> Result<()> {
-        let result = self.client.execute(
+        let result = self.client.query(
             r#"
             SELECT CAST(int8_col AS INTEGER) AS int8_col,
                    int16_col,
@@ -191,7 +190,7 @@ impl<'a> PreparedStatementTester<'a> {
     fn test_delete_with_parameters(&mut self) -> Result<()> {
         self.drop_table_if_exists(PREPARED_DELETE_TABLE)?;
         let test_result = (|| -> Result<()> {
-            self.execute_update(
+            self.update(
                 r#"
                 CREATE TABLE prepared_delete_test (
                     id INTEGER,
@@ -202,7 +201,7 @@ impl<'a> PreparedStatementTester<'a> {
                 )
                 "#,
             )?;
-            self.execute_update(
+            self.update(
                 r#"
                 INSERT INTO prepared_delete_test VALUES
                     (1, 'A', 100, DATE '2024-01-01', true),
@@ -212,19 +211,19 @@ impl<'a> PreparedStatementTester<'a> {
                 "#,
             )?;
 
-            self.client.execute_batch_update(
+            self.client.update_with_record_batch(
                 "DELETE FROM prepared_delete_test WHERE category = ?",
                 build_delete_string_params()?,
             )?;
             self.assert_remaining_ids(&[2, 4])?;
 
-            self.client.execute_batch_update(
+            self.client.update_with_record_batch(
                 "DELETE FROM prepared_delete_test WHERE value > ?",
                 build_delete_int_params()?,
             )?;
             self.assert_remaining_ids(&[2])?;
 
-            self.client.execute_batch_update(
+            self.client.update_with_record_batch(
                 "DELETE FROM prepared_delete_test WHERE is_active = ?",
                 build_delete_bool_params()?,
             )?;
@@ -238,7 +237,7 @@ impl<'a> PreparedStatementTester<'a> {
     fn test_select_with_parameters(&mut self) -> Result<()> {
         self.drop_table_if_exists(PREPARED_SELECT_TABLE)?;
         let test_result = (|| -> Result<()> {
-            self.execute_update(
+            self.update(
                 r#"
                 CREATE TABLE prepared_select_test (
                     id INTEGER,
@@ -249,7 +248,7 @@ impl<'a> PreparedStatementTester<'a> {
                 )
                 "#,
             )?;
-            self.execute_update(
+            self.update(
                 r#"
                 INSERT INTO prepared_select_test VALUES
                     (1, 'Alice', 95.5, TIMESTAMP '2024-01-01 10:00:00', 'meta1'::BLOB),
@@ -259,9 +258,15 @@ impl<'a> PreparedStatementTester<'a> {
                 "#,
             )?;
 
-            let result = self.client.execute_with_params(
+            let param_schema =
+                Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, false)]));
+            let params = RecordBatch::try_new(
+                param_schema,
+                vec![Arc::new(StringArray::from(vec!["Charlie"])) as ArrayRef],
+            )?;
+            let result = self.client.query_with_param(
                 "SELECT score, metadata FROM prepared_select_test WHERE name = ?",
-                vec!["Charlie".to_string()],
+                params,
             )?;
             self.verify_select_result(result)?;
             Ok(())
@@ -274,7 +279,7 @@ impl<'a> PreparedStatementTester<'a> {
         const TABLE: &str = "swanlake.prepared_alignment_test";
         self.drop_table_if_exists(TABLE)?;
         let test_result = (|| -> Result<()> {
-            self.execute_update(
+            self.update(
                 "CREATE TABLE IF NOT EXISTS swanlake.prepared_alignment_test (id INTEGER, name VARCHAR, active BOOLEAN)",
             )?;
 
@@ -290,12 +295,12 @@ impl<'a> PreparedStatementTester<'a> {
                 ],
             )?;
 
-            self.client.execute_batch_update(
+            self.client.update_with_record_batch(
                 "INSERT INTO swanlake.prepared_alignment_test (name, id) VALUES (?, ?)",
                 batch,
             )?;
 
-            let result = self.client.execute(
+            let result = self.client.query(
                 "SELECT id, name, active FROM swanlake.prepared_alignment_test ORDER BY id",
             )?;
             let batch = result
@@ -343,10 +348,8 @@ impl<'a> PreparedStatementTester<'a> {
         self.drop_table_if_exists(TABLE)?;
         let test_result = (|| -> Result<()> {
             // Establish schema in swanlake and switch session to that catalog.
-            self.execute_update(
-                "CREATE TABLE swanlake.current_catalog_test (id INTEGER, name VARCHAR)",
-            )?;
-            self.execute_update("USE swanlake")?;
+            self.update("CREATE TABLE swanlake.current_catalog_test (id INTEGER, name VARCHAR)")?;
+            self.update("USE swanlake")?;
 
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
@@ -361,7 +364,7 @@ impl<'a> PreparedStatementTester<'a> {
             )?;
 
             // Unqualified table name should resolve to the current catalog, not default fallback.
-            self.client.execute_batch_update(
+            self.client.update_with_record_batch(
                 "INSERT INTO current_catalog_test (id, name) VALUES (?, ?)",
                 batch,
             )?;
@@ -404,9 +407,7 @@ impl<'a> PreparedStatementTester<'a> {
         const TABLE: &str = "swanlake.default_catalog_test";
         self.drop_table_if_exists(TABLE)?;
         let test_result = (|| -> Result<()> {
-            self.execute_update(
-                "CREATE TABLE swanlake.default_catalog_test (id INTEGER, name VARCHAR)",
-            )?;
+            self.update("CREATE TABLE swanlake.default_catalog_test (id INTEGER, name VARCHAR)")?;
 
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
@@ -421,7 +422,7 @@ impl<'a> PreparedStatementTester<'a> {
             )?;
 
             // No USE issued; unqualified insert should pick configured target catalog.
-            self.client.execute_batch_update(
+            self.client.update_with_record_batch(
                 "INSERT INTO default_catalog_test (id, name) VALUES (?, ?)",
                 batch,
             )?;
@@ -466,13 +467,13 @@ impl<'a> PreparedStatementTester<'a> {
             .batches
             .first()
             .context("expected result batch for prepared_select_test lookup")?;
-        let score = value_as_f64(batch.column(0).as_ref(), 0)?;
+        let score = read_f64(batch.column(0).as_ref(), 0)?;
         ensure!(
             (score - 92.1).abs() < 1e-6,
             "expected score 92.1, got {}",
             score
         );
-        let metadata = value_as_string(batch.column(1).as_ref(), 0)?;
+        let metadata = read_string(batch.column(1).as_ref(), 0)?;
         ensure!(
             metadata == "meta3",
             "expected metadata 'meta3', got '{}'",
@@ -493,12 +494,12 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn collect_i64_column(&mut self, sql: &str) -> Result<Vec<i64>> {
-        let result = self.client.execute(sql)?;
+        let result = self.client.query(sql)?;
         let mut values = Vec::new();
         for batch in result.batches {
             let column = batch.column(0);
             for row_idx in 0..batch.num_rows() {
-                values.push(value_as_i64(column.as_ref(), row_idx)?);
+                values.push(read_i64(column.as_ref(), row_idx)?);
             }
         }
         Ok(values)
@@ -511,7 +512,7 @@ impl<'a> PreparedStatementTester<'a> {
         expected: i64,
         label: &str,
     ) -> Result<()> {
-        let actual = value_as_i64(batch.column(column_idx).as_ref(), 0)?;
+        let actual = read_i64(batch.column(column_idx).as_ref(), 0)?;
         ensure!(
             actual == expected,
             "expected {label} = {expected}, got {actual}"
@@ -526,7 +527,7 @@ impl<'a> PreparedStatementTester<'a> {
         expected: f64,
         label: &str,
     ) -> Result<()> {
-        let actual = value_as_f64(batch.column(column_idx).as_ref(), 0)?;
+        let actual = read_f64(batch.column(column_idx).as_ref(), 0)?;
         ensure!(
             (actual - expected).abs() < 1e-6,
             "expected {label} ≈ {expected}, got {actual}"
@@ -541,7 +542,7 @@ impl<'a> PreparedStatementTester<'a> {
         expected: bool,
         label: &str,
     ) -> Result<()> {
-        let actual = value_as_bool(batch.column(column_idx).as_ref(), 0)?;
+        let actual = read_bool(batch.column(column_idx).as_ref(), 0)?;
         ensure!(
             actual == expected,
             "expected {label} = {expected}, got {actual}"
@@ -556,7 +557,7 @@ impl<'a> PreparedStatementTester<'a> {
         expected: &str,
         label: &str,
     ) -> Result<()> {
-        let actual = value_as_string(batch.column(column_idx).as_ref(), 0)?;
+        let actual = read_string(batch.column(column_idx).as_ref(), 0)?;
         ensure!(
             actual == expected,
             "expected {label} = '{expected}', got '{actual}'"
@@ -564,14 +565,14 @@ impl<'a> PreparedStatementTester<'a> {
         Ok(())
     }
 
-    fn execute_update(&mut self, sql: &str) -> Result<()> {
-        let _ = self.client.execute_update(sql)?;
+    fn update(&mut self, sql: &str) -> Result<()> {
+        let _ = self.client.update(sql)?;
         Ok(())
     }
 
     fn drop_table_if_exists(&mut self, table: &str) -> Result<()> {
         let drop_sql = format!("DROP TABLE IF EXISTS {table}");
-        let _ = self.client.execute_update(&drop_sql)?;
+        let _ = self.client.update(&drop_sql)?;
         Ok(())
     }
 
@@ -582,6 +583,98 @@ impl<'a> PreparedStatementTester<'a> {
             (Err(err), _) => Err(err),
             (Ok(()), Err(drop_err)) => Err(drop_err),
         }
+    }
+}
+
+fn read_i64(column: &dyn Array, idx: usize) -> Result<i64> {
+    if column.is_null(idx) {
+        return Err(anyhow!("value is NULL"));
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<Int64Array>() {
+        return Ok(arr.value(idx));
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<Int32Array>() {
+        return Ok(arr.value(idx) as i64);
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<Int16Array>() {
+        return Ok(arr.value(idx) as i64);
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<Int8Array>() {
+        return Ok(arr.value(idx) as i64);
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<UInt64Array>() {
+        return Ok(arr.value(idx) as i64);
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<UInt32Array>() {
+        return Ok(arr.value(idx) as i64);
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<UInt16Array>() {
+        return Ok(arr.value(idx) as i64);
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<UInt8Array>() {
+        return Ok(arr.value(idx) as i64);
+    }
+    Err(anyhow!(
+        "unsupported column type {} for integer projection",
+        column.data_type()
+    ))
+}
+
+fn read_f64(column: &dyn Array, idx: usize) -> Result<f64> {
+    if column.is_null(idx) {
+        return Err(anyhow!("value is NULL"));
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<Float64Array>() {
+        return Ok(arr.value(idx));
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<Float32Array>() {
+        return Ok(arr.value(idx) as f64);
+    }
+    Err(anyhow!(
+        "unsupported column type {} for float projection",
+        column.data_type()
+    ))
+}
+
+fn read_bool(column: &dyn Array, idx: usize) -> Result<bool> {
+    if column.is_null(idx) {
+        return Err(anyhow!("value is NULL"));
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<BooleanArray>() {
+        return Ok(arr.value(idx));
+    }
+    Err(anyhow!(
+        "unsupported column type {} for boolean projection",
+        column.data_type()
+    ))
+}
+
+fn read_string(column: &dyn Array, idx: usize) -> Result<String> {
+    if column.is_null(idx) {
+        return Err(anyhow!("value is NULL"));
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<StringArray>() {
+        return Ok(arr.value(idx).to_string());
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<LargeStringArray>() {
+        return Ok(arr.value(idx).to_string());
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<BinaryArray>() {
+        return Ok(binary_bytes_to_string(arr.value(idx)));
+    }
+    if let Some(arr) = column.as_any().downcast_ref::<LargeBinaryArray>() {
+        return Ok(binary_bytes_to_string(arr.value(idx)));
+    }
+    Err(anyhow!(
+        "unsupported column type {} for string projection",
+        column.data_type()
+    ))
+}
+
+fn binary_bytes_to_string(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => format!("{:?}", bytes),
     }
 }
 

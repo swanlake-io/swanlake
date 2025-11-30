@@ -15,6 +15,7 @@ pub async fn run_execute_query_commands(args: &CliArgs) -> Result<()> {
     Ok(())
 }
 
+// test always use execute() to run commands
 fn exercise_commands_via_execute(args: &CliArgs) -> Result<()> {
     let mut client = FlightSQLClient::connect(&args.endpoint)
         .context("failed to connect via FlightSQLClient")?;

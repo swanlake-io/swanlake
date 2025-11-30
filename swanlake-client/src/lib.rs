@@ -15,7 +15,6 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
-pub mod arrow;
 pub mod client;
 
 /// A Flight SQL client for connecting to SwanLake servers.

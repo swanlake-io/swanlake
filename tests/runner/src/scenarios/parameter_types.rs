@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use arrow_array::{
-    ArrayRef, Date32Array, Date64Array, Int32Array, IntervalDayTimeArray,
+    ArrayRef, Date32Array, Date64Array, Int32Array, Int64Array, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, RecordBatch, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
@@ -17,10 +17,10 @@ use swanlake_client::FlightSQLClient;
 pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     let endpoint = &args.endpoint;
     let mut client = FlightSQLClient::connect(endpoint)?;
-    client.execute_update("use swanlake")?;
+    client.update("use swanlake")?;
 
     // Create test table with various supported types
-    client.execute_update(
+    client.update(
         r#"
         CREATE TABLE IF NOT EXISTS parameter_types_test (
             id INTEGER,
@@ -42,23 +42,23 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     )?;
 
     // Clear table
-    client.execute_update("DELETE FROM parameter_types_test")?;
+    client.update("DELETE FROM parameter_types_test")?;
 
     // Insert row via prepared statement to exercise Arrow->DuckDB conversions
     let params = build_parameter_batch()?;
-    client.execute_batch_update(
+    client.update_with_record_batch(
         "INSERT INTO parameter_types_test VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params,
     )?;
 
     // Verify insertion
-    let count = client.query_scalar_i64("SELECT COUNT(*) FROM parameter_types_test")?;
+    let count = query_scalar_i64(&mut client, "SELECT COUNT(*) FROM parameter_types_test")?;
     if count != 1 {
         return Err(anyhow!("Expected 1 row, got {}", count));
     }
 
     // Query back and verify values (basic check for non-null)
-    let id = client.query_scalar_i64("SELECT id FROM parameter_types_test")?;
+    let id = query_scalar_i64(&mut client, "SELECT id FROM parameter_types_test")?;
     if id != 1 {
         return Err(anyhow!("Expected id 1, got {}", id));
     }
@@ -81,19 +81,47 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     ];
 
     for col in columns {
-        let col_count = client.query_scalar_i64(&format!(
-            "SELECT COUNT({}) FROM parameter_types_test WHERE {} IS NOT NULL",
-            col, col
-        ))?;
+        let col_count = query_scalar_i64(
+            &mut client,
+            &format!(
+                "SELECT COUNT({}) FROM parameter_types_test WHERE {} IS NOT NULL",
+                col, col
+            ),
+        )?;
         if col_count != 1 {
             return Err(anyhow!("{} column not inserted correctly", col));
         }
     }
 
     // Clean up
-    client.execute_update("DROP TABLE parameter_types_test")?;
+    client.update("DROP TABLE parameter_types_test")?;
 
     Ok(())
+}
+
+fn query_scalar_i64(client: &mut FlightSQLClient, sql: &str) -> Result<i64> {
+    let result = client.query(sql)?;
+    let batch = result
+        .batches
+        .first()
+        .ok_or_else(|| anyhow!("query returned no rows"))?;
+    if batch.num_columns() == 0 || batch.num_rows() == 0 {
+        return Err(anyhow!("query returned empty result"));
+    }
+    let column = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .map(|arr| arr.value(0) as i64)
+        .or_else(|| {
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(|arr| arr.value(0))
+        })
+        .ok_or_else(|| anyhow!("expected integer column in scalar query"))?;
+    Ok(column)
 }
 
 fn build_parameter_batch() -> Result<RecordBatch> {

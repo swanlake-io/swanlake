@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::arrow::{value_as_bool, value_as_f64, value_as_i64, value_as_string};
 use adbc_core::{
     options::{AdbcVersion, OptionDatabase, OptionValue},
     Connection, Database, Driver, Statement,
@@ -9,8 +8,8 @@ use adbc_core::{
 use adbc_driver_flightsql::DRIVER_PATH;
 use adbc_driver_manager::{ManagedConnection, ManagedDriver};
 use anyhow::{anyhow, Context, Result};
-use arrow_array::{RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow_array::RecordBatch;
+use arrow_schema::Schema;
 
 struct CachedDriver {
     driver: Mutex<ManagedDriver>,
@@ -174,7 +173,7 @@ impl FlightSQLClient {
     }
 
     /// Execute a query and return results. Use when you expect rows.
-    pub fn execute_query(&mut self, sql: &str) -> Result<QueryResult> {
+    pub fn query(&mut self, sql: &str) -> Result<QueryResult> {
         let mut stmt = self.conn.new_statement()?;
         stmt.set_sql_query(sql)?;
 
@@ -186,49 +185,31 @@ impl FlightSQLClient {
         Ok(QueryResult::new(batches))
     }
 
-    /// Convenience wrapper that always calls `execute_query`. The server
-    /// accepts commands via ExecuteQuery, so callers that are unsure can use
-    /// this method.
+    /// Convenience wrapper that always calls `query`. The server accepts
+    /// commands via ExecuteQuery, so callers that are unsure can use this
+    /// method.
     pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
-        self.execute_query(sql)
+        self.query(sql)
     }
 
     /// Execute an update/DDL statement (INSERT, UPDATE, DELETE, CREATE, etc.).
-    pub fn execute_update(&mut self, sql: &str) -> Result<UpdateResult> {
+    pub fn update(&mut self, sql: &str) -> Result<UpdateResult> {
         let mut stmt = self.conn.new_statement()?;
         stmt.set_sql_query(sql)?;
         let rows_affected = stmt.execute_update()?;
         Ok(UpdateResult { rows_affected })
     }
 
-    /// Execute a query with string parameters using prepared statements.
+    /// Execute a query with parameters using a prepared statement.
     ///
-    /// Binds the parameters as a single column of strings.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let params = vec!["value1".to_string(), "value2".to_string()];
-    /// let result = client.execute_with_params("SELECT * FROM table WHERE col = ?", params)?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn execute_with_params(&mut self, sql: &str, params: Vec<String>) -> Result<QueryResult> {
+    /// The parameters are provided as a `RecordBatch`, allowing callers to bind
+    /// typed values directly.
+    pub fn query_with_param(&mut self, sql: &str, params: RecordBatch) -> Result<QueryResult> {
         let mut stmt = self.conn.new_statement()?;
         stmt.set_sql_query(sql)?;
         stmt.prepare()?;
 
-        if !params.is_empty() {
-            let schema = Arc::new(Schema::new(vec![Field::new(
-                "param",
-                DataType::Utf8,
-                false,
-            )]));
-            let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(params))])?;
-            stmt.bind(batch)?;
-        }
+        stmt.bind(params)?;
 
         let reader = stmt.execute()?;
         let mut batches = Vec::new();
@@ -239,25 +220,12 @@ impl FlightSQLClient {
         Ok(QueryResult::new(batches))
     }
 
-    /// Execute an update with a record batch for batch inserts.
-    ///
-    /// Useful for bulk operations with Arrow data.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    /// use arrow_array::{Int64Array, RecordBatch};
-    /// use arrow_schema::{DataType, Field, Schema};
-    /// use std::sync::Arc;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-    /// let batch = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![1, 2]))])?;
-    /// let result = client.execute_batch_update("INSERT INTO table VALUES (?)", batch)?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn execute_batch_update(&mut self, sql: &str, batch: RecordBatch) -> Result<UpdateResult> {
+    /// Execute an update with a record batch for batch inserts or parameterized DML.
+    pub fn update_with_record_batch(
+        &mut self,
+        sql: &str,
+        batch: RecordBatch,
+    ) -> Result<UpdateResult> {
         let mut stmt = self.conn.new_statement()?;
         stmt.set_sql_query(sql)?;
         stmt.prepare()?;
@@ -271,110 +239,6 @@ impl FlightSQLClient {
     /// Use this for advanced operations not covered by the high-level API.
     pub fn connection(&mut self) -> &mut ManagedConnection {
         &mut self.conn
-    }
-
-    /// Execute a query that returns a single i64 value.
-    ///
-    /// Useful for COUNT(*) or similar scalar queries.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let count = client.query_scalar_i64("SELECT COUNT(*) FROM users")?;
-    /// println!("User count: {}", count);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn query_scalar_i64(&mut self, sql: &str) -> Result<i64> {
-        let batches = self.execute_query(sql)?.batches;
-        let batch = batches
-            .first()
-            .ok_or_else(|| anyhow!("query returned no rows"))?;
-        if batch.num_rows() == 0 || batch.num_columns() == 0 {
-            return Err(anyhow!("query returned empty result"));
-        }
-        let column = batch.column(0);
-        value_as_i64(column.as_ref(), 0)
-    }
-
-    /// Execute a query that returns a single f64 value.
-    ///
-    /// Useful for scalar float queries.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let value = client.query_scalar_f64("SELECT AVG(price) FROM products")?;
-    /// println!("Average price: {}", value);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn query_scalar_f64(&mut self, sql: &str) -> Result<f64> {
-        let batches = self.execute_query(sql)?.batches;
-        let batch = batches
-            .first()
-            .ok_or_else(|| anyhow!("query returned no rows"))?;
-        if batch.num_rows() == 0 || batch.num_columns() == 0 {
-            return Err(anyhow!("query returned empty result"));
-        }
-        let column = batch.column(0);
-        value_as_f64(column.as_ref(), 0)
-    }
-
-    /// Execute a query that returns a single bool value.
-    ///
-    /// Useful for scalar boolean queries.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let exists = client.query_scalar_bool("SELECT EXISTS(SELECT 1 FROM users WHERE id = 1)")?;
-    /// println!("User exists: {}", exists);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn query_scalar_bool(&mut self, sql: &str) -> Result<bool> {
-        let batches = self.execute_query(sql)?.batches;
-        let batch = batches
-            .first()
-            .ok_or_else(|| anyhow!("query returned no rows"))?;
-        if batch.num_rows() == 0 || batch.num_columns() == 0 {
-            return Err(anyhow!("query returned empty result"));
-        }
-        let column = batch.column(0);
-        value_as_bool(column.as_ref(), 0)
-    }
-
-    /// Execute a query that returns a single string value.
-    ///
-    /// Useful for scalar string queries.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
-    ///
-    /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
-    /// let name = client.query_scalar_string("SELECT name FROM users WHERE id = 1")?;
-    /// println!("User name: {}", name);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn query_scalar_string(&mut self, sql: &str) -> Result<String> {
-        let batches = self.execute_query(sql)?.batches;
-        let batch = batches
-            .first()
-            .ok_or_else(|| anyhow!("query returned no rows"))?;
-        if batch.num_rows() == 0 || batch.num_columns() == 0 {
-            return Err(anyhow!("query returned empty result"));
-        }
-        let column = batch.column(0);
-        value_as_string(column.as_ref(), 0)
     }
 }
 

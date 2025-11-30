@@ -1,6 +1,7 @@
 //! SwanLake CLI - Interactive SQL client for SwanLake Flight SQL servers
 
 use anyhow::{Context, Result};
+use arrow::util::display::array_value_to_string;
 use arrow_array::{Array, RecordBatch};
 use clap::Parser;
 use comfy_table::{
@@ -10,7 +11,6 @@ use comfy_table::{
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::time::Instant;
-use swanlake_client::arrow::array_value_to_string;
 use swanlake_client::FlightSQLClient;
 
 /// SwanLake CLI - Interactive SQL client
@@ -163,7 +163,7 @@ fn execute_and_display(client: &mut FlightSQLClient, query: &str) -> Result<()> 
             elapsed.as_secs_f64()
         );
     } else {
-        let result = client.execute_update(query)?;
+        let result = client.update(query)?;
         let elapsed = start.elapsed();
 
         if let Some(rows) = result.rows_affected {
@@ -246,5 +246,5 @@ fn display_results(batches: &[RecordBatch]) -> Result<()> {
 }
 
 fn format_cell_value(column: &dyn Array, row_idx: usize) -> Result<String> {
-    array_value_to_string(column, row_idx)
+    array_value_to_string(column, row_idx).map_err(Into::into)
 }

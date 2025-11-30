@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS place (
 )"#;
 
 fn execute_statement(client: &mut FlightSQLClient, sql: &str) -> Result<()> {
-    client.execute_update(sql)?;
+    client.update(sql)?;
     Ok(())
 }
 
@@ -193,7 +193,7 @@ fn insert_people(client: &mut FlightSQLClient, people: Vec<Person>) -> Result<()
             std::sync::Arc::new(StringArray::from(emails)),
         ],
     )?;
-    client.execute_batch_update(
+    client.update_with_record_batch(
         "INSERT INTO person (first_name, last_name, email) VALUES (?, ?, ?)",
         batch,
     )?;
@@ -221,7 +221,7 @@ fn insert_places(client: &mut FlightSQLClient, places: Vec<Place>) -> Result<()>
             std::sync::Arc::new(Int32Array::from(telcodes)),
         ],
     )?;
-    client.execute_batch_update(
+    client.update_with_record_batch(
         "INSERT INTO place (country, city, telcode) VALUES (?, ?, ?)",
         batch,
     )?;
@@ -234,9 +234,16 @@ fn select_people(
     params: Vec<String>,
 ) -> Result<Vec<Person>> {
     let result = if params.is_empty() {
-        client.execute(sql)?
+        client.query(sql)?
     } else {
-        client.execute_with_params(sql, params)?
+        let schema = std::sync::Arc::new(Schema::new(vec![Field::new(
+            "param",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema, vec![std::sync::Arc::new(StringArray::from(params))])?;
+        client.query_with_param(sql, batch)?
     };
     let mut people = Vec::new();
     for batch in &result.batches {
@@ -267,7 +274,7 @@ fn select_people(
 }
 
 fn select_places(client: &mut FlightSQLClient, sql: &str) -> Result<Vec<Place>> {
-    let result = client.execute(sql)?;
+    let result = client.query(sql)?;
     let mut places = Vec::new();
     for batch in &result.batches {
         let countries = batch
@@ -301,7 +308,7 @@ fn select_places(client: &mut FlightSQLClient, sql: &str) -> Result<Vec<Place>> 
 }
 
 fn iterate_places(client: &mut FlightSQLClient) -> Result<()> {
-    let result = client.execute("SELECT * FROM place")?;
+    let result = client.query("SELECT * FROM place")?;
     for batch in &result.batches {
         let countries = batch
             .column(0)

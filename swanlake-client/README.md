@@ -21,11 +21,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
 
     // Execute a query
-    let result = client.execute("SELECT 1 as col")?;
+    let result = client.query("SELECT 1 as col")?;
     println!("Total rows: {}", result.total_rows);
 
     // Execute an update
-    let update_result = client.execute_update("CREATE TABLE test (id INTEGER)")?;
+    let update_result = client.update("CREATE TABLE test (id INTEGER)")?;
     println!("Rows affected: {:?}", update_result.rows_affected);
 
     Ok(())

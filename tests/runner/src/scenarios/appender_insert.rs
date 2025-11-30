@@ -1,6 +1,6 @@
 use crate::CliArgs;
 use anyhow::{bail, Context, Result};
-use arrow_array::{Int32Array, RecordBatch, StringArray, UInt64Array};
+use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use std::sync::Arc;
 use swanlake_client::FlightSQLClient;
@@ -11,7 +11,7 @@ pub async fn run(args: &CliArgs) -> Result<()> {
 
     let mut client = FlightSQLClient::connect(&args.endpoint)
         .context("failed to connect to FlightSQL server")?;
-    client.execute_update("use swanlake")?;
+    client.update("use swanlake")?;
 
     basic_appender_insert(&mut client)?;
     column_order_with_quoted_table(&mut client)?;
@@ -22,8 +22,8 @@ pub async fn run(args: &CliArgs) -> Result<()> {
 }
 
 fn basic_appender_insert(client: &mut FlightSQLClient) -> Result<()> {
-    client.execute_update("DROP TABLE IF EXISTS appender_test")?;
-    client.execute_update("CREATE TABLE appender_test (id INT, name VARCHAR)")?;
+    client.update("DROP TABLE IF EXISTS appender_test")?;
+    client.update("CREATE TABLE appender_test (id INT, name VARCHAR)")?;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
@@ -35,16 +35,16 @@ fn basic_appender_insert(client: &mut FlightSQLClient) -> Result<()> {
 
     let batch = RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(name_array)])?;
 
-    client.execute_batch_update("INSERT INTO appender_test (id, name) VALUES (?, ?)", batch)?;
+    client.update_with_record_batch("INSERT INTO appender_test (id, name) VALUES (?, ?)", batch)?;
 
     assert_row_count(client, "SELECT COUNT(*) FROM appender_test", 5)?;
-    client.execute_update("DROP TABLE appender_test")?;
+    client.update("DROP TABLE appender_test")?;
     Ok(())
 }
 
 fn column_order_with_quoted_table(client: &mut FlightSQLClient) -> Result<()> {
-    client.execute_update(r#"DROP TABLE IF EXISTS "QuotedInsert""#)?;
-    client.execute_update(r#"CREATE TABLE "QuotedInsert" (a INT, "MixedCase" INT)"#)?;
+    client.update(r#"DROP TABLE IF EXISTS "QuotedInsert""#)?;
+    client.update(r#"CREATE TABLE "QuotedInsert" (a INT, "MixedCase" INT)"#)?;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("MixedCase", DataType::Int32, false),
@@ -55,13 +55,13 @@ fn column_order_with_quoted_table(client: &mut FlightSQLClient) -> Result<()> {
     let a_values = Int32Array::from(vec![1, 2]);
     let batch = RecordBatch::try_new(schema, vec![Arc::new(mixed), Arc::new(a_values)])?;
 
-    client.execute_batch_update(
+    client.update_with_record_batch(
         r#"INSERT INTO "QuotedInsert" ("MixedCase", a) VALUES (?, ?)"#,
         batch,
     )?;
 
     let batches = client
-        .execute_query(r#"SELECT a, "MixedCase" FROM "QuotedInsert" ORDER BY a"#)?
+        .query(r#"SELECT a, "MixedCase" FROM "QuotedInsert" ORDER BY a"#)?
         .batches;
     let batch = batches
         .into_iter()
@@ -87,13 +87,13 @@ fn column_order_with_quoted_table(client: &mut FlightSQLClient) -> Result<()> {
         bail!("column order mismatch for second row");
     }
 
-    client.execute_update(r#"DROP TABLE "QuotedInsert""#)?;
+    client.update(r#"DROP TABLE "QuotedInsert""#)?;
     Ok(())
 }
 
 fn type_mapping_with_partial_columns(client: &mut FlightSQLClient) -> Result<()> {
-    client.execute_update("DROP TABLE IF EXISTS appender_type_test")?;
-    client.execute_update(
+    client.update("DROP TABLE IF EXISTS appender_type_test")?;
+    client.update(
         "CREATE TABLE appender_type_test (
             id INTEGER,
             big BIGINT,
@@ -113,7 +113,7 @@ fn type_mapping_with_partial_columns(client: &mut FlightSQLClient) -> Result<()>
     let ubigs = UInt64Array::from(vec![100, 200]);
     let batch = RecordBatch::try_new(schema, vec![Arc::new(ids), Arc::new(ubigs)])?;
 
-    client.execute_batch_update(
+    client.update_with_record_batch(
         "INSERT INTO appender_type_test (id, ubig) VALUES (?, ?)",
         batch,
     )?;
@@ -121,7 +121,7 @@ fn type_mapping_with_partial_columns(client: &mut FlightSQLClient) -> Result<()>
     assert_row_count(client, "SELECT COUNT(*) FROM appender_type_test", 2)?;
 
     let batches = client
-        .execute_query("SELECT id, ubig FROM appender_type_test ORDER BY id")?
+        .query("SELECT id, ubig FROM appender_type_test ORDER BY id")?
         .batches;
     let batch = batches
         .into_iter()
@@ -150,12 +150,12 @@ fn type_mapping_with_partial_columns(client: &mut FlightSQLClient) -> Result<()>
     // Ensure the omitted columns were stored as NULL.
     info!("verifying omitted column default handling skipped for DuckDB");
 
-    client.execute_update("DROP TABLE appender_type_test")?;
+    client.update("DROP TABLE appender_type_test")?;
     Ok(())
 }
 
 fn assert_row_count(client: &mut FlightSQLClient, sql: &str, expected: i64) -> Result<()> {
-    let batches = client.execute_query(sql)?.batches;
+    let batches = client.query(sql)?.batches;
     let batch = batches
         .into_iter()
         .next()
@@ -163,7 +163,7 @@ fn assert_row_count(client: &mut FlightSQLClient, sql: &str, expected: i64) -> R
     let array = batch
         .column(0)
         .as_any()
-        .downcast_ref::<arrow_array::Int64Array>()
+        .downcast_ref::<Int64Array>()
         .context("expected Int64 array for COUNT(*)")?;
     if array.value(0) != expected {
         bail!(

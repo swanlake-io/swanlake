@@ -7,8 +7,9 @@ use std::process;
 use std::sync::Once;
 
 use anyhow::{anyhow, bail, Context, Result};
-use arrow_array::Array;
-use swanlake_client::{arrow::array_value_to_string, FlightSQLClient};
+use arrow::util::display::array_value_to_string;
+use arrow_array::{Array, BinaryArray, LargeBinaryArray};
+use swanlake_client::FlightSQLClient;
 use tracing::info;
 
 mod scenarios;
@@ -233,7 +234,7 @@ async fn execute_records(
         let sql = apply_substitutions(&rec.sql, substitutions);
         match &rec.kind {
             RecordKind::Statement { expect_error } => {
-                let result = client.execute_update(&sql);
+                let result = client.update(&sql);
                 if *expect_error {
                     if result.is_ok() {
                         bail!("expected error but statement succeeded: {sql}");
@@ -303,7 +304,20 @@ fn collect_rows(result: &swanlake_client::QueryResult) -> Result<Vec<Vec<String>
 }
 
 fn format_value(array: &dyn Array, idx: usize) -> Result<String> {
+    if let Some(bin) = array.as_any().downcast_ref::<BinaryArray>() {
+        return Ok(binary_bytes_to_string(bin.value(idx)));
+    }
+    if let Some(bin) = array.as_any().downcast_ref::<LargeBinaryArray>() {
+        return Ok(binary_bytes_to_string(bin.value(idx)));
+    }
     array_value_to_string(array, idx).map_err(|e| anyhow!(e))
+}
+
+fn binary_bytes_to_string(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => hex::encode(bytes),
+    }
 }
 
 fn init_logging() {
