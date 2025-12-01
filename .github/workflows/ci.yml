@@ -88,7 +88,7 @@ jobs:
             uv-${{ runner.os }}-
 
       - name: Clean workspace on failure
-        if: env.ACTIONS_STEP_DEBUG == 'true'
+        if: runner.debug == '1'
         run: |
           echo "Cleaning workspace due to job failure to free disk space..."
           rm -rf target
