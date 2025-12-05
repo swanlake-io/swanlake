@@ -1,250 +1,18 @@
 use siphasher::sip::SipHasher13;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use native_tls::TlsConnector;
-use postgres_native_tls::MakeTlsConnector;
-use tokio::sync::OnceCell;
-use tokio_postgres::{Client, NoTls};
-use tracing::{debug, warn};
-
-/// Trait for distributed lock implementations.
-pub(super) trait DistributedLock: Send + Sync {
-    /// Try to acquire a lock for the given target with a TTL and optional owner.
-    ///
-    /// Returns `Ok(Some(lock))` if the lock was acquired, `Ok(None)` if the lock
-    /// is held by another process, or an error if the operation failed.
-    fn try_acquire(
-        target: &Path,
-        ttl: Duration,
-        owner: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<Option<Self>>> + Send
-    where
-        Self: Sized;
-}
-
-/// PostgreSQL connection configuration, built once from environment variables.
-#[derive(Clone)]
-struct PgConfig {
-    connection_string: String,
-    ssl_mode: PgSslMode,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PgSslMode {
-    Disable,
-    Prefer,
-    Require,
-    VerifyCa,
-    VerifyFull,
-}
-
-impl PgSslMode {
-    fn from_env() -> Self {
-        let value = std::env::var("PGSSLMODE").unwrap_or_else(|_| "disable".to_string());
-        Self::from_str(value.as_str())
-    }
-
-    fn from_str(value: &str) -> Self {
-        match value.to_lowercase().as_str() {
-            "prefer" => Self::Prefer,
-            "require" => Self::Require,
-            "verify-ca" => Self::VerifyCa,
-            "verify-full" => Self::VerifyFull,
-            _ => Self::Disable,
-        }
-    }
-}
-
-impl PgConfig {
-    fn from_env() -> Self {
-        let host = std::env::var("PGHOST").unwrap_or_else(|_| "localhost".to_string());
-        let port = std::env::var("PGPORT").unwrap_or_else(|_| "5432".to_string());
-        let user = std::env::var("PGUSER").unwrap_or_else(|_| "postgres".to_string());
-        let dbname = std::env::var("PGDATABASE").unwrap_or_else(|_| "postgres".to_string());
-        let password = std::env::var("PGPASSWORD").ok();
-
-        let mut config = format!(
-            "host={} port={} user={} dbname={}",
-            host, port, user, dbname
-        );
-        if let Some(pwd) = password {
-            config.push_str(&format!(" password={}", pwd));
-        }
-
-        Self {
-            connection_string: config,
-            ssl_mode: PgSslMode::from_env(),
-        }
-    }
-
-    fn get() -> &'static Self {
-        use std::sync::OnceLock;
-        static CONFIG: OnceLock<PgConfig> = OnceLock::new();
-        CONFIG.get_or_init(Self::from_env)
-    }
-}
-
-pub(super) struct PgClient {
-    client: Client,
-}
-
-enum TlsConfig {
-    None,
-    Prefer(MakeTlsConnector),
-    Enforced(MakeTlsConnector),
-}
-
-impl std::fmt::Debug for TlsConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TlsConfig::None => write!(f, "TlsConfig::None"),
-            TlsConfig::Prefer(_) => write!(f, "TlsConfig::Prefer(..)"),
-            TlsConfig::Enforced(_) => write!(f, "TlsConfig::Enforced(..)"),
-        }
-    }
-}
-
-impl PgClient {
-    async fn connect(config: &PgConfig) -> Result<Self> {
-        let tls_config = Self::build_tls_config(config.ssl_mode)?;
-        let client = match tls_config {
-            TlsConfig::None => {
-                debug!("connecting to PostgreSQL without TLS");
-                Self::connect_without_tls(&config.connection_string).await?
-            }
-            TlsConfig::Prefer(connector) => {
-                debug!(
-                    "connecting to PostgreSQL with TLS mode {:?}",
-                    config.ssl_mode
-                );
-                match Self::connect_with_tls(&config.connection_string, connector).await {
-                    Ok(client) => client,
-                    Err(err) => {
-                        warn!(
-                            error = %err,
-                            "TLS connection failed in PGSSLMODE=prefer, retrying without TLS"
-                        );
-                        debug!("connecting to PostgreSQL without TLS (prefer fallback)");
-                        Self::connect_without_tls(&config.connection_string).await?
-                    }
-                }
-            }
-            TlsConfig::Enforced(connector) => {
-                debug!(
-                    "connecting to PostgreSQL with TLS mode {:?}",
-                    config.ssl_mode
-                );
-                Self::connect_with_tls(&config.connection_string, connector).await?
-            }
-        };
-
-        Ok(Self { client })
-    }
-
-    fn build_tls_config(mode: PgSslMode) -> Result<TlsConfig> {
-        match mode {
-            PgSslMode::Disable => Ok(TlsConfig::None),
-            PgSslMode::Prefer => Ok(TlsConfig::Prefer(Self::build_tls_connector(mode)?)),
-            PgSslMode::Require | PgSslMode::VerifyCa | PgSslMode::VerifyFull => {
-                Ok(TlsConfig::Enforced(Self::build_tls_connector(mode)?))
-            }
-        }
-    }
-
-    fn build_tls_connector(mode: PgSslMode) -> Result<MakeTlsConnector> {
-        match mode {
-            PgSslMode::Prefer | PgSslMode::Require => {
-                let connector = TlsConnector::builder()
-                    .danger_accept_invalid_certs(true)
-                    .danger_accept_invalid_hostnames(true)
-                    .build()
-                    .context("failed to build TLS connector for PGSSLMODE=require")?;
-                Ok(MakeTlsConnector::new(connector))
-            }
-            PgSslMode::VerifyCa => {
-                let connector = TlsConnector::builder()
-                    .danger_accept_invalid_hostnames(true)
-                    .build()
-                    .context("failed to build TLS connector for PGSSLMODE=verify-ca")?;
-                Ok(MakeTlsConnector::new(connector))
-            }
-            PgSslMode::VerifyFull => {
-                let connector = TlsConnector::builder()
-                    .build()
-                    .context("failed to build TLS connector for PGSSLMODE=verify-full")?;
-                Ok(MakeTlsConnector::new(connector))
-            }
-            PgSslMode::Disable => {
-                bail!("PGSSLMODE=disable should not attempt to build a TLS connector")
-            }
-        }
-    }
-
-    async fn connect_with_tls(
-        connection_string: &str,
-        connector: MakeTlsConnector,
-    ) -> Result<Client> {
-        let (client, connection) = tokio_postgres::connect(connection_string, connector).await?;
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                warn!(error = %e, "PostgreSQL connection error");
-            }
-        });
-        Ok(client)
-    }
-
-    async fn connect_without_tls(connection_string: &str) -> Result<Client> {
-        let (client, connection) = tokio_postgres::connect(connection_string, NoTls).await?;
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                warn!(error = %e, "PostgreSQL connection error");
-            }
-        });
-        Ok(client)
-    }
-
-    async fn try_lock(&self, lock_key: i64) -> Result<bool> {
-        let row = self
-            .client
-            .query_one("SELECT pg_try_advisory_lock($1)", &[&lock_key])
-            .await?;
-        Ok(row.get::<_, bool>(0))
-    }
-
-    async fn unlock(&self, lock_key: i64) -> Result<()> {
-        self.client
-            .execute("SELECT pg_advisory_unlock($1)", &[&lock_key])
-            .await?;
-        Ok(())
-    }
-
-    pub(super) fn client(&self) -> &Client {
-        &self.client
-    }
-}
-
-pub(super) async fn shared_client() -> Result<Arc<PgClient>> {
-    static CLIENT: OnceCell<Arc<PgClient>> = OnceCell::const_new();
-    CLIENT
-        .get_or_try_init(|| async {
-            let config = PgConfig::get().clone();
-            PgClient::connect(&config).await.map(Arc::new)
-        })
-        .await
-        .map(Arc::clone)
-}
+use anyhow::Result;
+use tokio_postgres::Client;
+use tracing::debug;
 
 /// PostgreSQL-based distributed lock using advisory locks.
 ///
-/// This lock uses PostgreSQL advisory locks to coordinate access across multiple hosts.
-/// The lock is identified by a 64-bit integer derived from hashing the target path.
-/// Uses tokio-postgres for lightweight connection management.
+/// A fresh PostgreSQL connection is opened for every attempt; the connection
+/// lifetime owns the advisory lock and dropping the lock closes the connection,
+/// releasing the advisory lock without extra cleanup.
 pub(super) struct PostgresLock {
-    client: Arc<PgClient>,
+    client: Client,
     lock_key: i64,
     target_path: PathBuf,
 }
@@ -256,16 +24,12 @@ impl PostgresLock {
         path.hash(&mut hasher);
         hasher.finish() as i64
     }
-}
 
-impl DistributedLock for PostgresLock {
-    async fn try_acquire(
+    pub async fn try_acquire(
+        client: Client,
         target: &Path,
-        _ttl: Duration,
         _owner: Option<&str>,
     ) -> Result<Option<Self>> {
-        // PostgreSQL advisory locks are tied to the connection lifetime, so TTL is not required.
-        let client = shared_client().await?;
         let lock_key = Self::path_to_lock_key(target);
 
         debug!(
@@ -274,7 +38,10 @@ impl DistributedLock for PostgresLock {
             "attempting to acquire PostgreSQL advisory lock"
         );
 
-        let locked = client.try_lock(lock_key).await?;
+        let row = client
+            .query_one("SELECT pg_try_advisory_lock($1)", &[&lock_key])
+            .await?;
+        let locked = row.get::<_, bool>(0);
 
         if locked {
             debug!(
@@ -296,30 +63,19 @@ impl DistributedLock for PostgresLock {
             Ok(None)
         }
     }
+
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
 }
 
 impl Drop for PostgresLock {
     fn drop(&mut self) {
-        let client = self.client.clone();
-        let lock_key = self.lock_key;
-        let target_path = self.target_path.clone();
-
-        // Spawn a task to release the lock asynchronously
-        tokio::spawn(async move {
-            if let Err(err) = client.unlock(lock_key).await {
-                warn!(
-                    error = %err,
-                    lock_key = lock_key,
-                    target = %target_path.display(),
-                    "failed to release PostgreSQL advisory lock"
-                );
-            } else {
-                debug!(
-                    lock_key = lock_key,
-                    target = %target_path.display(),
-                    "released PostgreSQL advisory lock"
-                );
-            }
-        });
+        debug!(
+            lock_key = self.lock_key,
+            target = %self.target_path.display(),
+            "releasing PostgreSQL advisory lock (connection closing)"
+        );
+        // Dropping the client closes the connection, which releases the advisory lock.
     }
 }

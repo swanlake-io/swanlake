@@ -9,16 +9,18 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
+use tokio_postgres::Client;
 use tracing::{debug, info, warn};
 
 use crate::config::ServerConfig;
 use crate::engine::EngineFactory;
 
 mod lock;
-use lock::{shared_client, DistributedLock, PostgresLock};
+mod postgres;
+use lock::PostgresLock;
+use postgres::connect_client;
 
 const CHECK_TICK_SECS: u64 = 300;
-const LOCK_TTL_SECS: u64 = 300;
 
 /// Parsed, normalized checkpoint settings.
 #[derive(Clone)]
@@ -100,13 +102,10 @@ impl CheckpointService {
     }
 
     async fn process_database(&self, db_name: &str) -> Result<()> {
+        let client = connect_client().await?;
         let lock_target = PathBuf::from("/ducklake/checkpoint").join(db_name);
-        let Some(_lock) = PostgresLock::try_acquire(
-            &lock_target,
-            Duration::from_secs(LOCK_TTL_SECS),
-            Some("checkpoint"),
-        )
-        .await?
+        let Some(lock) =
+            PostgresLock::try_acquire(client, &lock_target, Some("checkpoint")).await?
         else {
             info!(
                 db_name = %db_name,
@@ -115,7 +114,7 @@ impl CheckpointService {
             return Ok(());
         };
 
-        if let Some(last) = self.last_checkpoint_at(db_name).await? {
+        if let Some(last) = self.last_checkpoint_at(db_name, lock.client()).await? {
             let elapsed = Utc::now()
                 .signed_duration_since(last)
                 .to_std()
@@ -131,15 +130,17 @@ impl CheckpointService {
         }
 
         self.run_checkpoint(db_name).await?;
-        self.record_checkpoint(db_name).await?;
+        self.record_checkpoint(db_name, lock.client()).await?;
         info!(db_name = %db_name, "ducklake checkpoint completed successfully");
         Ok(())
     }
 
-    async fn last_checkpoint_at(&self, db_name: &str) -> Result<Option<DateTime<Utc>>> {
-        let client = shared_client().await?;
+    async fn last_checkpoint_at(
+        &self,
+        db_name: &str,
+        client: &Client,
+    ) -> Result<Option<DateTime<Utc>>> {
         let row = client
-            .client()
             .query_opt(
                 "SELECT last_checkpoint_at FROM ducklake_checkpoints WHERE db_name = $1",
                 &[&db_name],
@@ -151,10 +152,8 @@ impl CheckpointService {
             .context("parsing last_checkpoint_at")
     }
 
-    async fn record_checkpoint(&self, db_name: &str) -> Result<()> {
-        let client = shared_client().await?;
+    async fn record_checkpoint(&self, db_name: &str, client: &Client) -> Result<()> {
         client
-            .client()
             .execute(
                 "INSERT INTO ducklake_checkpoints (db_name, last_checkpoint_at) \
                  VALUES ($1, NOW()) \
@@ -208,9 +207,8 @@ fn parse_checkpoint_databases(raw: Option<&str>) -> Vec<String> {
 }
 
 async fn ensure_checkpoint_table() -> Result<()> {
-    let client = shared_client().await?;
+    let client = connect_client().await?;
     client
-        .client()
         .batch_execute(
             "CREATE TABLE IF NOT EXISTS ducklake_checkpoints (\
                  db_name TEXT PRIMARY KEY,\
