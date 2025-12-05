@@ -11,7 +11,20 @@ use tokio::sync::OnceCell;
 use tokio_postgres::{Client, NoTls};
 use tracing::{debug, warn};
 
-use super::DistributedLock;
+/// Trait for distributed lock implementations.
+pub(super) trait DistributedLock: Send + Sync {
+    /// Try to acquire a lock for the given target with a TTL and optional owner.
+    ///
+    /// Returns `Ok(Some(lock))` if the lock was acquired, `Ok(None)` if the lock
+    /// is held by another process, or an error if the operation failed.
+    fn try_acquire(
+        target: &Path,
+        ttl: Duration,
+        owner: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<Option<Self>>> + Send
+    where
+        Self: Sized;
+}
 
 /// PostgreSQL connection configuration, built once from environment variables.
 #[derive(Clone)]
@@ -75,7 +88,7 @@ impl PgConfig {
     }
 }
 
-struct PgClient {
+pub(super) struct PgClient {
     client: Client,
 }
 
@@ -208,9 +221,13 @@ impl PgClient {
             .await?;
         Ok(())
     }
+
+    pub(super) fn client(&self) -> &Client {
+        &self.client
+    }
 }
 
-async fn shared_client() -> Result<Arc<PgClient>> {
+pub(super) async fn shared_client() -> Result<Arc<PgClient>> {
     static CLIENT: OnceCell<Arc<PgClient>> = OnceCell::const_new();
     CLIENT
         .get_or_try_init(|| async {
@@ -226,7 +243,7 @@ async fn shared_client() -> Result<Arc<PgClient>> {
 /// This lock uses PostgreSQL advisory locks to coordinate access across multiple hosts.
 /// The lock is identified by a 64-bit integer derived from hashing the target path.
 /// Uses tokio-postgres for lightweight connection management.
-pub struct PostgresLock {
+pub(super) struct PostgresLock {
     client: Arc<PgClient>,
     lock_key: i64,
     target_path: PathBuf,
@@ -304,69 +321,5 @@ impl Drop for PostgresLock {
                 );
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn test_path_to_lock_key() {
-        let path1 = PathBuf::from("/tmp/test.db");
-        let path2 = PathBuf::from("/tmp/test.db");
-        let path3 = PathBuf::from("/tmp/other.db");
-
-        let key1 = PostgresLock::path_to_lock_key(&path1);
-        let key2 = PostgresLock::path_to_lock_key(&path2);
-        let key3 = PostgresLock::path_to_lock_key(&path3);
-
-        // Same paths should produce same keys
-        assert_eq!(key1, key2);
-        // Different paths should produce different keys
-        assert_ne!(key1, key3);
-    }
-
-    #[test]
-    fn test_ssl_mode_parsing() {
-        assert!(matches!(PgSslMode::from_str("disable"), PgSslMode::Disable));
-        assert!(matches!(PgSslMode::from_str("prefer"), PgSslMode::Prefer));
-        assert!(matches!(PgSslMode::from_str("require"), PgSslMode::Require));
-        assert!(matches!(
-            PgSslMode::from_str("verify-ca"),
-            PgSslMode::VerifyCa
-        ));
-        assert!(matches!(
-            PgSslMode::from_str("verify-full"),
-            PgSslMode::VerifyFull
-        ));
-        assert!(matches!(PgSslMode::from_str("DiSaBlE"), PgSslMode::Disable));
-    }
-
-    #[test]
-    fn test_tls_connector_building_per_mode() {
-        assert!(matches!(
-            PgClient::build_tls_config(PgSslMode::Disable)
-                .expect("disable mode config should not error"),
-            TlsConfig::None
-        ));
-        assert!(matches!(
-            PgClient::build_tls_config(PgSslMode::Prefer)
-                .expect("prefer mode config should not error"),
-            TlsConfig::Prefer(_)
-        ));
-        for mode in [
-            PgSslMode::Require,
-            PgSslMode::VerifyCa,
-            PgSslMode::VerifyFull,
-        ] {
-            match PgClient::build_tls_config(mode)
-                .unwrap_or_else(|e| panic!("failed to build TLS config for {:?}: {}", mode, e))
-            {
-                TlsConfig::Enforced(_) => {}
-                other => panic!("mode {:?} expected Enforced, got {:?}", mode, other),
-            }
-        }
     }
 }

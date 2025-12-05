@@ -53,12 +53,14 @@ To enable DuckLake Postgres connection, see [DuckDB Postgres extension configura
 
 To enable DuckLake S3 connection, see [DuckDB HTTPFS S3 API configuration](https://duckdb.org/docs/stable/core_extensions/httpfs/s3api#platform-specific-secret-types).
 
-## Distributed Locking
+## DuckLake Maintenance (Checkpointing)
 
-SwanLake uses PostgreSQL advisory locks for coordinating access to shared resources across multiple hosts. A single lightweight PostgreSQL session is shared for all locks on a host, so acquiring a lock never consumes an additional database connection.
+SwanLake can run background DuckLake checkpoints across multiple instances. Coordination and metadata are stored in PostgreSQL (`ducklake_checkpoints` table + advisory locks).
 
 | Env Var | Description | Default |
 | --- | --- | --- |
+| `SWANLAKE_CHECKPOINT_DATABASES` | Comma-separated DuckLake database names to checkpoint (e.g. `db1,db2`) | _(unset)_ (disabled) |
+| `SWANLAKE_CHECKPOINT_INTERVAL_HOURS` | Interval between checkpoints per database | `24` |
 | `PGHOST` | PostgreSQL host | `localhost` |
 | `PGPORT` | PostgreSQL port | `5432` |
 | `PGUSER` | PostgreSQL user | `postgres` |
@@ -66,9 +68,9 @@ SwanLake uses PostgreSQL advisory locks for coordinating access to shared resour
 | `PGPASSWORD` | PostgreSQL password | _(unset)_ |
 | `PGSSLMODE` | TLS mode. `disable` = plaintext, `prefer` = try TLS then fall back to plaintext, `require` = TLS without verification, `verify-ca` = TLS verifying CA only, `verify-full` = full TLS verification | `disable` |
 
-Configuration is loaded once at startup and reused for the lifetime of the process. Locks are automatically released when the process terminates, so no extra TTL/lease controls are needed.
-
-See `src/lock/README.md` for detailed documentation on the distributed lock implementation.
+Notes:
+- If `SWANLAKE_CHECKPOINT_DATABASES` is empty/unset, the checkpoint task is not started.
+- Each configured database is checkpointed at most once per interval across all running instances.
 
 ## Validation
 

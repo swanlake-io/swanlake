@@ -9,6 +9,10 @@ pub struct ServerConfig {
     pub port: u16,
     /// Optional SQL statement executed during startup for ducklake integration.
     pub ducklake_init_sql: Option<String>,
+    /// Optional comma-separated list of DuckLake databases to checkpoint periodically.
+    pub checkpoint_databases: Option<String>,
+    /// Interval in hours between checkpoints for each configured database.
+    pub checkpoint_interval_hours: Option<u64>,
     /// Maximum number of concurrent sessions.
     pub max_sessions: Option<usize>,
     /// Session idle timeout in seconds.
@@ -23,6 +27,8 @@ impl Default for ServerConfig {
             host: "0.0.0.0".to_string(),
             port: 4214,
             ducklake_init_sql: None,
+            checkpoint_databases: None,
+            checkpoint_interval_hours: Some(24),
             max_sessions: Some(100),
             session_timeout_seconds: Some(900),
             log_format: "compact".to_string(),

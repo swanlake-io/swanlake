@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use swanlake_core::config::ServerConfig;
 use swanlake_core::engine::EngineFactory;
+use swanlake_core::maintenance::CheckpointService;
 use swanlake_core::service::SwanFlightSqlService;
 use tonic::transport::Server;
 
@@ -23,6 +24,11 @@ async fn main() -> Result<()> {
     let factory = Arc::new(std::sync::Mutex::new(
         EngineFactory::new(&config).context("failed to initialize engine factory")?,
     ));
+
+    // Spawn DuckLake checkpoint maintenance task
+    CheckpointService::spawn_from_config(&config, factory.clone())
+        .await
+        .context("failed to start checkpoint service")?;
 
     // Create session registry (Phase 2: connection-based session persistence)
     let registry = Arc::new(
