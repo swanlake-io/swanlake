@@ -4,15 +4,6 @@ version = "0.1.0"
 edition = "2021"
 links = "swanlake_duckdb"
 
-[features]
-default = []
-distributed-locks = [
-    "dep:native-tls",
-    "dep:postgres-native-tls",
-    "dep:tokio-postgres",
-    "dep:siphasher",
-]
-
 [dependencies]
 anyhow = { workspace = true }
 arrow-array = { workspace = true }
@@ -31,12 +22,13 @@ tonic = { workspace = true }
 serde_json = "1.0.145"
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-postgres = { version = "0.7", optional = true }
-postgres-native-tls = { version = "0.5", optional = true }
-native-tls = { version = "0.2", optional = true }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+postgres-native-tls = { version = "0.5" }
+native-tls = { version = "0.2" }
 tracing = { workspace = true }
 config = "0.15.19"
-siphasher = { version = "1.0", optional = true }
+siphasher = { version = "1.0" }
+chrono = { version = "0.4", features = ["clock"] }
 
 [build-dependencies]
 reqwest = { version = "0.12", features = ["blocking"] }

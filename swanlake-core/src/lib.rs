@@ -11,8 +11,7 @@
 pub mod config;
 pub mod engine;
 pub mod error;
-#[cfg(feature = "distributed-locks")]
-pub mod lock;
+pub mod maintenance;
 pub mod service;
 pub mod session;
 pub mod sql_parser;

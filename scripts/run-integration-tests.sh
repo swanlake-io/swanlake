@@ -13,6 +13,7 @@ rm -rf "$TEST_DIR"
 mkdir -p "$TEST_DIR"
 
 export SWANLAKE_DUCKLAKE_INIT_SQL="ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '$TEST_DIR/swanlake_files', OVERRIDE_DATA_PATH true);"
+export SWANLAKE_CHECKPOINT_DATABASES="swanlake"
 export RUST_LOG="${RUST_LOG:-info}"
 
 export CARGO_TARGET_DIR="$ROOT_DIR/target"
