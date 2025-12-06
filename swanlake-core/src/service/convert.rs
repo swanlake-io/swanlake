@@ -20,10 +20,7 @@ impl SwanFlightSqlService {
     pub(crate) async fn collect_record_batches(
         request: Request<PeekableFlightDataStream>,
     ) -> Result<Vec<RecordBatch>, Status> {
-        let stream = request.into_inner();
-        let mapped =
-            stream.map_err(|status| arrow_flight::error::FlightError::Tonic(Box::new(status)));
-        let mut record_stream = FlightRecordBatchStream::new_from_flight_data(mapped);
+        let mut record_stream = Self::flight_record_batch_stream(request);
 
         let mut batches = Vec::new();
         while let Some(batch) = record_stream.next().await {
@@ -37,10 +34,7 @@ impl SwanFlightSqlService {
     pub(crate) async fn collect_parameter_sets(
         request: Request<PeekableFlightDataStream>,
     ) -> Result<Vec<Vec<Value>>, Status> {
-        let stream = request.into_inner();
-        let mapped =
-            stream.map_err(|status| arrow_flight::error::FlightError::Tonic(Box::new(status)));
-        let mut record_stream = FlightRecordBatchStream::new_from_flight_data(mapped);
+        let mut record_stream = Self::flight_record_batch_stream(request);
 
         let mut params = Vec::new();
         while let Some(batch) = record_stream.next().await {
@@ -100,5 +94,14 @@ impl SwanFlightSqlService {
         arrow_ipc::writer::write_message(&mut buffer, encoded, &write_options)
             .map_err(ServerError::Arrow)?;
         Ok(buffer)
+    }
+
+    fn flight_record_batch_stream(
+        request: Request<PeekableFlightDataStream>,
+    ) -> FlightRecordBatchStream {
+        let stream = request.into_inner();
+        let mapped =
+            stream.map_err(|status| arrow_flight::error::FlightError::Tonic(Box::new(status)));
+        FlightRecordBatchStream::new_from_flight_data(mapped)
     }
 }

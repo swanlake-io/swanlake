@@ -92,7 +92,7 @@ pub(crate) async fn do_get_statement(
         })?;
 
     if let Some(handle) = payload.handle() {
-        let session = service.get_session(&request).await?;
+        let session = service.prepare_request(&request).await?;
         match session.get_prepared_statement_meta(handle) {
             Ok(meta) => {
                 let ticket_kind = payload
@@ -178,7 +178,7 @@ async fn execute_ephemeral_ticket_statement(
     request: &Request<Ticket>,
 ) -> Result<Response<<SwanFlightSqlService as FlightService>::DoGetStream>, Status> {
     info!(sql = %sql, "executing ticket via fallback SQL");
-    let session = service.get_session(request).await?;
+    let session = service.prepare_request(request).await?;
     if returns_rows {
         let handle = session
             .create_prepared_statement(

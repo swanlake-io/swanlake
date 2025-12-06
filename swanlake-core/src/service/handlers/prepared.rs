@@ -18,7 +18,7 @@ use super::ticket::{StatementTicketKind, TicketStatementPayload};
 use crate::engine::batch::align_batch_to_table_schema;
 use crate::service::SwanFlightSqlService;
 use crate::session::id::StatementHandle;
-use crate::session::{PreparedStatementMeta, PreparedStatementOptions};
+use crate::session::{PreparedStatementMeta, PreparedStatementOptions, Session};
 use crate::sql_parser::ParsedStatement;
 
 const DEFAULT_CATALOG: &str = "swanlake";
@@ -32,6 +32,21 @@ fn parse_statement_handle(bytes: &[u8], context: &str) -> Result<StatementHandle
         );
         Status::invalid_argument("invalid prepared statement handle")
     })
+}
+
+async fn resolve_session_and_meta<T>(
+    service: &SwanFlightSqlService,
+    handle_bytes: &[u8],
+    context: &'static str,
+    request: &Request<T>,
+) -> Result<(Arc<Session>, StatementHandle, PreparedStatementMeta), Status> {
+    let handle = parse_statement_handle(handle_bytes, context)?;
+    let session = service.prepare_request(request).await?;
+    let meta = session
+        .get_prepared_statement_meta(handle)
+        .map_err(SwanFlightSqlService::status_from_error)?;
+    tracing::Span::current().record("sql", meta.sql.as_str());
+    Ok((session, handle, meta))
 }
 
 /// Creates a prepared statement for the provided SQL, inferring whether it is
@@ -102,17 +117,13 @@ pub(crate) async fn get_flight_info_prepared_statement(
     query: CommandPreparedStatementQuery,
     request: Request<FlightDescriptor>,
 ) -> Result<Response<FlightInfo>, Status> {
-    let handle = parse_statement_handle(
+    let (session, handle, meta) = resolve_session_and_meta(
+        service,
         query.prepared_statement_handle.as_ref(),
         "get_flight_info_prepared_statement",
-    )?;
-    let session = service.prepare_request(&request).await?;
-
-    let meta = session
-        .get_prepared_statement_meta(handle)
-        .map_err(SwanFlightSqlService::status_from_error)?;
-
-    tracing::Span::current().record("sql", meta.sql.as_str());
+        &request,
+    )
+    .await?;
 
     let returns_rows = meta.is_query;
     info!(
@@ -177,17 +188,13 @@ pub(crate) async fn do_get_prepared_statement(
     query: CommandPreparedStatementQuery,
     request: Request<Ticket>,
 ) -> Result<Response<<SwanFlightSqlService as FlightService>::DoGetStream>, Status> {
-    let handle = parse_statement_handle(
+    let (session, handle, meta) = resolve_session_and_meta(
+        service,
         query.prepared_statement_handle.as_ref(),
         "do_get_prepared_statement",
-    )?;
-    let session = service.prepare_request(&request).await?;
-
-    let meta = session
-        .get_prepared_statement_meta(handle)
-        .map_err(SwanFlightSqlService::status_from_error)?;
-
-    tracing::Span::current().record("sql", meta.sql.as_str());
+        &request,
+    )
+    .await?;
 
     if meta.is_query {
         service
@@ -207,17 +214,13 @@ pub(crate) async fn do_put_prepared_statement_query(
     query: CommandPreparedStatementQuery,
     request: Request<PeekableFlightDataStream>,
 ) -> Result<DoPutPreparedStatementResult, Status> {
-    let handle = parse_statement_handle(
+    let (session, handle, meta) = resolve_session_and_meta(
+        service,
         query.prepared_statement_handle.as_ref(),
         "do_put_prepared_statement_query",
-    )?;
-    let session = service.prepare_request(&request).await?;
-
-    let meta = session
-        .get_prepared_statement_meta(handle)
-        .map_err(SwanFlightSqlService::status_from_error)?;
-
-    tracing::Span::current().record("sql", meta.sql.as_str());
+        &request,
+    )
+    .await?;
 
     let parameter_sets = SwanFlightSqlService::collect_parameter_sets(request).await?;
 
@@ -261,18 +264,14 @@ pub(crate) async fn do_put_prepared_statement_update(
     query: CommandPreparedStatementUpdate,
     request: Request<PeekableFlightDataStream>,
 ) -> Result<i64, Status> {
-    let handle = parse_statement_handle(
-        query.prepared_statement_handle.as_ref(),
-        "do_put_prepared_statement_update",
-    )?;
-    let session = service.prepare_request(&request).await?;
-
-    let PreparedStatementMeta { sql, is_query, .. } =
-        session
-            .get_prepared_statement_meta(handle)
-            .map_err(SwanFlightSqlService::status_from_error)?;
-
-    tracing::Span::current().record("sql", sql.as_str());
+    let (session, handle, PreparedStatementMeta { sql, is_query, .. }) =
+        resolve_session_and_meta(
+            service,
+            query.prepared_statement_handle.as_ref(),
+            "do_put_prepared_statement_update",
+            &request,
+        )
+        .await?;
 
     if is_query {
         error!(

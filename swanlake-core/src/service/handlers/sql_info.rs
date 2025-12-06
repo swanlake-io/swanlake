@@ -1,5 +1,5 @@
 use arrow_flight::flight_service_server::FlightService;
-use arrow_flight::sql::metadata::SqlInfoDataBuilder;
+use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::{
     CommandGetSqlInfo, ProstMessageExt, SqlInfo, SqlSupportedTransaction,
     SqlTransactionIsolationLevel,
@@ -17,15 +17,7 @@ pub(crate) async fn register_sql_info(_id: i32, _result: &SqlInfo) {
     // No-op: we don't need to register info dynamically
 }
 
-/// Builds `FlightInfo` for the SqlInfo metadata endpoint so clients can fetch
-/// supported capabilities via DoGet.
-pub(crate) async fn get_flight_info_sql_info(
-    service: &SwanFlightSqlService,
-    query: CommandGetSqlInfo,
-    request: Request<FlightDescriptor>,
-) -> Result<Response<FlightInfo>, Status> {
-    service.prepare_request(&request).await?;
-
+fn build_sql_info_data() -> Result<SqlInfoData, Status> {
     let mut builder = SqlInfoDataBuilder::new();
     builder.append(
         SqlInfo::FlightSqlServerTransaction,
@@ -38,9 +30,21 @@ pub(crate) async fn get_flight_info_sql_info(
     );
     builder.append(SqlInfo::SqlSupportedTransactionsIsolationLevels, 0b11110);
 
-    let info_data = builder
+    builder
         .build()
-        .map_err(|e| Status::internal(format!("Failed to build SqlInfo data: {}", e)))?;
+        .map_err(|e| Status::internal(format!("Failed to build SqlInfo data: {}", e)))
+}
+
+/// Builds `FlightInfo` for the SqlInfo metadata endpoint so clients can fetch
+/// supported capabilities via DoGet.
+pub(crate) async fn get_flight_info_sql_info(
+    service: &SwanFlightSqlService,
+    query: CommandGetSqlInfo,
+    request: Request<FlightDescriptor>,
+) -> Result<Response<FlightInfo>, Status> {
+    service.prepare_request(&request).await?;
+
+    let info_data = build_sql_info_data()?;
 
     let schema = info_data.schema();
 
@@ -66,21 +70,7 @@ pub(crate) async fn do_get_sql_info(
 ) -> Result<Response<<SwanFlightSqlService as FlightService>::DoGetStream>, Status> {
     service.prepare_request(&request).await?;
 
-    let mut builder = SqlInfoDataBuilder::new();
-    builder.append(
-        SqlInfo::FlightSqlServerTransaction,
-        SqlSupportedTransaction::Transaction as i32,
-    );
-    builder.append(SqlInfo::SqlTransactionsSupported, true);
-    builder.append(
-        SqlInfo::SqlDefaultTransactionIsolation,
-        SqlTransactionIsolationLevel::SqlTransactionSerializable as i32,
-    );
-    builder.append(SqlInfo::SqlSupportedTransactionsIsolationLevels, 0b11110);
-
-    let info_data = builder
-        .build()
-        .map_err(|e| Status::internal(format!("Failed to build SqlInfo data: {}", e)))?;
+    let info_data = build_sql_info_data()?;
 
     let batch = query
         .into_builder(&info_data)
