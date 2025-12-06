@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1
 
 ARG BUILDPLATFORM
-ARG TARGETPLATFORM
 
 # ========== builder ==========
 
@@ -35,7 +34,7 @@ RUN cp -r /swanlake/target/release /release \
 
 # ========== base ==========
 
-FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS base
+FROM debian:bookworm-slim AS base
 
 RUN apt-get update && apt-get install -y ca-certificates openssl && rm -rf /var/lib/apt/lists/*
 
