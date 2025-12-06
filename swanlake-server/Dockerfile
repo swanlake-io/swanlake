@@ -41,7 +41,7 @@ RUN apt-get update && apt-get install -y ca-certificates openssl && rm -rf /var/
 
 # ========== swanlake ==========
 
-FROM --platform=$TARGETPLATFORM base AS gateway
+FROM base AS gateway
 
 RUN useradd -m -s /bin/bash swanlake
 
