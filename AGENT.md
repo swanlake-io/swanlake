@@ -5,7 +5,7 @@ Concise reference for language-model agents working on the SwanLake codebase.
 ## Snapshot
 - **Purpose**: Arrow Flight SQL server backed by DuckDB with optional DuckLake extensions.
 - **Runtime**: Rust async service (`tokio`) exposing prepared statements, streaming results, and session-scoped state.
-- **Sessions**: Each gRPC connection owns a DuckDB connection; idle sessions auto-expire (default 30 min).
+- **Sessions**: Each gRPC connection owns a DuckDB connection; idle sessions auto-expire (default 15 min).
 - **Performance**: Schema discovery executes queries as-is, relying on DuckDB's lazy streaming to avoid unnecessary data scanning.
 
 ## Code Map
@@ -24,7 +24,7 @@ RUST_LOG=info cargo run --bin swanlake
 ```
 
 ## Configuration Cheatsheet
-All env vars use the `SWANLAKE_` prefix. See [Configuration.md](Configuration.md) for the up-to-date
+All env vars use the `SWANLAKE_` prefix. See [CONFIGURATION.md](CONFIGURATION.md) for the up-to-date
 table covering defaults and descriptions. Quick reminders:
 - Host/port/pool sizes influence the Flight endpoint + DuckDB pools.
 - `ENABLE_WRITES`, `MAX_SESSIONS`, and `SESSION_TIMEOUT_SECONDS` gate write workloads and cleanup.
@@ -57,6 +57,6 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 
 ## Further Reading
 - `README.md` — project overview, highlights, license.
-- `docs/session.md` — session lifecycle & metadata contract.
+- `swanlake-core/src/session/README.md` — session lifecycle & metadata contract.
 
 Keep responses crisp, prefer concrete file references, and preserve the session-centric design.

@@ -61,6 +61,24 @@ func main() {
 	tx.MustExec("INSERT INTO person (first_name, last_name, email) VALUES ($1, $2, $3)", "Jane", "Citizen", "jane.citzen@example.com")
 	tx.Commit()
 
+	// Multi-row insert in a single Exec to capture the Flight SQL driver's parameter shaping.
+	db.MustExec("DROP TABLE IF EXISTS multi_row_shape")
+	db.MustExec("CREATE TABLE multi_row_shape (a INT, b INT)")
+	if _, err := db.Exec("INSERT INTO multi_row_shape (a, b) VALUES ($1, $2), ($3, $4)", 10, 20, 30, 40); err != nil {
+		log.Fatalf("Multi-row insert failed: %v", err)
+	}
+	type pair struct {
+		A int `db:"a"`
+		B int `db:"b"`
+	}
+	var pairs []pair
+	if err := db.Select(&pairs, "SELECT a, b FROM multi_row_shape ORDER BY a"); err != nil {
+		log.Fatalf("Failed to read multi_row_shape: %v", err)
+	}
+	if len(pairs) != 2 || pairs[0].A != 10 || pairs[0].B != 20 || pairs[1].A != 30 || pairs[1].B != 40 {
+		log.Fatalf("Unexpected data in multi_row_shape: %#v", pairs)
+	}
+
 	// Query the database, storing results in a []Person (wrapped in []interface{})
 	people := []Person{}
 	db.Select(&people, "SELECT * FROM person ORDER BY first_name ASC")

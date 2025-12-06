@@ -1,0 +1,22 @@
+# name: test/sql/error_status.test
+# description: simple negative cases to ensure server returns errors
+# group: [sql]
+
+statement ok
+CREATE TABLE err_status (id INT PRIMARY KEY, val TEXT)
+
+statement ok
+INSERT INTO err_status VALUES (1, 'first')
+
+# duplicate PK should error
+statement error
+INSERT INTO err_status VALUES (1, 'dup')
+
+# reference to missing table should error
+query error
+SELECT * FROM missing_table_for_error_status
+----
+
+# drop for cleanup
+statement ok
+DROP TABLE err_status

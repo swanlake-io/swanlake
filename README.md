@@ -1,4 +1,4 @@
-[![Coverage Status](https://coveralls.io/repos/github/swanlake-io/swanlake/badge.svg)](https://coveralls.io/github/swanlake-io/swanlake)
+[![Coverage Status](https://coveralls.io/repos/github/swanlake-io/swanlake/badge.svg?branch=main)](https://coveralls.io/github/swanlake-io/swanlake?branch=main)
 
 # SwanLake
 
