@@ -40,33 +40,17 @@ impl EngineFactory {
         Ok(Self { init_sql })
     }
 
-    /// Lightweight constructor for tests that need a controllable init SQL without
-    /// installing extensions or hitting the network.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn for_tests(init_sql: &str) -> Self {
-        Self {
-            init_sql: init_sql.to_string(),
-        }
-    }
-
-    /// Create a DuckDB connection with the given init SQL
-    fn create_connection_with_sql(init_sql: &str) -> Result<Connection, ServerError> {
-        let config = Config::default()
-            .enable_autoload_extension(true)?
-            .allow_unsigned_extensions()?;
-        let conn = Connection::open_in_memory_with_flags(config)?;
-        conn.execute_batch(init_sql)?;
-        Ok(conn)
-    }
-
     /// Create a new initialized DuckDB connection
     ///
     /// Each connection is created fresh with its own in-memory database.
     /// This ensures complete isolation between sessions.
     #[instrument(skip(self))]
     pub fn create_connection(&self) -> Result<DuckDbConnection, ServerError> {
-        let conn = Self::create_connection_with_sql(&self.init_sql)?;
+        let config = Config::default()
+            .enable_autoload_extension(true)?
+            .allow_unsigned_extensions()?;
+        let conn = Connection::open_in_memory_with_flags(config)?;
+        conn.execute_batch(&self.init_sql)?;
         info!("created new DuckDB connection");
         Ok(DuckDbConnection::new(conn))
     }

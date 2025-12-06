@@ -9,6 +9,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{Field, Schema};
 use duckdb::types::Value;
 use duckdb::{params_from_iter, Connection};
+use duckdb::{Arrow, Statement};
 use tracing::{debug, info, instrument};
 
 use crate::error::ServerError;
@@ -52,65 +53,29 @@ impl DuckDbConnection {
     /// 2. Works with all SQL syntax (SHOW, DESCRIBE, PRAGMA, etc.)
     /// 3. Relies on DuckDB's streaming to avoid memory issues
     pub fn schema_for_query(&self, sql: &str) -> Result<Schema, ServerError> {
-        if sql.contains('\0') {
-            return Err(ServerError::UnsupportedParameter(
-                "SQL contains null bytes".to_string(),
-            ));
-        }
         let trimmed_sql = sql.trim_end_matches(';').trim();
 
-        let conn = self.conn.lock().expect("connection mutex poisoned");
-        let mut stmt = conn.prepare(trimmed_sql)?;
-        let param_count = stmt.parameter_count();
-        let arrow = if param_count == 0 {
-            stmt.query_arrow([])?
-        } else {
-            let nulls: Vec<Value> = (0..param_count).map(|_| Value::Null).collect();
-            stmt.query_arrow(params_from_iter(nulls))?
-        };
-        let schema = arrow.get_schema();
-
-        debug!(field_count = schema.fields().len(), "retrieved schema");
-        Ok(schema.as_ref().clone())
+        self.with_prepared(trimmed_sql, |stmt| {
+            let arrow = Self::query_arrow(stmt, None)?;
+            let schema = arrow.get_schema();
+            debug!(field_count = schema.fields().len(), "retrieved schema");
+            Ok(schema.as_ref().clone())
+        })
     }
 
     /// Execute a SELECT query and return results
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn execute_query(&self, sql: &str) -> Result<QueryResult, ServerError> {
-        if sql.contains('\0') {
-            return Err(ServerError::UnsupportedParameter(
-                "SQL contains null bytes".to_string(),
-            ));
-        }
-        let conn = self.conn.lock().expect("connection mutex poisoned");
-        let mut stmt = conn.prepare(sql)?;
-        let param_count = stmt.parameter_count();
-        let arrow = if param_count == 0 {
-            stmt.query_arrow([])?
-        } else {
-            let nulls: Vec<Value> = (0..param_count).map(|_| Value::Null).collect();
-            stmt.query_arrow(params_from_iter(nulls))?
-        };
-        let schema = arrow.get_schema();
-
-        let mut total_rows = 0usize;
-        let mut total_bytes = 0usize;
-        let batches: Vec<RecordBatch> = arrow
-            .inspect(|batch| {
-                total_rows += batch.num_rows();
-                total_bytes += batch.get_array_memory_size();
-            })
-            .collect();
-
-        debug!(
-            batch_count = batches.len(),
-            total_rows, total_bytes, "executed query"
-        );
-        Ok(QueryResult {
-            schema: schema.as_ref().clone(),
-            batches,
-            total_rows,
-            total_bytes,
+        self.with_prepared(sql, |stmt| {
+            let arrow = Self::query_arrow(stmt, None)?;
+            let result = Self::collect_query_result(arrow);
+            debug!(
+                batch_count = result.batches.len(),
+                total_rows = result.total_rows,
+                total_bytes = result.total_bytes,
+                "executed query"
+            );
+            Ok(result)
         })
     }
 
@@ -121,45 +86,23 @@ impl DuckDbConnection {
         sql: &str,
         params: &[Value],
     ) -> Result<QueryResult, ServerError> {
-        if sql.contains('\0') {
-            return Err(ServerError::UnsupportedParameter(
-                "SQL contains null bytes".to_string(),
-            ));
-        }
-        let conn = self.conn.lock().expect("connection mutex poisoned");
-        let mut stmt = conn.prepare(sql)?;
-        let arrow = stmt.query_arrow(params_from_iter(params.iter()))?;
-        let schema = arrow.get_schema();
-
-        let mut total_rows = 0usize;
-        let mut total_bytes = 0usize;
-        let batches: Vec<RecordBatch> = arrow
-            .inspect(|batch| {
-                total_rows += batch.num_rows();
-                total_bytes += batch.get_array_memory_size();
-            })
-            .collect();
-
-        debug!(
-            batch_count = batches.len(),
-            total_rows, total_bytes, "executed query with parameters"
-        );
-        Ok(QueryResult {
-            schema: schema.as_ref().clone(),
-            batches,
-            total_rows,
-            total_bytes,
+        self.with_prepared(sql, |stmt| {
+            let arrow = Self::query_arrow(stmt, Some(params))?;
+            let result = Self::collect_query_result(arrow);
+            debug!(
+                batch_count = result.batches.len(),
+                total_rows = result.total_rows,
+                total_bytes = result.total_bytes,
+                "executed query with parameters"
+            );
+            Ok(result)
         })
     }
 
     /// Execute a statement (DDL/DML) without returning results
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn execute_statement(&self, sql: &str) -> Result<i64, ServerError> {
-        if sql.contains('\0') {
-            return Err(ServerError::UnsupportedParameter(
-                "SQL contains null bytes".to_string(),
-            ));
-        }
+        Self::validate_sql(sql)?;
         let conn = self.conn.lock().expect("connection mutex poisoned");
         conn.execute_batch(sql)?;
         debug!("executed statement");
@@ -173,30 +116,17 @@ impl DuckDbConnection {
         sql: &str,
         params: &[Value],
     ) -> Result<usize, ServerError> {
-        if sql.contains('\0') {
-            return Err(ServerError::UnsupportedParameter(
-                "SQL contains null bytes".to_string(),
-            ));
-        }
-        let conn = self.conn.lock().expect("connection mutex poisoned");
-        let mut stmt = conn.prepare(sql)?;
-        let affected = if params.is_empty() {
-            stmt.execute([])?
-        } else {
-            stmt.execute(params_from_iter(params.iter()))?
-        };
-        debug!(affected, "executed statement with parameters");
-        Ok(affected)
+        self.with_prepared(sql, |stmt| {
+            let affected = Self::execute_with_params(stmt, params)?;
+            debug!(affected, "executed statement with parameters");
+            Ok(affected)
+        })
     }
 
     /// Execute a batch of SQL statements
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn execute_batch(&self, sql: &str) -> Result<(), ServerError> {
-        if sql.contains('\0') {
-            return Err(ServerError::UnsupportedParameter(
-                "SQL contains null bytes".to_string(),
-            ));
-        }
+        Self::validate_sql(sql)?;
         let conn = self.conn.lock().expect("connection mutex poisoned");
         conn.execute_batch(sql)?;
         debug!("executed batch");
@@ -297,5 +227,75 @@ impl DuckDbConnection {
             .query_row([], |row| row.get(0))
             .map_err(ServerError::DuckDb)?;
         Ok(catalog)
+    }
+
+    /// Ensure SQL does not contain null bytes.
+    fn validate_sql(sql: &str) -> Result<(), ServerError> {
+        if sql.contains('\0') {
+            return Err(ServerError::UnsupportedParameter(
+                "SQL contains null bytes".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Prepare a statement under the connection lock and run the provided closure.
+    fn with_prepared<T, F>(&self, sql: &str, f: F) -> Result<T, ServerError>
+    where
+        F: FnOnce(&mut Statement) -> Result<T, ServerError>,
+    {
+        Self::validate_sql(sql)?;
+        let conn = self.conn.lock().expect("connection mutex poisoned");
+        let mut stmt = conn.prepare(sql)?;
+        f(&mut stmt)
+    }
+
+    /// Execute a statement with parameters, handling the empty-params case.
+    fn execute_with_params(stmt: &mut Statement, params: &[Value]) -> Result<usize, ServerError> {
+        let affected = if params.is_empty() {
+            stmt.execute([])?
+        } else {
+            stmt.execute(params_from_iter(params.iter()))?
+        };
+        Ok(affected)
+    }
+
+    /// Run a query, binding parameters if provided, or filling with NULLs otherwise.
+    fn query_arrow<'a>(
+        stmt: &'a mut Statement,
+        params: Option<&[Value]>,
+    ) -> Result<Arrow<'a>, ServerError> {
+        match params {
+            Some(values) => Ok(stmt.query_arrow(params_from_iter(values.iter()))?),
+            None => {
+                let param_count = stmt.parameter_count();
+                if param_count == 0 {
+                    Ok(stmt.query_arrow([])?)
+                } else {
+                    let nulls: Vec<Value> = (0..param_count).map(|_| Value::Null).collect();
+                    Ok(stmt.query_arrow(params_from_iter(nulls))?)
+                }
+            }
+        }
+    }
+
+    /// Collect Arrow batches into a QueryResult with row/byte totals.
+    fn collect_query_result(arrow: Arrow<'_>) -> QueryResult {
+        let schema = arrow.get_schema();
+        let mut total_rows = 0usize;
+        let mut total_bytes = 0usize;
+        let batches: Vec<RecordBatch> = arrow
+            .inspect(|batch| {
+                total_rows += batch.num_rows();
+                total_bytes += batch.get_array_memory_size();
+            })
+            .collect();
+
+        QueryResult {
+            schema: schema.as_ref().clone(),
+            batches,
+            total_rows,
+            total_bytes,
+        }
     }
 }

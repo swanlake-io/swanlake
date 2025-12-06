@@ -5,7 +5,7 @@
 //! - `EngineFactory`: Factory for creating initialized connections
 //! - `QueryResult`: Query execution results
 
-pub mod batch;
+pub(crate) mod batch;
 pub mod connection;
 mod factory;
 
