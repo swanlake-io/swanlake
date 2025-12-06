@@ -264,14 +264,13 @@ pub(crate) async fn do_put_prepared_statement_update(
     query: CommandPreparedStatementUpdate,
     request: Request<PeekableFlightDataStream>,
 ) -> Result<i64, Status> {
-    let (session, handle, PreparedStatementMeta { sql, is_query, .. }) =
-        resolve_session_and_meta(
-            service,
-            query.prepared_statement_handle.as_ref(),
-            "do_put_prepared_statement_update",
-            &request,
-        )
-        .await?;
+    let (session, handle, PreparedStatementMeta { sql, is_query, .. }) = resolve_session_and_meta(
+        service,
+        query.prepared_statement_handle.as_ref(),
+        "do_put_prepared_statement_update",
+        &request,
+    )
+    .await?;
 
     if is_query {
         error!(

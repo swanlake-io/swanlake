@@ -158,7 +158,7 @@ sleep 2
 
 cleanup_server
 
-echo "Integration tests completed. Coverage data collected in target/llvm-cov-target/"
+echo "Integration tests completed. Coverage data collected in target/"
 
 # ============================================================================
 # Generate Coverage Report
