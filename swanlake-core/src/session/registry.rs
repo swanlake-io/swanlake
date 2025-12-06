@@ -9,13 +9,13 @@
 
 use std::collections::HashMap;
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use tracing::{debug, info, instrument, warn};
 
 use crate::config::ServerConfig;
-use crate::engine::EngineFactory;
+use crate::engine::EnginePool;
 use crate::error::ServerError;
 use crate::session::id::SessionId;
 use crate::session::Session;
@@ -24,7 +24,7 @@ use crate::session::Session;
 #[derive(Clone)]
 pub struct SessionRegistry {
     inner: Arc<RwLock<RegistryInner>>,
-    factory: Arc<Mutex<EngineFactory>>,
+    pool: Arc<EnginePool>,
     max_sessions: usize,
     session_timeout: Duration,
 }
@@ -35,11 +35,8 @@ struct RegistryInner {
 
 impl SessionRegistry {
     /// Create a new session registry
-    #[instrument(skip(config, factory))]
-    pub fn new(
-        config: &ServerConfig,
-        factory: Arc<Mutex<EngineFactory>>,
-    ) -> Result<Self, ServerError> {
+    #[instrument(skip(config, pool))]
+    pub fn new(config: &ServerConfig, pool: Arc<EnginePool>) -> Result<Self, ServerError> {
         let max_sessions = config.max_sessions.unwrap_or(100);
         let session_timeout = Duration::from_secs(config.session_timeout_seconds.unwrap_or(1800)); // 30min default
 
@@ -53,14 +50,10 @@ impl SessionRegistry {
             inner: Arc::new(RwLock::new(RegistryInner {
                 sessions: HashMap::new(),
             })),
-            factory,
+            pool,
             max_sessions,
             session_timeout,
         })
-    }
-
-    pub fn engine_factory(&self) -> Arc<Mutex<EngineFactory>> {
-        self.factory.clone()
     }
 
     /// Clean up idle sessions that have exceeded the timeout
@@ -130,7 +123,7 @@ impl SessionRegistry {
         }
 
         // Create new connection
-        let connection = self.factory.lock().unwrap().create_connection()?;
+        let connection = self.pool.create_connection()?;
 
         // Create session with the specified ID
         let session = Arc::new(Session::new_with_id(session_id.clone(), connection));

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use swanlake_core::config::ServerConfig;
-use swanlake_core::engine::EngineFactory;
+use swanlake_core::engine::EnginePool;
 use swanlake_core::maintenance::CheckpointService;
 use swanlake_core::service::SwanFlightSqlService;
 use tonic::transport::Server;
@@ -21,9 +21,7 @@ async fn main() -> Result<()> {
         .bind_addr()
         .context("failed to resolve bind address")?;
 
-    let factory = Arc::new(std::sync::Mutex::new(
-        EngineFactory::new(&config).context("failed to initialize engine factory")?,
-    ));
+    let factory = Arc::new(EnginePool::new(&config).context("failed to initialize engine pool")?);
 
     // Spawn DuckLake checkpoint maintenance task
     CheckpointService::spawn_from_config(&config, factory.clone())
