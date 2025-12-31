@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+env:
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test ${{ matrix.target }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - {
+              target: x86_64-pc-windows-msvc,
+              os: windows-latest,
+              duckdb: libduckdb-windows-amd64.zip,
+            }
+          - {
+              target: x86_64-unknown-linux-gnu,
+              os: ubuntu-latest,
+              duckdb: libduckdb-linux-amd64.zip,
+            }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      # download libduckdb
+      - uses: robinraju/release-downloader@v1.4
+        name: Download duckdb
+        with:
+          repository: "duckdb/duckdb"
+          tag: "v1.4.1"
+          fileName: ${{ matrix.duckdb }}
+          out-file-path: .
+
+      # For Linux
+      - name: Linux extract duckdb
+        if: matrix.os == 'ubuntu-latest'
+        uses: ihiroky/extract-action@v1
+        with:
+          file_path: ${{ github.workspace }}/${{ matrix.duckdb }}
+          extract_dir: libduckdb
+
+      - run: cargo fmt --all -- --check
+        if: matrix.os == 'ubuntu-latest'
+
+      - name: run cargo clippy
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          DUCKDB_LIB_DIR: ${{ github.workspace }}/libduckdb
+          DUCKDB_INCLUDE_DIR: ${{ github.workspace }}/libduckdb
+          LD_LIBRARY_PATH: ${{ github.workspace }}/libduckdb
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Dry-run release of crates
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo publish --workspace --dry-run
+
+      # For windows
+      - name: Windows extract duckdb
+        if: matrix.os == 'windows-latest'
+        uses: DuckSoft/extract-7z-action@v1.0
+        with:
+          pathSource: D:\a\duckdb-rs\duckdb-rs\${{ matrix.duckdb }}
+          pathTarget: ${{ github.workspace }}/libduckdb
+
+      - name: Add path to PATH environment variable
+        if: matrix.os == 'windows-latest'
+        uses: myci-actions/export-env-var-powershell@1
+        with:
+          name: PATH
+          value: $env:PATH;${{ github.workspace }}/libduckdb
+
+      - name: Run cargo-test
+        if: matrix.os == 'windows-latest'
+        run: cargo test --features "modern-full vtab-full vtab-loadable"
+        env:
+          DUCKDB_LIB_DIR: ${{ github.workspace }}/libduckdb
+          DUCKDB_INCLUDE_DIR: ${{ github.workspace }}/libduckdb
+
+      - name: Build loadable extension
+        run: cargo build --example hello-ext --features="vtab-loadable"
+        env:
+          DUCKDB_LIB_DIR: ${{ github.workspace }}/libduckdb
+          DUCKDB_INCLUDE_DIR: ${{ github.workspace }}/libduckdb
+          LD_LIBRARY_PATH: ${{ github.workspace }}/libduckdb
+
+      - name: Build loadable extension
+        run: cargo build --example hello-ext-capi --features="vtab-loadable loadable-extension"
+        env:
+          DUCKDB_LIB_DIR: ${{ github.workspace }}/libduckdb
+          DUCKDB_INCLUDE_DIR: ${{ github.workspace }}/libduckdb
+          LD_LIBRARY_PATH: ${{ github.workspace }}/libduckdb
+
+  Sanitizer:
+    name: Address Sanitizer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly-2025-08-15
+          components: rust-src
+      - name: Install LLVM
+        run: sudo apt-get install -y llvm
+      - name: Tests with asan
+        env:
+          RUSTFLAGS: -Zsanitizer=address -C debuginfo=0
+          RUSTDOCFLAGS: -Zsanitizer=address
+          ASAN_OPTIONS: "detect_stack_use_after_return=1:detect_leaks=1:symbolize=1"
+        # We cannot run "modern-full" with asan as the chrono feature will auto-load relase binaries of
+        # the ICU-extension, which are not built with ASAN and will cause a crash.
+        run: |
+          export ASAN_SYMBOLIZER_PATH=$(which llvm-symbolizer)
+          echo $ASAN_SYMBOLIZER_PATH
+          cargo -Z build-std test --features "serde_json url r2d2 uuid polars extensions-full" --target x86_64-unknown-linux-gnu --package duckdb
