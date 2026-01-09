@@ -3432,6 +3432,7 @@ dependencies = [
  "comfy-table",
  "dirs",
  "rustyline",
+ "tokio",
  "tracing-subscriber",
 ]
 

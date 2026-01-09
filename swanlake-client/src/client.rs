@@ -1,59 +1,15 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
-use adbc_core::{
-    options::{AdbcVersion, OptionDatabase, OptionValue},
-    Connection, Database, Driver, Statement,
-};
-use adbc_driver_flightsql::DRIVER_PATH;
-use adbc_driver_manager::{ManagedConnection, ManagedDriver};
-use anyhow::{anyhow, Context, Result};
+use adbc_driver_manager::ManagedConnection;
+use anyhow::Result;
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 
-struct CachedDriver {
-    driver: Mutex<ManagedDriver>,
-}
-
-impl CachedDriver {
-    fn new(driver: ManagedDriver) -> Self {
-        Self {
-            driver: Mutex::new(driver),
-        }
-    }
-
-    fn new_connection(&self, endpoint: &str) -> Result<ManagedConnection> {
-        let mut driver = self
-            .driver
-            .lock()
-            .map_err(|e| anyhow!("Flight SQL driver mutex poisoned: {}", e))?;
-        let database = driver
-            .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])
-            .with_context(|| "failed to create database handle")?;
-        drop(driver);
-        let connection = database
-            .new_connection()
-            .with_context(|| "failed to create Flight SQL connection")?;
-        Ok(connection)
-    }
-}
-
-static DRIVER_CACHE: OnceLock<Result<Arc<CachedDriver>>> = OnceLock::new();
-
-fn get_cached_driver() -> Result<Arc<CachedDriver>> {
-    match DRIVER_CACHE.get_or_init(|| {
-        ManagedDriver::load_dynamic_from_filename(
-            PathBuf::from(DRIVER_PATH),
-            None,
-            AdbcVersion::default(),
-        )
-        .with_context(|| "failed to load Flight SQL driver")
-        .map(|driver| Arc::new(CachedDriver::new(driver)))
-    }) {
-        Ok(driver) => Ok(driver.clone()),
-        Err(e) => Err(anyhow!("failed to load Flight SQL driver: {}", e)),
-    }
-}
+use crate::driver::get_cached_driver;
+use crate::internal::{
+    execute_query, execute_query_with_params, execute_update, execute_update_with_batch,
+    run_healthcheck,
+};
 
 /// A Flight SQL client for connecting to SwanLake servers.
 ///
@@ -116,6 +72,7 @@ impl QueryResult {
         }
     }
 
+    /// Create a QueryResult with an explicit rows-affected value.
     pub fn with_rows_affected(batches: Vec<RecordBatch>, rows_affected: Option<i64>) -> Self {
         let total_rows = batches.iter().map(|b| b.num_rows()).sum();
         Self {
@@ -166,25 +123,17 @@ impl FlightSQLClient {
         let driver = get_cached_driver()?;
         let mut conn = driver.new_connection(endpoint)?;
         // Test the connection by executing a simple query.
-        let mut stmt = conn.new_statement()?;
-        stmt.set_sql_query("SELECT 1")?;
-        let _reader = stmt.execute()?;
+        run_healthcheck(&mut conn, "SELECT 1")?;
         Ok(Self { conn })
     }
 
+    /// Execute a SQL query and return the full result set.
     /// Execute a query and return results. Use when you expect rows.
     pub fn query(&mut self, sql: &str) -> Result<QueryResult> {
-        let mut stmt = self.conn.new_statement()?;
-        stmt.set_sql_query(sql)?;
-
-        let reader = stmt.execute()?;
-        let mut batches = Vec::new();
-        for batch in reader {
-            batches.push(batch?);
-        }
-        Ok(QueryResult::new(batches))
+        execute_query(&mut self.conn, sql)
     }
 
+    /// Execute a SQL statement, returning results if any.
     /// Convenience wrapper that always calls `query`. The server accepts
     /// commands via ExecuteQuery, so callers that are unsure can use this
     /// method.
@@ -192,12 +141,10 @@ impl FlightSQLClient {
         self.query(sql)
     }
 
+    /// Execute an update/DDL statement and return rows affected if available.
     /// Execute an update/DDL statement (INSERT, UPDATE, DELETE, CREATE, etc.).
     pub fn update(&mut self, sql: &str) -> Result<UpdateResult> {
-        let mut stmt = self.conn.new_statement()?;
-        stmt.set_sql_query(sql)?;
-        let rows_affected = stmt.execute_update()?;
-        Ok(UpdateResult { rows_affected })
+        execute_update(&mut self.conn, sql)
     }
 
     /// Execute a query with parameters using a prepared statement.
@@ -205,19 +152,7 @@ impl FlightSQLClient {
     /// The parameters are provided as a `RecordBatch`, allowing callers to bind
     /// typed values directly.
     pub fn query_with_param(&mut self, sql: &str, params: RecordBatch) -> Result<QueryResult> {
-        let mut stmt = self.conn.new_statement()?;
-        stmt.set_sql_query(sql)?;
-        stmt.prepare()?;
-
-        stmt.bind(params)?;
-
-        let reader = stmt.execute()?;
-        let mut batches = Vec::new();
-        for batch in reader {
-            batches.push(batch?);
-        }
-
-        Ok(QueryResult::new(batches))
+        execute_query_with_params(&mut self.conn, sql, params)
     }
 
     /// Execute an update with a record batch for batch inserts or parameterized DML.
@@ -226,12 +161,7 @@ impl FlightSQLClient {
         sql: &str,
         batch: RecordBatch,
     ) -> Result<UpdateResult> {
-        let mut stmt = self.conn.new_statement()?;
-        stmt.set_sql_query(sql)?;
-        stmt.prepare()?;
-        stmt.bind(batch)?;
-        let rows_affected = stmt.execute_update()?;
-        Ok(UpdateResult { rows_affected })
+        execute_update_with_batch(&mut self.conn, sql, batch)
     }
 
     /// Get a reference to the underlying ADBC connection.

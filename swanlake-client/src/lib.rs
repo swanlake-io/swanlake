@@ -15,7 +15,14 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
+mod driver;
+mod internal;
+mod pool_shared;
 pub mod client;
+pub mod pool;
+
+#[cfg(feature = "tokio")]
+pub mod async_pool;
 
 /// A Flight SQL client for connecting to SwanLake servers.
 ///
@@ -31,3 +38,29 @@ pub use client::QueryResult;
 ///
 /// See [`UpdateResult`] for details.
 pub use client::UpdateResult;
+
+/// Connection pool for SwanLake Flight SQL connections.
+pub use pool::FlightSQLPool;
+
+/// Pool configuration options.
+pub use pool::PoolConfig;
+
+/// RAII pooled connection handle.
+pub use pool::PooledConnection;
+
+/// Session handle for stateful workflows.
+pub use pool::SessionHandle;
+
+/// Prepared statement handle tied to a session.
+pub use pool::PreparedQuery;
+
+/// Options for pooled queries/updates.
+pub use pool::QueryOptions;
+
+#[cfg(feature = "tokio")]
+/// Async connection pool for SwanLake Flight SQL connections.
+pub use async_pool::AsyncFlightSQLPool;
+
+#[cfg(feature = "tokio")]
+/// Async session handle for stateful workflows.
+pub use async_pool::AsyncSessionHandle;
