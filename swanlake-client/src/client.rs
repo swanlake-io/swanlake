@@ -19,7 +19,7 @@ use crate::internal::{
 /// # Example
 ///
 /// ```rust,ignore
-/// use flight_sql_client::FlightSQLClient;
+/// use swanlake_client::FlightSQLClient;
 ///
 /// let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
 /// let result = client.execute("SELECT 1 as col")?;
@@ -57,7 +57,7 @@ impl QueryResult {
     /// # Example
     ///
     /// ```rust
-    /// use flight_sql_client::QueryResult;
+    /// use swanlake_client::QueryResult;
     /// use arrow_array::RecordBatch;
     ///
     /// let batches = vec![]; // Assume some batches
@@ -114,7 +114,7 @@ impl FlightSQLClient {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use flight_sql_client::FlightSQLClient;
+    /// use swanlake_client::FlightSQLClient;
     ///
     /// let client = FlightSQLClient::connect("grpc://localhost:4214")?;
     /// # Ok::<(), anyhow::Error>(())

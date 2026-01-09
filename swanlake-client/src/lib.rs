@@ -7,7 +7,7 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use flight_sql_client::FlightSQLClient;
+//! use swanlake_client::FlightSQLClient;
 //!
 //! let mut client = FlightSQLClient::connect("grpc://localhost:4214")?;
 //! let result = client.execute("SELECT 1")?;

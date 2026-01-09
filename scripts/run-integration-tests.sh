@@ -84,6 +84,9 @@ source "$ROOT_DIR/swanlake-core/.duckdb/env.sh"
 # Run Rust unit tests under coverage instrumentation
 cargo test --package swanlake-server --package swanlake-core
 
+# Run swanlake-client tests (sync + async pool)
+cargo test -p swanlake-client --features tokio
+
 # ============================================================================
 # SQL Tests
 # ============================================================================
