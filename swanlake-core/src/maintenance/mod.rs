@@ -4,7 +4,7 @@
 //! metadata (`ducklake_checkpoints` table) and advisory locks.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -62,18 +62,18 @@ impl CheckpointConfig {
 /// Handles background checkpointing lifecycle.
 pub struct CheckpointService {
     cfg: CheckpointConfig,
-    factory: Arc<Mutex<EngineFactory>>,
+    factory: Arc<EngineFactory>,
 }
 
 impl CheckpointService {
-    pub fn new(cfg: CheckpointConfig, factory: Arc<Mutex<EngineFactory>>) -> Self {
+    pub fn new(cfg: CheckpointConfig, factory: Arc<EngineFactory>) -> Self {
         Self { cfg, factory }
     }
 
     /// Spawn the checkpoint loop if there is work configured.
     pub async fn spawn_from_config(
         config: &ServerConfig,
-        factory: Arc<Mutex<EngineFactory>>,
+        factory: Arc<EngineFactory>,
     ) -> Result<()> {
         let Some(cfg) = CheckpointConfig::from_server_config(config) else {
             debug!("no checkpoint databases configured; skipping checkpoint task");
@@ -170,14 +170,9 @@ impl CheckpointService {
         let db = db_name.to_string();
         let factory = self.factory.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = {
-                let guard = factory
-                    .lock()
-                    .map_err(|_| anyhow!("EngineFactory lock poisoned"))?;
-                guard
-                    .create_connection()
-                    .map_err(|e| anyhow!(e.to_string()))?
-            };
+            let conn = factory
+                .create_connection()
+                .map_err(|e| anyhow!(e.to_string()))?;
             let sql = format!("USE {}; CHECKPOINT;", db);
             conn.execute_batch(&sql)
                 .map_err(|e| anyhow!(e.to_string()))
