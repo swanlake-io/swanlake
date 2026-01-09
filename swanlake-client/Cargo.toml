@@ -9,8 +9,8 @@ keywords = ["flight-sql", "arrow", "adbc", "database", "client"]
 categories = ["database", "api-bindings"]
 
 [dependencies]
-adbc_core = "0.21"
-adbc_driver_manager = "0.21"
+adbc_core = "0.22"
+adbc_driver_manager = "0.22"
 adbc-driver-flightsql = "0.1"
 anyhow = { workspace = true }
 arrow-array = { workspace = true }
