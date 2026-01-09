@@ -9,8 +9,7 @@ use swanlake_client::AsyncFlightSQLPool;
 use tokio::time::Instant;
 
 fn endpoint() -> String {
-    std::env::var("SWANLAKE_ENDPOINT")
-        .unwrap_or_else(|_| "grpc://127.0.0.1:4214".to_string())
+    std::env::var("SWANLAKE_ENDPOINT").unwrap_or_else(|_| "grpc://127.0.0.1:4214".to_string())
 }
 
 fn table_schema() -> String {
@@ -115,6 +114,7 @@ async fn perf_async_pool_mixed_load() -> Result<()> {
         total_ops, elapsed, ops_per_sec
     );
 
-    pool.update(&format!("DROP TABLE {}.{}", schema, table)).await?;
+    pool.update(&format!("DROP TABLE {}.{}", schema, table))
+        .await?;
     Ok(())
 }

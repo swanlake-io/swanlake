@@ -6,8 +6,7 @@ use arrow_schema::{DataType, Field, Schema};
 use swanlake_client::{FlightSQLClient, FlightSQLPool};
 
 fn endpoint() -> String {
-    std::env::var("SWANLAKE_ENDPOINT")
-        .unwrap_or_else(|_| "grpc://127.0.0.1:4214".to_string())
+    std::env::var("SWANLAKE_ENDPOINT").unwrap_or_else(|_| "grpc://127.0.0.1:4214".to_string())
 }
 
 fn table_schema() -> String {
@@ -76,7 +75,10 @@ fn integration_client_multi_row_params() -> Result<()> {
     let mut client = FlightSQLClient::connect(&endpoint)?;
     let schema = table_schema();
 
-    client.update(&format!("CREATE TABLE {}.multi_row_tmp (val INTEGER)", schema))?;
+    client.update(&format!(
+        "CREATE TABLE {}.multi_row_tmp (val INTEGER)",
+        schema
+    ))?;
     let params = sample_int_batch(vec![1, 2, 3])?;
     client.update_with_record_batch(
         &format!("INSERT INTO {}.multi_row_tmp VALUES (?)", schema),

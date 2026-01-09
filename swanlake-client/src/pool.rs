@@ -10,8 +10,9 @@ use arrow_array::RecordBatch;
 
 use crate::driver::get_cached_driver;
 use crate::internal::{
-    begin_transaction, commit_transaction, execute_query, execute_query_with_params, execute_update,
-    execute_update_with_batch, execute_statement_query, rollback_transaction, run_healthcheck,
+    begin_transaction, commit_transaction, execute_query, execute_query_with_params,
+    execute_statement_query, execute_update, execute_update_with_batch, rollback_transaction,
+    run_healthcheck,
 };
 use crate::pool_shared::{evict_idle, IdleConnection, PoolState};
 use crate::{QueryResult, UpdateResult};
@@ -254,9 +255,7 @@ impl PooledConnection {
 
     /// Get mutable access to the underlying managed connection.
     pub fn connection(&mut self) -> &mut ManagedConnection {
-        self.conn
-            .as_mut()
-            .expect("pooled connection missing")
+        self.conn.as_mut().expect("pooled connection missing")
     }
 
     fn mark_error(&mut self) {
@@ -407,11 +406,7 @@ impl FlightSQLPool {
     }
 
     /// Execute a batch update/insert using a prepared statement.
-    pub fn update_with_record_batch(
-        &self,
-        sql: &str,
-        batch: RecordBatch,
-    ) -> Result<UpdateResult> {
+    pub fn update_with_record_batch(&self, sql: &str, batch: RecordBatch) -> Result<UpdateResult> {
         self.update_with_batch_and_options(sql, Some(batch), QueryOptions::default())
     }
 

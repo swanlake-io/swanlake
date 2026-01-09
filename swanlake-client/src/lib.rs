@@ -15,11 +15,11 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
+pub mod client;
 mod driver;
 mod internal;
-mod pool_shared;
-pub mod client;
 pub mod pool;
+mod pool_shared;
 
 #[cfg(feature = "tokio")]
 pub mod async_pool;

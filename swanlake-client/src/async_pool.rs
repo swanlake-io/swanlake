@@ -9,8 +9,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::driver::get_cached_driver;
 use crate::internal::{
-    begin_transaction, commit_transaction, execute_query, execute_query_with_params, execute_update,
-    execute_update_with_batch, rollback_transaction, run_healthcheck,
+    begin_transaction, commit_transaction, execute_query, execute_query_with_params,
+    execute_update, execute_update_with_batch, rollback_transaction, run_healthcheck,
 };
 use crate::pool::QueryOptions;
 use crate::pool_shared::{evict_idle, IdleConnection, PoolState};
@@ -66,15 +66,11 @@ impl AsyncPoolInner {
 
     async fn acquire_connection(self: &Arc<Self>) -> Result<AsyncPooledConnection> {
         let timeout = Duration::from_millis(self.config.acquire_timeout_ms);
-        let permit =
-            match tokio::time::timeout(timeout, self.semaphore.clone().acquire_owned()).await
+        let permit = match tokio::time::timeout(timeout, self.semaphore.clone().acquire_owned())
+            .await
         {
             Ok(Ok(permit)) => permit,
-            Ok(Err(_)) => {
-                return Err(anyhow!(
-                    "connection pool closed while waiting for permit"
-                ))
-            }
+            Ok(Err(_)) => return Err(anyhow!("connection pool closed while waiting for permit")),
             Err(_) => {
                 return Err(anyhow!(
                     "timed out waiting for pool connection (max_size={}, acquire_timeout_ms={})",
@@ -158,7 +154,11 @@ struct AsyncPooledConnection {
 }
 
 impl AsyncPooledConnection {
-    fn new(conn: ManagedConnection, pool: Arc<AsyncPoolInner>, permit: OwnedSemaphorePermit) -> Self {
+    fn new(
+        conn: ManagedConnection,
+        pool: Arc<AsyncPoolInner>,
+        permit: OwnedSemaphorePermit,
+    ) -> Self {
         Self {
             conn: Some(conn),
             pool,
@@ -248,23 +248,17 @@ impl AsyncSessionHandle {
 
     /// Begin a transaction by disabling autocommit.
     pub async fn begin_transaction(&mut self) -> Result<()> {
-        self.pooled
-            .with_connection(begin_transaction)
-            .await
+        self.pooled.with_connection(begin_transaction).await
     }
 
     /// Commit the active transaction and re-enable autocommit.
     pub async fn commit(&mut self) -> Result<()> {
-        self.pooled
-            .with_connection(commit_transaction)
-            .await
+        self.pooled.with_connection(commit_transaction).await
     }
 
     /// Roll back the active transaction and re-enable autocommit.
     pub async fn rollback(&mut self) -> Result<()> {
-        self.pooled
-            .with_connection(rollback_transaction)
-            .await
+        self.pooled.with_connection(rollback_transaction).await
     }
 }
 
@@ -335,11 +329,7 @@ impl AsyncFlightSQLPool {
     }
 
     /// Execute an update with explicit query options.
-    pub async fn update_with_options(
-        &self,
-        sql: &str,
-        opts: QueryOptions,
-    ) -> Result<UpdateResult> {
+    pub async fn update_with_options(&self, sql: &str, opts: QueryOptions) -> Result<UpdateResult> {
         self.update_with_batch_and_options(sql, None, opts).await
     }
 

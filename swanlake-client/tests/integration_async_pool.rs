@@ -8,8 +8,7 @@ use arrow_schema::{DataType, Field, Schema};
 use swanlake_client::{AsyncFlightSQLPool, QueryResult};
 
 fn endpoint() -> String {
-    std::env::var("SWANLAKE_ENDPOINT")
-        .unwrap_or_else(|_| "grpc://127.0.0.1:4214".to_string())
+    std::env::var("SWANLAKE_ENDPOINT").unwrap_or_else(|_| "grpc://127.0.0.1:4214".to_string())
 }
 
 fn table_schema() -> String {
@@ -54,7 +53,8 @@ async fn integration_async_pool_usage() -> Result<()> {
 
     let mut session = pool.acquire_session().await?;
     session.begin_transaction().await?;
-    session.update("CREATE TEMP TABLE async_tmp (id INTEGER)")
+    session
+        .update("CREATE TEMP TABLE async_tmp (id INTEGER)")
         .await?;
     session.commit().await?;
 
@@ -76,14 +76,18 @@ async fn integration_async_pool_multi_row_params() -> Result<()> {
         .await?;
 
     let params = sample_int_batch(vec![4, 5, 6])?;
-    pool.update_with_record_batch(&format!("INSERT INTO {}.{} VALUES (?)", schema, table), params)
-        .await?;
+    pool.update_with_record_batch(
+        &format!("INSERT INTO {}.{} VALUES (?)", schema, table),
+        params,
+    )
+    .await?;
 
     let result = pool
         .query(&format!("SELECT COUNT(*) FROM {}.{}", schema, table))
         .await?;
     assert_eq!(extract_count(&result)?, 3);
 
-    pool.update(&format!("DROP TABLE {}.{}", schema, table)).await?;
+    pool.update(&format!("DROP TABLE {}.{}", schema, table))
+        .await?;
     Ok(())
 }

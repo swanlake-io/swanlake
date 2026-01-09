@@ -2,14 +2,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use adbc_core::{
-    options::AdbcVersion,
-    options::OptionDatabase,
-    options::OptionValue,
-    Database,
-    Driver,
+    options::AdbcVersion, options::OptionDatabase, options::OptionValue, Database, Driver,
 };
-use adbc_driver_manager::{ManagedConnection, ManagedDriver};
 use adbc_driver_flightsql::DRIVER_PATH;
+use adbc_driver_manager::{ManagedConnection, ManagedDriver};
 use anyhow::{anyhow, Context, Result};
 
 pub(crate) struct CachedDriver {
