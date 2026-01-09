@@ -21,9 +21,8 @@ async fn main() -> Result<()> {
         .bind_addr()
         .context("failed to resolve bind address")?;
 
-    let factory = Arc::new(std::sync::Mutex::new(
-        EngineFactory::new(&config).context("failed to initialize engine factory")?,
-    ));
+    let factory =
+        Arc::new(EngineFactory::new(&config).context("failed to initialize engine factory")?);
 
     // Spawn DuckLake checkpoint maintenance task
     CheckpointService::spawn_from_config(&config, factory.clone())

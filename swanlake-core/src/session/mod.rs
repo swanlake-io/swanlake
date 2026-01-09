@@ -11,7 +11,7 @@ pub mod registry;
 
 pub use id::SessionId;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -81,6 +81,55 @@ impl PreparedStatementState {
     }
 }
 
+const SCHEMA_CACHE_CAPACITY: usize = 128;
+
+#[derive(Debug)]
+struct SchemaCache {
+    entries: HashMap<String, Schema>,
+    order: VecDeque<String>,
+}
+
+impl SchemaCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<Schema> {
+        let schema = self.entries.get(key)?.clone();
+        self.touch_key(key);
+        Some(schema)
+    }
+
+    fn insert(&mut self, key: String, schema: Schema) {
+        self.entries.insert(key.clone(), schema);
+        self.touch_key(&key);
+        self.evict_if_needed();
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
+
+    fn touch_key(&mut self, key: &str) {
+        self.order.retain(|k| k != key);
+        self.order.push_back(key.to_string());
+    }
+
+    fn evict_if_needed(&mut self) {
+        while self.entries.len() > SCHEMA_CACHE_CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
 /// A client session with dedicated connection and state
 pub struct Session {
     id: SessionId,
@@ -91,6 +140,7 @@ pub struct Session {
     transaction_id_gen: TransactionIdGenerator,
     statement_handle_gen: StatementHandleGenerator,
     last_activity: Mutex<Instant>,
+    schema_cache: Mutex<SchemaCache>,
 }
 
 impl Session {
@@ -108,6 +158,7 @@ impl Session {
             transaction_id_gen: TransactionIdGenerator::new(),
             statement_handle_gen: StatementHandleGenerator::new(),
             last_activity: Mutex::new(Instant::now()),
+            schema_cache: Mutex::new(SchemaCache::new()),
         }
     }
 
@@ -249,7 +300,12 @@ impl Session {
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn execute_statement(&self, sql: &str) -> Result<i64, ServerError> {
         self.touch();
-        self.with_transaction_recovery(|| self.connection.execute_statement(sql), true)
+        let result =
+            self.with_transaction_recovery(|| self.connection.execute_statement(sql), true);
+        if result.is_ok() && Self::should_invalidate_schema_cache(sql) {
+            self.clear_schema_cache();
+        }
+        result
     }
 
     /// Execute a statement with parameters
@@ -260,17 +316,44 @@ impl Session {
         params: &[Value],
     ) -> Result<usize, ServerError> {
         self.touch();
-        self.with_transaction_recovery(
+        let result = self.with_transaction_recovery(
             || self.connection.execute_statement_with_params(sql, params),
             true,
-        )
+        );
+        if result.is_ok() && Self::should_invalidate_schema_cache(sql) {
+            self.clear_schema_cache();
+        }
+        result
     }
 
     /// Get schema for a query
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn schema_for_query(&self, sql: &str) -> Result<arrow_schema::Schema, ServerError> {
         self.touch();
-        self.with_transaction_recovery(|| self.connection.schema_for_query(sql), true)
+        let cache_key = Self::schema_cache_key(sql);
+        if !cache_key.is_empty() {
+            if let Some(schema) = self
+                .schema_cache
+                .lock()
+                .expect("schema_cache mutex poisoned")
+                .get(&cache_key)
+            {
+                debug!(field_count = schema.fields().len(), "schema cache hit");
+                return Ok(schema);
+            }
+        }
+
+        let schema =
+            self.with_transaction_recovery(|| self.connection.schema_for_query(sql), true)?;
+
+        if !cache_key.is_empty() {
+            self.schema_cache
+                .lock()
+                .expect("schema_cache mutex poisoned")
+                .insert(cache_key, schema.clone());
+        }
+
+        Ok(schema)
     }
 
     /// Insert data using appender API with RecordBatches.
@@ -302,6 +385,30 @@ impl Session {
     /// Return the current catalog selected for this session.
     pub fn current_catalog(&self) -> Result<String, ServerError> {
         self.with_transaction_recovery(|| self.connection.current_catalog(), true)
+    }
+
+    fn schema_cache_key(sql: &str) -> String {
+        sql.trim_end_matches(';').trim().to_string()
+    }
+
+    fn should_invalidate_schema_cache(sql: &str) -> bool {
+        let upper = sql.trim_start().to_uppercase();
+        upper.starts_with("CREATE")
+            || upper.starts_with("ALTER")
+            || upper.starts_with("DROP")
+            || upper.starts_with("TRUNCATE")
+            || upper.starts_with("RENAME")
+            || upper.starts_with("USE")
+            || upper.starts_with("ATTACH")
+            || upper.starts_with("DETACH")
+    }
+
+    fn clear_schema_cache(&self) {
+        let mut cache = self
+            .schema_cache
+            .lock()
+            .expect("schema_cache mutex poisoned");
+        cache.clear();
     }
 
     /// Resolve catalog/table for a parsed table reference, respecting the session's current catalog.

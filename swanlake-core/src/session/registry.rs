@@ -9,9 +9,10 @@
 
 use std::collections::HashMap;
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, instrument, warn};
 
 use crate::config::ServerConfig;
@@ -24,22 +25,25 @@ use crate::session::Session;
 #[derive(Clone)]
 pub struct SessionRegistry {
     inner: Arc<RwLock<RegistryInner>>,
-    factory: Arc<Mutex<EngineFactory>>,
+    factory: Arc<EngineFactory>,
     max_sessions: usize,
     session_timeout: Duration,
+    session_permits: Arc<Semaphore>,
 }
 
 struct RegistryInner {
-    sessions: HashMap<SessionId, Arc<Session>>,
+    sessions: HashMap<SessionId, SessionEntry>,
+}
+
+struct SessionEntry {
+    session: Arc<Session>,
+    _permit: OwnedSemaphorePermit,
 }
 
 impl SessionRegistry {
     /// Create a new session registry
     #[instrument(skip(config, factory))]
-    pub fn new(
-        config: &ServerConfig,
-        factory: Arc<Mutex<EngineFactory>>,
-    ) -> Result<Self, ServerError> {
+    pub fn new(config: &ServerConfig, factory: Arc<EngineFactory>) -> Result<Self, ServerError> {
         let max_sessions = config.max_sessions.unwrap_or(100);
         let session_timeout = Duration::from_secs(config.session_timeout_seconds.unwrap_or(1800)); // 30min default
 
@@ -56,10 +60,11 @@ impl SessionRegistry {
             factory,
             max_sessions,
             session_timeout,
+            session_permits: Arc::new(Semaphore::new(max_sessions)),
         })
     }
 
-    pub fn engine_factory(&self) -> Arc<Mutex<EngineFactory>> {
+    pub fn engine_factory(&self) -> Arc<EngineFactory> {
         self.factory.clone()
     }
 
@@ -69,11 +74,11 @@ impl SessionRegistry {
         let mut inner = self.inner.write().expect("registry lock poisoned");
         let before = inner.sessions.len();
 
-        inner.sessions.retain(|id, session| {
-            if session.idle_duration() > self.session_timeout {
+        inner.sessions.retain(|id, entry| {
+            if entry.session.idle_duration() > self.session_timeout {
                 info!(
                     session_id = %id,
-                    idle_duration = ?session.idle_duration(),
+                    idle_duration = ?entry.session.idle_duration(),
                     "removing idle session"
                 );
                 false
@@ -106,31 +111,41 @@ impl SessionRegistry {
         // First, try to get existing session (read lock)
         {
             let inner = self.inner.read().expect("registry lock poisoned");
-            if let Some(session) = inner.sessions.get(session_id) {
+            if let Some(entry) = inner.sessions.get(session_id) {
                 debug!(
                     session_id = %session_id,
                     "reusing existing session"
                 );
-                return Ok(session.clone());
+                return Ok(entry.session.clone());
             }
         }
 
-        // No existing session, create new one with specific ID (write lock)
-        // Check session limit
-        {
-            let inner = self.inner.read().expect("registry lock poisoned");
-            if inner.sessions.len() >= self.max_sessions {
+        // Acquire a session permit to enforce max sessions.
+        let permit = self
+            .session_permits
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                let current = self
+                    .inner
+                    .read()
+                    .expect("registry lock poisoned")
+                    .sessions
+                    .len();
                 warn!(
-                    current = inner.sessions.len(),
+                    current,
                     max = self.max_sessions,
                     "max sessions limit reached"
                 );
-                return Err(ServerError::MaxSessionsReached);
-            }
-        }
+                ServerError::MaxSessionsReached
+            })?;
 
-        // Create new connection
-        let connection = self.factory.lock().unwrap().create_connection()?;
+        // Create new connection in spawn_blocking to avoid blocking async runtime
+        // (DuckDB connection creation involves I/O: loading extensions, init SQL, etc.)
+        let factory = self.factory.clone();
+        let connection = tokio::task::spawn_blocking(move || factory.create_connection())
+            .await
+            .map_err(|e| ServerError::Internal(format!("connection task failed: {}", e)))??;
 
         // Create session with the specified ID
         let session = Arc::new(Session::new_with_id(session_id.clone(), connection));
@@ -138,7 +153,16 @@ impl SessionRegistry {
         // Register session
         {
             let mut inner = self.inner.write().expect("registry lock poisoned");
-            inner.sessions.insert(session_id.clone(), session.clone());
+            if let Some(entry) = inner.sessions.get(session_id) {
+                return Ok(entry.session.clone());
+            }
+            inner.sessions.insert(
+                session_id.clone(),
+                SessionEntry {
+                    session: session.clone(),
+                    _permit: permit,
+                },
+            );
             info!(
                 session_id = %session_id,
                 total_sessions = inner.sessions.len(),
