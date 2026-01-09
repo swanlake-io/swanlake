@@ -19,29 +19,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/git/checkouts
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ runner.os }}-
-
-      - name: Cache cargo build artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            target
-          key: cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-build-${{ runner.os }}-
+          prefix-key: swanlake
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -87,18 +82,6 @@ jobs:
           restore-keys: |
             uv-${{ runner.os }}-
 
-      - name: Clean workspace on failure
-        if: runner.debug == '1'
-        run: |
-          echo "Cleaning workspace due to job failure to free disk space..."
-          rm -rf target
-          rm -rf ~/.cargo/registry
-          rm -rf ~/.cargo/git
-          rm -rf ~/.cache/uv
-          rm -rf ~/.local/share/uv
-          rm -rf ~/.uv
-          rm -rf .duckdb
-
       - name: Run integration tests
         run: bash scripts/run-integration-tests.sh
         env:
@@ -120,6 +103,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -130,6 +124,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Cache Cargo Registry (Tarball)
+        id: cache-registry-tar
+        uses: actions/cache/restore@v4
+        with:
+          path: registry.tar.zst
+          key: v2-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            v2-cargo-registry-
+
+      - name: Cache SwanLake Target (Tarball)
+        id: cache-target-tar
+        uses: actions/cache/restore@v4
+        with:
+          path: target.tar.zst
+          key: v2-swanlake-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('swanlake-*/**/*.rs') }}
+          restore-keys: |
+            v2-swanlake-target-${{ hashFiles('**/Cargo.lock') }}-
+            v2-swanlake-target-
+
+      - name: Inject Caches into Docker (Smart)
+        run: ./scripts/inject_docker_cache.sh
+        env:
+          TARGET_CACHE_ID: swanlake_target
+          TARGET_CACHE_DIR: swanlake-target
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -139,6 +158,26 @@ jobs:
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
           cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+
+      - name: Manually Extract Caches (Tarball)
+        if: steps.cache-registry-tar.outputs.cache-hit != 'true' || steps.cache-target-tar.outputs.cache-hit != 'true'
+        run: ./scripts/extract_docker_cache.sh
+        env:
+          TARGET_CACHE_ID: swanlake_target
+
+      - name: Save Cargo Registry Cache (Tarball)
+        if: steps.cache-registry-tar.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: registry.tar.zst
+          key: v2-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Save SwanLake Target Cache (Tarball)
+        if: steps.cache-target-tar.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target.tar.zst
+          key: v2-swanlake-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('swanlake-*/**/*.rs') }}
 
       - name: Run health check in Docker
         run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} sh -c 'swanlake & sleep 5 && grpc-health-probe -addr=localhost:4214'

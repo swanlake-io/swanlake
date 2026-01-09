@@ -116,6 +116,10 @@ trap cleanup_server EXIT
 
 wait_for_server "$ENDPOINT" "$WAIT_SECONDS"
 
+# Run swanlake-client tests (sync + async pool)
+echo "Running swanlake-client tests"
+cargo test -p swanlake-client --features tokio
+
 # Run SQL tests
 echo "Running SQL tests with filter '$TEST_FILTER' and TEST_DIR: $TEST_DIR"
 if cargo run --manifest-path "$ROOT_DIR/tests/runner/Cargo.toml" -- "${TEST_FILES[@]}" --endpoint "$ENDPOINT" --test-dir "$TEST_DIR"; then

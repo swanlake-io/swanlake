@@ -1,16 +1,7 @@
 # ========== builder ==========
 
-FROM lukemathwalker/cargo-chef:latest-rust-1.91-bookworm AS chef
+FROM rust:1.91-bookworm AS builder
 
-WORKDIR /src
-
-FROM chef AS planner
-WORKDIR /app
-COPY . .
-# RUN git rev-parse HEAD
-RUN cargo chef prepare --recipe-path recipe.json --bin swanlake
-
-FROM chef AS builder
 WORKDIR /swanlake
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -19,14 +10,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl-dev \
         binutils \
         && rm -rf /var/lib/apt/lists/*
-COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --bin swanlake
+
 COPY . /swanlake
 
-RUN cargo build --release --bin swanlake
-RUN cp -r /swanlake/target/release /release \
-    && cp /swanlake/scripts/docker-entrypoint.sh /release/docker-entrypoint.sh \
-    && cp -r /swanlake/swanlake-core/.duckdb /release/.duckdb
+RUN --mount=type=cache,id=cargo_registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=swanlake_target,target=/swanlake/target \
+    cargo build --release --bin swanlake && \
+    mkdir -p /release && \
+    cp /swanlake/target/release/swanlake /release/ && \
+    cp /swanlake/scripts/docker-entrypoint.sh /release/docker-entrypoint.sh && \
+    cp -r /swanlake/swanlake-core/.duckdb /release/.duckdb
 
 # ========== base ==========
 

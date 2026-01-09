@@ -16,6 +16,7 @@ anyhow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 arrow = { version = "57", features = ["prettyprint"] }
+tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
 
 # cli
 clap = { version = "4.5", features = ["derive"], optional = true }
@@ -27,6 +28,7 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"], opt
 [features]
 default = []
 cli = ["clap", "comfy-table", "dirs", "rustyline", "tracing-subscriber"]
+tokio = ["dep:tokio"]
 
 [[bin]]
 name = "swanlake-cli"
