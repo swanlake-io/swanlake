@@ -1,418 +1,468 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SwanLake Status</title>
-    <style>
-        :root {
-            --bg-body: #09090b;
-            --bg-card: #18181b;
-            --bg-card-hover: #27272a;
-            --text-main: #fafafa;
-            --text-muted: #a1a1aa;
-            --border: #27272a;
-            --accent: #10b981; /* Emerald-500 */
-            --danger: #ef4444; /* Red-500 */
-            --warning: #f59e0b; /* Amber-500 */
-            --font-sans: system-ui, -apple-system, sans-serif;
-        }
-
-        body {
-            background-color: var(--bg-body);
-            color: var(--text-main);
-            font-family: var(--font-sans);
-            margin: 0;
-            padding: 2rem;
-            line-height: 1.5;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        /* Header */
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 2rem;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid var(--border);
-        }
-
-        h1 {
-            font-size: 1.5rem;
-            font-weight: 700;
-            margin: 0;
-            letter-spacing: -0.025em;
-        }
-
-        .status-badge {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-size: 0.875rem;
-            color: var(--text-muted);
-            background: var(--bg-card);
-            padding: 0.25rem 0.75rem;
-            border-radius: 9999px;
-            border: 1px solid var(--border);
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background-color: var(--accent);
-            box-shadow: 0 0 8px var(--accent);
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: .5; }
-        }
-
-        /* Grid Layout */
-        .grid {
-            display: grid;
-            gap: 1rem;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            margin-bottom: 2rem;
-        }
-
-        /* Cards */
-        .card {
-            background-color: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 0.5rem;
-            padding: 1.25rem;
-            transition: background-color 0.2s;
-        }
-
-        .card:hover {
-            background-color: var(--bg-card-hover);
-        }
-
-        .card-title {
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: var(--text-muted);
-            margin-bottom: 0.5rem;
-            display: flex;
-            justify-content: space-between;
-        }
-
-        .stat-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--text-main);
-        }
-
-        .stat-sub {
-            font-size: 0.875rem;
-            color: var(--text-muted);
-            margin-top: 0.25rem;
-        }
-
-        /* Tables/Lists */
-        .section-title {
-            font-size: 1.125rem;
-            font-weight: 600;
-            margin-bottom: 1rem;
-            color: var(--text-main);
-        }
-
-        .data-list {
-            display: flex;
-            flex-direction: column;
-            gap: 0.75rem;
-        }
-
-        .list-item {
-            background-color: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 0.5rem;
-            padding: 1rem;
-        }
-
-        .list-item-header {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 0.5rem;
-            font-size: 0.875rem;
-        }
-
-        .timestamp {
-            color: var(--text-muted);
-            font-family: monospace;
-        }
-
-        .error-msg {
-            color: var(--danger);
-            font-weight: 500;
-        }
-
-        .sql-code {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            font-size: 0.875rem;
-            background-color: rgba(0,0,0,0.3);
-            padding: 0.5rem;
-            border-radius: 0.25rem;
-            color: #d4d4d8;
-            overflow-x: auto;
-            white-space: pre-wrap;
-        }
-
-        .tag {
-            font-size: 0.75rem;
-            padding: 0.125rem 0.5rem;
-            border-radius: 9999px;
-            background-color: var(--border);
-            color: var(--text-muted);
-        }
-
-        .tag.warn { color: var(--warning); background-color: rgba(245, 158, 11, 0.1); }
-        .tag.danger { color: var(--danger); background-color: rgba(239, 68, 68, 0.1); }
-
-        /* Footer */
-        footer {
-            margin-top: 3rem;
-            padding-top: 1rem;
-            border-top: 1px solid var(--border);
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.875rem;
-            color: var(--text-muted);
-        }
-
-        /* Utilities */
-        .text-danger { color: var(--danger); }
-        .flex-col { display: flex; flexDirection: column; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <header>
-            <div style="display: flex; align-items: center; gap: 1rem;">
-                <!-- Simple Logo/Icon placeholder -->
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent);">
-                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-                </svg>
-                <h1>SwanLake</h1>
-            </div>
-            <div class="status-badge">
-                <span class="status-dot"></span>
-                <span id="refresh-status">Live</span>
-            </div>
-        </header>
-
-        <!-- Top Level Metrics -->
-        <div class="grid" style="grid-template-columns: repeat(4, 1fr);">
-            <div class="card">
-                <div class="card-title">Active Sessions</div>
-                <div class="stat-value" id="sessions-active">-</div>
-                <div class="stat-sub">Max: <span id="sessions-max">-</span></div>
-            </div>
-            <div class="card">
-                <div class="card-title">Uptime</div>
-                <div class="stat-value" id="uptime" style="font-size: 1.25rem;">-</div>
-            </div>
-             <div class="card">
-                <div class="card-title">Total Queries</div>
-                <div class="stat-value" id="total-queries">-</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Errors</div>
-                <div class="stat-value" id="total-errors" style="color: var(--danger)">-</div>
-            </div>
-        </div>
-
-        <!-- Latency Grid -->
-        <div class="grid" style="grid-template-columns: 1fr 1fr;">
-            <div class="card">
-                <h3 class="section-title" style="margin-top:0">Query Latency</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                    <div>
-                        <div class="card-title">Average</div>
-                        <div class="stat-value" id="query-avg" style="font-size: 1.25rem">-</div>
-                    </div>
-                    <div>
-                        <div class="card-title">P95 / P99</div>
-                        <div class="stat-value" id="query-p95" style="font-size: 1.25rem">-</div>
-                    </div>
-                    <div>
-                        <div class="card-title">In Flight</div>
-                        <div class="stat-value" id="query-inflight" style="font-size: 1.25rem">-</div>
-                    </div>
-                </div>
-            </div>
-            <div class="card">
-                <h3 class="section-title" style="margin-top:0">Update Latency</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                    <div>
-                        <div class="card-title">Average</div>
-                        <div class="stat-value" id="update-avg" style="font-size: 1.25rem">-</div>
-                    </div>
-                    <div>
-                        <div class="card-title">P95 / P99</div>
-                        <div class="stat-value" id="update-p95" style="font-size: 1.25rem">-</div>
-                    </div>
-                    <div>
-                        <div class="card-title">In Flight</div>
-                        <div class="stat-value" id="update-inflight" style="font-size: 1.25rem">-</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Detailed Lists -->
-        <div class="grid" style="grid-template-columns: 1fr 1fr; align-items: start;">
-            <!-- Slow Queries -->
-            <div>
-                <h3 class="section-title">Slow Queries <span class="tag warn" id="slow-threshold" style="font-weight: normal; margin-left: 0.5rem; font-size: 0.7rem;">> - ms</span></h3>
-                <div id="slow-list" class="data-list">
-                    <!-- Populated by JS -->
-                </div>
-            </div>
-
-            <!-- Errors -->
-            <div>
-                <h3 class="section-title">Recent Errors</h3>
-                <div id="error-list" class="data-list">
-                     <!-- Populated by JS -->
-                </div>
-            </div>
-        </div>
-
-        <footer>
-            <span>Generated at <span id="generated-at">-</span></span>
-            <span>SwanLake DB Status</span>
-        </footer>
-    </div>
-
-    <script>
-        const $ = (id) => document.getElementById(id);
-
-        function formatNumber(num) {
-            return num != null ? num.toLocaleString() : '-';
-        }
-
-        function formatDuration(ms) {
-            if (ms == null) return '-';
-            if (ms < 1000) return `${Math.round(ms)}ms`;
-            const s = ms / 1000;
-            if (s < 60) return `${s.toFixed(1)}s`;
-            const m = Math.floor(s / 60);
-            const rs = Math.round(s % 60);
-            return `${m}m ${rs}s`;
-        }
-
-        function formatTimeShort(ms) {
-             return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        }
-
-        async function fetchStatus() {
-            try {
-                const res = await fetch('/status.json');
-                if (!res.ok) throw new Error('Failed to fetch');
-                const data = await res.json();
-                render(data);
-                $('refresh-status').textContent = 'Live';
-                $('refresh-status').style.color = 'var(--text-muted)';
-            } catch (e) {
-                console.error(e);
-                $('refresh-status').textContent = 'Error';
-                $('refresh-status').style.color = 'var(--danger)';
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>SwanLake Status</title>
+        <link
+            rel="icon"
+            type="image/png"
+            href="https://avatars.githubusercontent.com/u/242102829?s=200&v=4"
+        />
+        <style>
+            :root {
+                --bg-body: #09090b;
+                --bg-card: #18181b;
+                --bg-card-hover: #27272a;
+                --text-main: #fafafa;
+                --text-muted: #a1a1aa;
+                --border: #27272a;
+                --accent: #10b981; /* Emerald-500 */
+                --danger: #ef4444; /* Red-500 */
+                --warning: #f59e0b; /* Amber-500 */
+                --font-sans: system-ui, -apple-system, sans-serif;
             }
-        }
 
-        function render(data) {
-            const { metrics, sessions } = data;
+            body {
+                background-color: var(--bg-body);
+                color: var(--text-main);
+                font-family: var(--font-sans);
+                margin: 0;
+                padding: 2rem;
+                line-height: 1.5;
+            }
 
-            // Header/Footer
-            $('generated-at').textContent = new Date(data.generated_at_ms).toLocaleString();
-            $('uptime').textContent = formatDuration(metrics.uptime_ms);
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+            }
 
-            // Sessions
-            $('sessions-active').textContent = formatNumber(sessions.total_sessions);
-            $('sessions-max').textContent = formatNumber(sessions.max_sessions);
+            /* Header */
+            header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 2rem;
+                padding-bottom: 1rem;
+                border-bottom: 1px solid var(--border);
+            }
 
-            // Totals
-            $('total-queries').textContent = formatNumber(metrics.totals.queries);
-            $('total-errors').textContent = formatNumber(metrics.totals.errors);
+            h1 {
+                font-size: 1.5rem;
+                font-weight: 700;
+                margin: 0;
+                letter-spacing: -0.025em;
+            }
 
-            // Query Latency
-            $('query-avg').textContent = formatDuration(metrics.latency.queries.avg_ms);
-            $('query-p95').textContent = `${formatDuration(metrics.latency.queries.p95_ms)} / ${formatDuration(metrics.latency.queries.p99_ms)}`;
-            $('query-inflight').textContent = formatNumber(metrics.in_flight.queries);
+            .status-badge {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                font-size: 0.875rem;
+                color: var(--text-muted);
+                background: var(--bg-card);
+                padding: 0.25rem 0.75rem;
+                border-radius: 9999px;
+                border: 1px solid var(--border);
+            }
 
-            // Update Latency
-            $('update-avg').textContent = formatDuration(metrics.latency.updates.avg_ms);
-            $('update-p95').textContent = `${formatDuration(metrics.latency.updates.p95_ms)} / ${formatDuration(metrics.latency.updates.p99_ms)}`;
-            $('update-inflight').textContent = formatNumber(metrics.in_flight.updates);
+            .status-dot {
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                background-color: var(--accent);
+                box-shadow: 0 0 8px var(--accent);
+                animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+            }
 
-            // Slow Queries
-            $('slow-threshold').textContent = `> ${metrics.slow_query_threshold_ms}ms`;
-            const slowContainer = $('slow-list');
-            slowContainer.innerHTML = '';
-            if (!metrics.slow_queries || metrics.slow_queries.length === 0) {
-                 slowContainer.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted)">No slow queries</div>`;
-            } else {
-                metrics.slow_queries.slice(0, 5).forEach(q => {
-                    const el = document.createElement('div');
-                    el.className = 'list-item';
-                    el.innerHTML = `
-                        <div class="list-item-header">
-                            <span class="tag warn">${formatDuration(q.duration_ms)}</span>
-                            <span class="timestamp">${q.is_query ? 'Query' : 'Update'}</span>
+            @keyframes pulse {
+                0%,
+                100% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0.5;
+                }
+            }
+
+            /* Grid Layout */
+            .grid {
+                display: grid;
+                gap: 1rem;
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                margin-bottom: 2rem;
+            }
+
+            /* Cards */
+            .card {
+                background-color: var(--bg-card);
+                border: 1px solid var(--border);
+                border-radius: 0.5rem;
+                padding: 1.25rem;
+                transition: background-color 0.2s;
+            }
+
+            .card:hover {
+                background-color: var(--bg-card-hover);
+            }
+
+            .card-title {
+                font-size: 0.875rem;
+                font-weight: 500;
+                color: var(--text-muted);
+                margin-bottom: 0.5rem;
+                display: flex;
+                justify-content: space-between;
+            }
+
+            .stat-value {
+                font-size: 1.5rem;
+                font-weight: 700;
+                color: var(--text-main);
+            }
+
+            .stat-sub {
+                font-size: 0.875rem;
+                color: var(--text-muted);
+                margin-top: 0.25rem;
+            }
+
+            /* Tables/Lists */
+            .section-title {
+                font-size: 1.125rem;
+                font-weight: 600;
+                margin-bottom: 1rem;
+                color: var(--text-main);
+            }
+
+            .data-list {
+                display: flex;
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+
+            .list-item {
+                background-color: var(--bg-card);
+                border: 1px solid var(--border);
+                border-radius: 0.5rem;
+                padding: 1rem;
+            }
+
+            .list-item-header {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 0.5rem;
+                font-size: 0.875rem;
+            }
+
+            .timestamp {
+                color: var(--text-muted);
+                font-family: monospace;
+            }
+
+            .error-msg {
+                color: var(--danger);
+                font-weight: 500;
+            }
+
+            .sql-code {
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                font-size: 0.875rem;
+                background-color: rgba(0, 0, 0, 0.3);
+                padding: 0.5rem;
+                border-radius: 0.25rem;
+                color: #d4d4d8;
+                overflow-x: auto;
+                white-space: pre-wrap;
+            }
+
+            .tag {
+                font-size: 0.75rem;
+                padding: 0.125rem 0.5rem;
+                border-radius: 9999px;
+                background-color: var(--border);
+                color: var(--text-muted);
+            }
+
+            .tag.warn {
+                color: var(--warning);
+                background-color: rgba(245, 158, 11, 0.1);
+            }
+            .tag.danger {
+                color: var(--danger);
+                background-color: rgba(239, 68, 68, 0.1);
+            }
+
+            /* Footer */
+            footer {
+                margin-top: 3rem;
+                padding-top: 1rem;
+                border-top: 1px solid var(--border);
+                display: flex;
+                justify-content: space-between;
+                font-size: 0.875rem;
+                color: var(--text-muted);
+            }
+
+            /* Utilities */
+            .text-danger {
+                color: var(--danger);
+            }
+            .flex-col {
+                display: flex;
+                flexdirection: column;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <header>
+                <div style="display: flex; align-items: center; gap: 1rem">
+                    <img
+                        src="https://avatars.githubusercontent.com/u/242102829?s=200&v=4"
+                        alt="SwanLake Logo"
+                        width="32"
+                        height="32"
+                        style="border-radius: 0.25rem"
+                    />
+                    <h1>SwanLake</h1>
+                </div>
+                <div class="status-badge">
+                    <span class="status-dot"></span>
+                    <span id="refresh-status">Live</span>
+                </div>
+            </header>
+
+            <!-- Top Level Metrics -->
+            <div class="grid" style="grid-template-columns: repeat(4, 1fr)">
+                <div class="card">
+                    <div class="card-title">Active Sessions</div>
+                    <div class="stat-value" id="sessions-active">-</div>
+                    <div class="stat-sub">Max: <span id="sessions-max">-</span></div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Uptime</div>
+                    <div class="stat-value" id="uptime" style="font-size: 1.25rem">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Total Queries</div>
+                    <div class="stat-value" id="total-queries">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Errors</div>
+                    <div class="stat-value" id="total-errors" style="color: var(--danger)">-</div>
+                </div>
+            </div>
+
+            <!-- Latency Grid -->
+            <div class="grid" style="grid-template-columns: 1fr 1fr">
+                <div class="card">
+                    <h3 class="section-title" style="margin-top: 0">Query Latency</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem">
+                        <div>
+                            <div class="card-title">Average</div>
+                            <div class="stat-value" id="query-avg" style="font-size: 1.25rem">
+                                -
+                            </div>
                         </div>
-                        <div class="sql-code">${escapeHtml(q.sql)}</div>
-                        <div style="margin-top:0.5rem; font-size:0.75rem; color:var(--text-muted)">
-                            ${formatNumber(q.rows)} rows • ${q.reasons ? q.reasons.join(', ') : 'Slow'}
+                        <div>
+                            <div class="card-title">P95 / P99</div>
+                            <div class="stat-value" id="query-p95" style="font-size: 1.25rem">
+                                -
+                            </div>
                         </div>
-                    `;
-                    slowContainer.appendChild(el);
+                        <div>
+                            <div class="card-title">In Flight</div>
+                            <div class="stat-value" id="query-inflight" style="font-size: 1.25rem">
+                                -
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3 class="section-title" style="margin-top: 0">Update Latency</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem">
+                        <div>
+                            <div class="card-title">Average</div>
+                            <div class="stat-value" id="update-avg" style="font-size: 1.25rem">
+                                -
+                            </div>
+                        </div>
+                        <div>
+                            <div class="card-title">P95 / P99</div>
+                            <div class="stat-value" id="update-p95" style="font-size: 1.25rem">
+                                -
+                            </div>
+                        </div>
+                        <div>
+                            <div class="card-title">In Flight</div>
+                            <div class="stat-value" id="update-inflight" style="font-size: 1.25rem">
+                                -
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Detailed Lists -->
+            <div class="grid" style="grid-template-columns: 1fr 1fr; align-items: start">
+                <!-- Slow Queries -->
+                <div>
+                    <h3 class="section-title">
+                        Slow Queries
+                        <span
+                            class="tag warn"
+                            id="slow-threshold"
+                            style="font-weight: normal; margin-left: 0.5rem; font-size: 0.7rem"
+                            >> - ms</span
+                        >
+                    </h3>
+                    <div id="slow-list" class="data-list">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Errors -->
+                <div>
+                    <h3 class="section-title">Recent Errors</h3>
+                    <div id="error-list" class="data-list">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <footer>
+                <span>Generated at <span id="generated-at">-</span></span>
+                <span>SwanLake DB Status</span>
+            </footer>
+        </div>
+
+        <script>
+            const $ = (id) => document.getElementById(id);
+
+            function formatNumber(num) {
+                return num != null ? num.toLocaleString() : "-";
+            }
+
+            function formatDuration(ms) {
+                if (ms == null) return "-";
+                if (ms < 1000) return `${Math.round(ms)}ms`;
+                const s = ms / 1000;
+                if (s < 60) return `${s.toFixed(1)}s`;
+                const m = Math.floor(s / 60);
+                const rs = Math.round(s % 60);
+                return `${m}m ${rs}s`;
+            }
+
+            function formatTimeShort(ms) {
+                return new Date(ms).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
                 });
             }
 
-            // Errors
-            const errContainer = $('error-list');
-            errContainer.innerHTML = '';
-             if (!metrics.recent_errors || metrics.recent_errors.length === 0) {
-                 errContainer.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted)">No recent errors</div>`;
-            } else {
-                metrics.recent_errors.slice(0, 5).forEach(e => {
-                    const el = document.createElement('div');
-                    el.className = 'list-item';
-                    el.innerHTML = `
+            async function fetchStatus() {
+                try {
+                    const res = await fetch("/status.json");
+                    if (!res.ok) throw new Error("Failed to fetch");
+                    const data = await res.json();
+                    render(data);
+                    $("refresh-status").textContent = "Live";
+                    $("refresh-status").style.color = "var(--text-muted)";
+                } catch (e) {
+                    console.error(e);
+                    $("refresh-status").textContent = "Error";
+                    $("refresh-status").style.color = "var(--danger)";
+                }
+            }
+
+            function render(data) {
+                const { metrics, sessions } = data;
+
+                // Header/Footer
+                $("generated-at").textContent = new Date(data.generated_at_ms).toLocaleString();
+                $("uptime").textContent = formatDuration(metrics.uptime_ms);
+
+                // Sessions
+                $("sessions-active").textContent = formatNumber(sessions.total_sessions);
+                $("sessions-max").textContent = formatNumber(sessions.max_sessions);
+
+                // Totals
+                $("total-queries").textContent = formatNumber(metrics.totals.queries);
+                $("total-errors").textContent = formatNumber(metrics.totals.errors);
+
+                // Query Latency
+                $("query-avg").textContent = formatDuration(metrics.latency.queries.avg_ms);
+                $("query-p95").textContent =
+                    `${formatDuration(metrics.latency.queries.p95_ms)} / ${formatDuration(metrics.latency.queries.p99_ms)}`;
+                $("query-inflight").textContent = formatNumber(metrics.in_flight.queries);
+
+                // Update Latency
+                $("update-avg").textContent = formatDuration(metrics.latency.updates.avg_ms);
+                $("update-p95").textContent =
+                    `${formatDuration(metrics.latency.updates.p95_ms)} / ${formatDuration(metrics.latency.updates.p99_ms)}`;
+                $("update-inflight").textContent = formatNumber(metrics.in_flight.updates);
+
+                // Slow Queries
+                $("slow-threshold").textContent = `> ${metrics.slow_query_threshold_ms}ms`;
+                const slowContainer = $("slow-list");
+                slowContainer.innerHTML = "";
+                if (!metrics.slow_queries || metrics.slow_queries.length === 0) {
+                    slowContainer.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted)">No slow queries</div>`;
+                } else {
+                    metrics.slow_queries.slice(0, 5).forEach((q) => {
+                        const el = document.createElement("div");
+                        el.className = "list-item";
+                        el.innerHTML = `
+                        <div class="list-item-header">
+                            <span class="tag warn">${formatDuration(q.duration_ms)}</span>
+                            <span class="timestamp">${q.is_query ? "Query" : "Update"}</span>
+                        </div>
+                        <div class="sql-code">${escapeHtml(q.sql)}</div>
+                        <div style="margin-top:0.5rem; font-size:0.75rem; color:var(--text-muted)">
+                            ${formatNumber(q.rows)} rows • ${q.reasons ? q.reasons.join(", ") : "Slow"}
+                        </div>
+                    `;
+                        slowContainer.appendChild(el);
+                    });
+                }
+
+                // Errors
+                const errContainer = $("error-list");
+                errContainer.innerHTML = "";
+                if (!metrics.recent_errors || metrics.recent_errors.length === 0) {
+                    errContainer.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted)">No recent errors</div>`;
+                } else {
+                    metrics.recent_errors.slice(0, 5).forEach((e) => {
+                        const el = document.createElement("div");
+                        el.className = "list-item";
+                        el.innerHTML = `
                          <div class="list-item-header">
                             <span class="tag danger">${escapeHtml(e.context)}</span>
                             <span class="timestamp">${formatTimeShort(e.timestamp_ms)}</span>
                         </div>
                         <div class="error-msg">${escapeHtml(e.message)}</div>
-                        ${e.sql ? `<div class="sql-code" style="margin-top:0.5rem">${escapeHtml(e.sql)}</div>` : ''}
+                        ${e.sql ? `<div class="sql-code" style="margin-top:0.5rem">${escapeHtml(e.sql)}</div>` : ""}
                     `;
-                    errContainer.appendChild(el);
-                });
+                        errContainer.appendChild(el);
+                    });
+                }
             }
-        }
 
-        function escapeHtml(unsafe) {
-            if (!unsafe) return '';
-            return unsafe
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        }
+            function escapeHtml(unsafe) {
+                if (!unsafe) return "";
+                return unsafe
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
+            }
 
-        // Init
-        fetchStatus();
-        setInterval(fetchStatus, 3000);
-    </script>
-</body>
+            // Init
+            fetchStatus();
+            setInterval(fetchStatus, 3000);
+        </script>
+    </body>
 </html>

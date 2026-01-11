@@ -36,6 +36,23 @@ cargo run --bin swanlake-cli --features="cli"
 - Rapid ingestion of logs, metrics, and streaming data.
 - High-speed querying using DuckDB and Arrow for analytics.
 
+## Status Page
+
+SwanLake includes a built-in status page for real-time monitoring of your server. Access it at `http://localhost:4215` (default) to view:
+
+- Active sessions and uptime
+- Query and update latency metrics (average, P95, P99)
+- Slow queries and recent errors
+
+<!--![Status](status_page.png)-->
+<img src="status_page.png" width="512" alt="Status">
+
+Configure the status page using environment variables:
+- `SWANLAKE_STATUS_ENABLED` (default: `true`)
+- `SWANLAKE_STATUS_HOST` and `SWANLAKE_STATUS_PORT` (default: `0.0.0.0:4215`)
+
+See [CONFIGURATION.md](CONFIGURATION.md) for more details.
+
 ## Deployment
 
 SwanLake supports serverless deployment via Docker. Pull the latest image from [GitHub Container Registry](https://github.com/swanlake-io/swanlake/pkgs/container/swanlake).
