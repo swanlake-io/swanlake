@@ -160,6 +160,9 @@ cd -
 # Give a moment for profraw files to be fully written
 sleep 2
 
+echo "Testing status.json endpoint"
+curl -f http://127.0.0.1:4215/status.json > /dev/null || { echo "status.json test failed"; exit 1; }
+
 cleanup_server
 
 echo "Integration tests completed. Coverage data collected in target/"

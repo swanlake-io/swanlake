@@ -4,11 +4,14 @@ use anyhow::{Context, Result};
 use swanlake_core::config::ServerConfig;
 use swanlake_core::engine::EngineFactory;
 use swanlake_core::maintenance::CheckpointService;
+use swanlake_core::metrics::Metrics;
 use swanlake_core::service::SwanFlightSqlService;
 use tonic::transport::Server;
 
 use tracing::info;
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
+
+mod status;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -48,7 +51,14 @@ async fn main() -> Result<()> {
         }
     });
 
-    let flight_service = SwanFlightSqlService::new(registry);
+    let metrics = Arc::new(Metrics::new(
+        config.metrics_slow_query_threshold_ms.unwrap_or(5000),
+        config.metrics_history_size.unwrap_or(200),
+    ));
+
+    let flight_service = SwanFlightSqlService::new(registry.clone(), metrics.clone());
+
+    status::spawn_status_server(&config, metrics, registry.clone()).await?;
 
     // Set up gRPC health service
     let (health_reporter, health_service) = tonic_health::server::health_reporter();

@@ -19,6 +19,16 @@ pub struct ServerConfig {
     pub session_timeout_seconds: Option<u64>,
     /// Log format: "compact" or "json".
     pub log_format: String,
+    /// Enable the status HTTP server.
+    pub status_enabled: bool,
+    /// Status server bind address.
+    pub status_host: String,
+    /// Status server port.
+    pub status_port: u16,
+    /// Slow query threshold in milliseconds for metrics.
+    pub metrics_slow_query_threshold_ms: Option<u64>,
+    /// Max number of latency/error/slow-query entries to retain.
+    pub metrics_history_size: Option<usize>,
 }
 
 impl Default for ServerConfig {
@@ -32,6 +42,11 @@ impl Default for ServerConfig {
             max_sessions: Some(100),
             session_timeout_seconds: Some(900),
             log_format: "compact".to_string(),
+            status_enabled: true,
+            status_host: "0.0.0.0".to_string(),
+            status_port: 4215,
+            metrics_slow_query_threshold_ms: Some(5000),
+            metrics_history_size: Some(200),
         }
     }
 }

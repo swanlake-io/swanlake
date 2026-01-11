@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_flight::flight_service_server::FlightService;
 use duckdb::types::Value;
@@ -51,6 +52,8 @@ impl SwanFlightSqlService {
         handle: StatementHandle,
         meta: PreparedStatementMeta,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let _in_flight = self.metrics.start_update();
+        let start = Instant::now();
         let PreparedStatementMeta { sql, ephemeral, .. } = meta;
 
         let parameters = session
@@ -80,7 +83,7 @@ impl SwanFlightSqlService {
         let params_for_exec = parameters;
         let sql_for_exec = sql.clone();
 
-        let affected_rows = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             if params_for_exec.is_empty() {
                 Self::execute_statement_batches(&sql_for_exec, &[], &session_clone)
             } else {
@@ -91,9 +94,24 @@ impl SwanFlightSqlService {
                 )
             }
         })
-        .await
-        .map_err(Self::status_from_join)?
-        .map_err(Self::status_from_error)?;
+        .await;
+
+        let affected_rows = match result {
+            Ok(Ok(rows)) => rows,
+            Ok(Err(err)) => {
+                self.metrics
+                    .record_update_error(&sql, start.elapsed(), err.to_string());
+                return Err(Self::status_from_error(err));
+            }
+            Err(err) => {
+                self.metrics
+                    .record_update_error(&sql, start.elapsed(), err.to_string());
+                return Err(Self::status_from_join(err));
+            }
+        };
+
+        self.metrics
+            .record_update_success(&sql, start.elapsed(), Some(affected_rows));
 
         info!(
             handle = %handle,
@@ -128,6 +146,8 @@ impl SwanFlightSqlService {
         meta: PreparedStatementMeta,
         parameters: Vec<Value>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let _in_flight = self.metrics.start_query();
+        let start = Instant::now();
         let PreparedStatementMeta { sql, ephemeral, .. } = meta;
 
         if ephemeral {
@@ -150,31 +170,48 @@ impl SwanFlightSqlService {
 
         let session_clone = session.clone();
         let params_for_exec = parameters;
-        let sql_for_exec = sql;
+        let sql_for_exec = sql.clone();
 
-        let QueryResult {
-            schema,
-            batches,
-            total_rows,
-            total_bytes,
-        } = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             if params_for_exec.is_empty() {
                 session_clone.execute_query(&sql_for_exec)
             } else {
                 session_clone.execute_query_with_params(&sql_for_exec, &params_for_exec)
             }
         })
-        .await
-        .map_err(Self::status_from_join)?
-        .map_err(Self::status_from_error)?;
+        .await;
+
+        let QueryResult {
+            schema,
+            batches,
+            total_rows,
+            total_bytes,
+        } = match result {
+            Ok(Ok(query_result)) => query_result,
+            Ok(Err(err)) => {
+                self.metrics
+                    .record_query_error(&sql, start.elapsed(), err.to_string());
+                return Err(Self::status_from_error(err));
+            }
+            Err(err) => {
+                self.metrics
+                    .record_query_error(&sql, start.elapsed(), err.to_string());
+                return Err(Self::status_from_join(err));
+            }
+        };
 
         let flight_data =
             arrow_flight::utils::batches_to_flight_data(&schema, batches).map_err(|err| {
                 error!(%err, "failed to convert record batches to flight data");
+                self.metrics
+                    .record_query_error(&sql, start.elapsed(), err.to_string());
                 Status::internal(format!(
                     "failed to convert record batches to flight data: {err}"
                 ))
             })?;
+
+        self.metrics
+            .record_query_success(&sql, start.elapsed(), total_rows, total_bytes);
 
         debug!(
             handle = %handle,

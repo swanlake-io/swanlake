@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::server::PeekableFlightDataStream;
@@ -284,6 +285,15 @@ pub(crate) async fn do_put_prepared_statement_update(
     }
 
     let parsed_opt = ParsedStatement::parse(&sql);
+    let _in_flight = service.metrics.start_update();
+    let start = Instant::now();
+
+    let record_error = |status: Status| {
+        service
+            .metrics
+            .record_update_error(&sql, start.elapsed(), status.to_string());
+        status
+    };
 
     let affected_rows = if let Some((parsed, table_ref)) = parsed_opt
         .as_ref()
@@ -295,12 +305,20 @@ pub(crate) async fn do_put_prepared_statement_update(
         if batches.is_empty() {
             // No batches sent, execute the statement with empty params.
             let session_clone = Arc::clone(&session);
-            tokio::task::spawn_blocking(move || {
-                SwanFlightSqlService::execute_statement_batches(&sql, &[], &session_clone)
+            let sql_for_exec = sql.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                SwanFlightSqlService::execute_statement_batches(&sql_for_exec, &[], &session_clone)
             })
-            .await
-            .map_err(SwanFlightSqlService::status_from_join)?
-            .map_err(SwanFlightSqlService::status_from_error)?
+            .await;
+            match result {
+                Ok(Ok(rows)) => rows,
+                Ok(Err(err)) => {
+                    return Err(record_error(SwanFlightSqlService::status_from_error(err)));
+                }
+                Err(err) => {
+                    return Err(record_error(SwanFlightSqlService::status_from_join(err)));
+                }
+            }
         } else {
             let parts = table_ref.parts();
 
@@ -319,7 +337,8 @@ pub(crate) async fn do_put_prepared_statement_update(
             );
 
             let session_clone = Arc::clone(&session);
-            tokio::task::spawn_blocking(move || {
+            let sql_for_exec = sql.clone();
+            let result = tokio::task::spawn_blocking(move || {
                 // Get the target table schema for validation and alignment
                 let qualified_table = format!("{}.{}", catalog_name, table_name);
                 let table_schema = Arc::new(session_clone.table_schema(&qualified_table)?);
@@ -344,7 +363,7 @@ pub(crate) async fn do_put_prepared_statement_update(
                         error!(
                             %e,
                             "appender insert failed sql {} for table {}.{}",
-                            sql,
+                            sql_for_exec,
                             catalog_name,
                             table_name
                         );
@@ -352,9 +371,16 @@ pub(crate) async fn do_put_prepared_statement_update(
                     })?;
                 Ok::<_, crate::error::ServerError>(total_rows as i64)
             })
-            .await
-            .map_err(SwanFlightSqlService::status_from_join)?
-            .map_err(SwanFlightSqlService::status_from_error)?
+            .await;
+            match result {
+                Ok(Ok(rows)) => rows,
+                Ok(Err(err)) => {
+                    return Err(record_error(SwanFlightSqlService::status_from_error(err)));
+                }
+                Err(err) => {
+                    return Err(record_error(SwanFlightSqlService::status_from_join(err)));
+                }
+            }
         }
     } else {
         // Non-INSERT statements (UPDATE, DELETE, DDL, etc.)
@@ -367,13 +393,25 @@ pub(crate) async fn do_put_prepared_statement_update(
         );
 
         let session_clone = Arc::clone(&session);
-        tokio::task::spawn_blocking(move || {
-            SwanFlightSqlService::execute_statement_batches(&sql, &params, &session_clone)
+        let sql_for_exec = sql.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            SwanFlightSqlService::execute_statement_batches(&sql_for_exec, &params, &session_clone)
         })
-        .await
-        .map_err(SwanFlightSqlService::status_from_join)?
-        .map_err(SwanFlightSqlService::status_from_error)?
+        .await;
+        match result {
+            Ok(Ok(rows)) => rows,
+            Ok(Err(err)) => {
+                return Err(record_error(SwanFlightSqlService::status_from_error(err)));
+            }
+            Err(err) => {
+                return Err(record_error(SwanFlightSqlService::status_from_join(err)));
+            }
+        }
     };
+
+    service
+        .metrics
+        .record_update_success(&sql, start.elapsed(), Some(affected_rows));
 
     info!(
         handle = %handle,
