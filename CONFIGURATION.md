@@ -26,6 +26,16 @@ and boolean flags accept `true/false` (case-insensitive).
 | `SWANLAKE_LOG_FORMAT` | `compact` or `json` | `compact` |
 | `NO_COLOR` | Disable log color if set to `true` | _(unset)_ |
 
+## Status Page & Metrics
+
+| Env Var | Description | Default |
+| --- | --- | --- |
+| `SWANLAKE_STATUS_ENABLED` | Enable the status HTTP server | `true` |
+| `SWANLAKE_STATUS_HOST` | Status server bind address | `0.0.0.0` |
+| `SWANLAKE_STATUS_PORT` | Status server port | `4215` |
+| `SWANLAKE_METRICS_SLOW_QUERY_THRESHOLD_MS` | Slow query threshold (ms) used for tagging slow queries | `5000` |
+| `SWANLAKE_METRICS_HISTORY_SIZE` | Number of latency/error/slow-query entries retained | `200` |
+
 ## DuckLake / DuckDB Initialization
 
 | Env Var | Description | Default |

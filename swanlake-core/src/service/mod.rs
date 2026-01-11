@@ -9,6 +9,7 @@ use tracing::{error, Span};
 use uuid::Uuid;
 
 use crate::error::ServerError;
+use crate::metrics::Metrics;
 use crate::session::{registry::SessionRegistry, Session, SessionId};
 
 mod convert;
@@ -24,11 +25,12 @@ mod handlers;
 #[derive(Clone)]
 pub struct SwanFlightSqlService {
     registry: Arc<SessionRegistry>,
+    metrics: Arc<Metrics>,
 }
 
 impl SwanFlightSqlService {
-    pub fn new(registry: Arc<SessionRegistry>) -> Self {
-        Self { registry }
+    pub fn new(registry: Arc<SessionRegistry>, metrics: Arc<Metrics>) -> Self {
+        Self { registry, metrics }
     }
 
     /// Extract session ID from tonic Request for session tracking (Phase 2)

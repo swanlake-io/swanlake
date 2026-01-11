@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use serde::Serialize;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, instrument, warn};
 
@@ -29,6 +30,15 @@ pub struct SessionRegistry {
     max_sessions: usize,
     session_timeout: Duration,
     session_permits: Arc<Semaphore>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct SessionRegistrySnapshot {
+    pub total_sessions: usize,
+    pub max_sessions: usize,
+    pub session_timeout_seconds: u64,
+    pub oldest_idle_ms: u64,
+    pub average_idle_ms: u64,
 }
 
 struct RegistryInner {
@@ -66,6 +76,36 @@ impl SessionRegistry {
 
     pub fn engine_factory(&self) -> Arc<EngineFactory> {
         self.factory.clone()
+    }
+
+    pub fn snapshot(&self) -> SessionRegistrySnapshot {
+        let inner = self.inner.read().expect("registry lock poisoned");
+        let total_sessions = inner.sessions.len();
+        let session_timeout_seconds = self.session_timeout.as_secs();
+        let mut total_idle_ms = 0u64;
+        let mut oldest_idle_ms = 0u64;
+
+        for entry in inner.sessions.values() {
+            let idle_ms = entry.session.idle_duration().as_millis() as u64;
+            total_idle_ms = total_idle_ms.saturating_add(idle_ms);
+            if idle_ms > oldest_idle_ms {
+                oldest_idle_ms = idle_ms;
+            }
+        }
+
+        let average_idle_ms = if total_sessions == 0 {
+            0
+        } else {
+            total_idle_ms / total_sessions as u64
+        };
+
+        SessionRegistrySnapshot {
+            total_sessions,
+            max_sessions: self.max_sessions,
+            session_timeout_seconds,
+            oldest_idle_ms,
+            average_idle_ms,
+        }
     }
 
     /// Clean up idle sessions that have exceeded the timeout

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::server::PeekableFlightDataStream;
@@ -162,11 +163,31 @@ pub(crate) async fn do_put_statement_update(
 ) -> Result<i64, Status> {
     let sql = command.query;
     let session = service.prepare_request(&request).await?;
+    let _in_flight = service.metrics.start_update();
+    let start = Instant::now();
 
-    let affected_rows = tokio::task::spawn_blocking(move || session.execute_statement(&sql))
-        .await
-        .map_err(SwanFlightSqlService::status_from_join)?
-        .map_err(SwanFlightSqlService::status_from_error)?;
+    let sql_for_exec = sql.clone();
+    let result =
+        tokio::task::spawn_blocking(move || session.execute_statement(&sql_for_exec)).await;
+    let affected_rows = match result {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(err)) => {
+            service
+                .metrics
+                .record_update_error(&sql, start.elapsed(), err.to_string());
+            return Err(SwanFlightSqlService::status_from_error(err));
+        }
+        Err(err) => {
+            service
+                .metrics
+                .record_update_error(&sql, start.elapsed(), err.to_string());
+            return Err(SwanFlightSqlService::status_from_join(err));
+        }
+    };
+
+    service
+        .metrics
+        .record_update_success(&sql, start.elapsed(), Some(affected_rows));
 
     Ok(affected_rows)
 }
@@ -196,11 +217,29 @@ async fn execute_ephemeral_ticket_statement(
     } else {
         let sql_for_exec = sql.clone();
         let session_clone = Arc::clone(&session);
-        let affected_rows =
+        let _in_flight = service.metrics.start_update();
+        let start = Instant::now();
+        let result =
             tokio::task::spawn_blocking(move || session_clone.execute_statement(&sql_for_exec))
-                .await
-                .map_err(SwanFlightSqlService::status_from_join)?
-                .map_err(SwanFlightSqlService::status_from_error)?;
+                .await;
+        let affected_rows = match result {
+            Ok(Ok(rows)) => rows,
+            Ok(Err(err)) => {
+                service
+                    .metrics
+                    .record_update_error(&sql, start.elapsed(), err.to_string());
+                return Err(SwanFlightSqlService::status_from_error(err));
+            }
+            Err(err) => {
+                service
+                    .metrics
+                    .record_update_error(&sql, start.elapsed(), err.to_string());
+                return Err(SwanFlightSqlService::status_from_join(err));
+            }
+        };
+        service
+            .metrics
+            .record_update_success(&sql, start.elapsed(), Some(affected_rows));
         info!(sql = %sql, affected_rows, "ephemeral command executed via DoGet");
         Ok(SwanFlightSqlService::empty_affected_rows_response(
             affected_rows,
