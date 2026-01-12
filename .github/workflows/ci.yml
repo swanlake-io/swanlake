@@ -54,7 +54,7 @@ jobs:
         run: docker compose up -d
 
       - name: Cache DuckDB
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .duckdb
           key: duckdb-${{ runner.os }}
@@ -72,7 +72,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Cache uv environments
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/uv
@@ -126,7 +126,7 @@ jobs:
 
       - name: Cache Cargo Registry (Tarball)
         id: cache-registry-tar
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: registry.tar.zst
           key: v2-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
@@ -135,7 +135,7 @@ jobs:
 
       - name: Cache SwanLake Target (Tarball)
         id: cache-target-tar
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: target.tar.zst
           key: v2-swanlake-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('swanlake-*/**/*.rs') }}
@@ -167,14 +167,14 @@ jobs:
 
       - name: Save Cargo Registry Cache (Tarball)
         if: steps.cache-registry-tar.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: registry.tar.zst
           key: v2-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Save SwanLake Target Cache (Tarball)
         if: steps.cache-target-tar.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: target.tar.zst
           key: v2-swanlake-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('swanlake-*/**/*.rs') }}
