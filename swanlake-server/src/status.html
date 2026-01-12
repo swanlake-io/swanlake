@@ -364,7 +364,7 @@
 
             async function fetchStatus() {
                 try {
-                    const res = await fetch("/status.json");
+                    const res = await fetch("status.json");
                     if (!res.ok) throw new Error("Failed to fetch");
                     const data = await res.json();
                     render(data);

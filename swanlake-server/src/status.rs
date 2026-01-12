@@ -36,9 +36,14 @@ pub async fn spawn_status_server(
         .with_context(|| "invalid status server bind address")?;
 
     let state = StatusState { metrics, registry };
+
+    let prefix = normalize_prefix(&config.status_path_prefix);
+    let root_path = format!("{}/", prefix);
+    let json_path = format!("{}/status.json", prefix);
+
     let app = Router::new()
-        .route("/", get(status_page))
-        .route("/status.json", get(status_json))
+        .route(&root_path, get(status_page))
+        .route(&json_path, get(status_json))
         .with_state(state);
 
     tokio::spawn(async move {
@@ -78,6 +83,15 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_millis() as u64
+}
+
+fn normalize_prefix(prefix: &str) -> String {
+    let trimmed = prefix.trim_matches('/');
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("/{}", trimmed)
+    }
 }
 
 const STATUS_PAGE: &str = include_str!("status.html");

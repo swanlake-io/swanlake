@@ -33,6 +33,7 @@ and boolean flags accept `true/false` (case-insensitive).
 | `SWANLAKE_STATUS_ENABLED` | Enable the status HTTP server | `true` |
 | `SWANLAKE_STATUS_HOST` | Status server bind address | `0.0.0.0` |
 | `SWANLAKE_STATUS_PORT` | Status server port | `4215` |
+| `SWANLAKE_STATUS_PATH_PREFIX` | Path prefix for status endpoints (e.g., `/admin` results in `/admin/` and `/admin/status.json`) | _(empty)_ |
 | `SWANLAKE_METRICS_SLOW_QUERY_THRESHOLD_MS` | Slow query threshold (ms) used for tagging slow queries | `5000` |
 | `SWANLAKE_METRICS_HISTORY_SIZE` | Number of latency/error/slow-query entries retained | `200` |
 

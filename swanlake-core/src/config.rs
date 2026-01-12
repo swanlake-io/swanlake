@@ -25,6 +25,8 @@ pub struct ServerConfig {
     pub status_host: String,
     /// Status server port.
     pub status_port: u16,
+    /// Path prefix for status endpoints (e.g., "/admin" results in /admin/ and /admin/status.json).
+    pub status_path_prefix: String,
     /// Slow query threshold in milliseconds for metrics.
     pub metrics_slow_query_threshold_ms: Option<u64>,
     /// Max number of latency/error/slow-query entries to retain.
@@ -45,6 +47,7 @@ impl Default for ServerConfig {
             status_enabled: true,
             status_host: "0.0.0.0".to_string(),
             status_port: 4215,
+            status_path_prefix: String::new(),
             metrics_slow_query_threshold_ms: Some(5000),
             metrics_history_size: Some(200),
         }
