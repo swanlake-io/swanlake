@@ -46,7 +46,7 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 - `examples/go-adbc/main.go` — quick manual smoke test (`SWANLAKE_PORT=50051 go run main.go`).
 
 ## Common Agent Tasks
-- **Add config option**: extend `ServerConfig` in `src/config.rs`, wire defaults + docs (`README.md`, possibly `AGENT.md`).
+- **Add config option**: extend `ServerConfig` in `src/config.rs`, wire defaults + **always update `CONFIGURATION.md`** with the new env var in the appropriate table.
 - **Extend Flight endpoints**: implement handler in `src/service/…`, add DuckDB helper if required, cover with Go example/Rust test.
 - **Investigate performance**: run with `RUST_LOG=debug`, inspect schema-optimization logs, verify DuckDB calls use `spawn_blocking`.
 
