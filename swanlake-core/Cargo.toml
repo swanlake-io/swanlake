@@ -15,7 +15,7 @@ arrow-select = "57"
 duckdb = { git = "https://github.com/swanlake-io/duckdb-rs", rev = "017cf3c", default-features = false, features = ["appender-arrow"] }
 sqlparser = { version = "0.60.0", features = ["visitor"] }
 futures = "0.3.31"
-prost = "0.14.1"
+prost = "0.14.3"
 serde = { version = "1.0.228", features = ["derive"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 tonic = { workspace = true }
