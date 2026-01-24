@@ -65,6 +65,14 @@ jobs:
         with:
           path: .duckdb
           key: duckdb-${{ runner.os }}
+      
+      - name: Cache BenchBase artifacts
+        uses: actions/cache@v5
+        with:
+          path: target/benchbase-ycsb
+          key: benchbase-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase-ycsb.sh', 'tests/benchbase/ycsb-flight-sql.xml', 'tests/benchbase/ycsb-ddl-ducklake.sql') }}
+          restore-keys: |
+            benchbase-${{ runner.os }}-
 
       - name: Check formatting
         run: cargo fmt -- --check
