@@ -47,6 +47,13 @@ jobs:
             go.sum
             examples/go-*/go.sum
 
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: "oracle"
+          java-version: "23"
+          cache: maven
+
       - name: Set up Docker Compose
         uses: docker/setup-compose-action@v1
 
@@ -90,6 +97,16 @@ jobs:
           PGPORT: 5442
           PGUSER: postgres
           SWANLAKE_DUCKDB_UI_SERVER_ENABLED: true
+
+      - name: Run BenchBase YCSB (Flight SQL)
+        run: bash scripts/run-benchbase-ycsb.sh
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5442
+          PGUSER: postgres
+          SWANLAKE_DUCKLAKE_INIT_SQL: "ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '/tmp/swanlake-benchbase', OVERRIDE_DATA_PATH true); USE swanlake;"
+          SWANLAKE_CHECKPOINT_DATABASES: swanlake
 
       - name: Coveralls GitHub Action
         uses: coverallsapp/github-action@v2
