@@ -16,6 +16,8 @@ DDL_PATH="${DDL_PATH:-$ROOT_DIR/tests/benchbase/ycsb-ddl-ducklake.sql}"
 CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.toml}"
 ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"
+SCALE_FACTOR="${SCALE_FACTOR:-}"
+TERMINALS="${TERMINALS:-}"
 LOG_FILE="${LOG_FILE:-$WORK_DIR/benchbase-$(date +%Y%m%d-%H%M%S).log}"
 SWANLAKE_SESSION_ID_MODE="${SWANLAKE_SESSION_ID_MODE:-peer_ip}"
 
@@ -175,6 +177,35 @@ RESOLVED_CONFIG="$WORK_DIR/ycsb-flight-sql.resolved.xml"
 if [[ -f "$CONFIG_PATH" ]]; then
   log "Rendering BenchBase config with ddlpath $DDL_PATH"
   sed "s|__DDL_PATH__|$DDL_PATH|g" "$CONFIG_PATH" > "$RESOLVED_CONFIG"
+  if [[ -n "$SCALE_FACTOR" ]]; then
+    log "Overriding YCSB scalefactor to $SCALE_FACTOR"
+  fi
+  if [[ -n "$TERMINALS" ]]; then
+    log "Overriding YCSB terminals to $TERMINALS"
+  fi
+  python3 - "$RESOLVED_CONFIG" "$SCALE_FACTOR" "$TERMINALS" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+scale = sys.argv[2]
+terminals = sys.argv[3]
+
+with open(path, "r", encoding="utf-8") as fh:
+    text = fh.read()
+
+def replace_tag(text: str, tag: str, value: str) -> str:
+    if not value:
+        return text
+    pattern = re.compile(rf"<{tag}>.*?</{tag}>", re.DOTALL)
+    return pattern.sub(f"<{tag}>{value}</{tag}>", text, count=1)
+
+text = replace_tag(text, "scalefactor", scale)
+text = replace_tag(text, "terminals", terminals)
+
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+PY
 else
   log "Config file not found at $CONFIG_PATH"
   exit 1
@@ -191,4 +222,32 @@ java -cp "benchbase.jar:lib/*" com.oltpbenchmark.DBWorkload \
   --execute=true \
   2>&1 | tee "$LOG_FILE"
 popd >/dev/null
+
+SUMMARY_FILE="$(ls -t "$BENCHBASE_DIST"/results/*.summary.json 2>/dev/null | head -n1 || true)"
+if [[ -z "$SUMMARY_FILE" ]]; then
+  log "BenchBase summary file not found in $BENCHBASE_DIST/results"
+  exit 1
+fi
+
+python3 - "$SUMMARY_FILE" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+goodput = float(data.get("Goodput (requests/second)", 0.0) or 0.0)
+measured = int(data.get("Measured Requests", 0) or 0)
+
+if goodput <= 0 or measured <= 0:
+    print(
+        f"BenchBase YCSB failed: measured_requests={measured}, goodput={goodput}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+print(f"BenchBase YCSB OK: measured_requests={measured}, goodput={goodput}")
+PY
+
 log "BenchBase YCSB completed successfully"
