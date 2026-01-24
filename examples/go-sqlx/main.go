@@ -54,9 +54,9 @@ func main() {
 	tx := db.MustBegin()
 	tx.MustExec("INSERT INTO person (first_name, last_name, email) VALUES ($1, $2, $3)", "Jason", "Moiron", "jmoiron@jmoiron.net")
 	tx.MustExec("INSERT INTO person (first_name, last_name, email) VALUES ($1, $2, $3)", "John", "Doe", "johndoeDNE@gmail.net")
-	tx.MustExec("INSERT INTO place (country, city, telcode) VALUES ($1, $2, $3)", "United States", "New York", 1)
-	tx.MustExec("INSERT INTO place (country, telcode) VALUES ($1, $2)", "Hong Kong", 852)
-	tx.MustExec("INSERT INTO place (country, telcode) VALUES ($1, $2)", "Singapore", 65)
+	tx.MustExec("INSERT INTO place (country, city, telcode) VALUES ($1, $2, $3)", "United States", "New York", int32(1))
+	tx.MustExec("INSERT INTO place (country, telcode) VALUES ($1, $2)", "Hong Kong", int32(852))
+	tx.MustExec("INSERT INTO place (country, telcode) VALUES ($1, $2)", "Singapore", int32(65))
 	// Flight SQL only supports positional parameters ($1, $2, $3), not named parameters
 	tx.MustExec("INSERT INTO person (first_name, last_name, email) VALUES ($1, $2, $3)", "Jane", "Citizen", "jane.citzen@example.com")
 	tx.Commit()
@@ -64,7 +64,7 @@ func main() {
 	// Multi-row insert in a single Exec to capture the Flight SQL driver's parameter shaping.
 	db.MustExec("DROP TABLE IF EXISTS multi_row_shape")
 	db.MustExec("CREATE TABLE multi_row_shape (a INT, b INT)")
-	if _, err := db.Exec("INSERT INTO multi_row_shape (a, b) VALUES ($1, $2), ($3, $4)", 10, 20, 30, 40); err != nil {
+	if _, err := db.Exec("INSERT INTO multi_row_shape (a, b) VALUES ($1, $2), ($3, $4)", int32(10), int32(20), int32(30), int32(40)); err != nil {
 		log.Fatalf("Multi-row insert failed: %v", err)
 	}
 	type pair struct {
