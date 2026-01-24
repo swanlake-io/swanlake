@@ -257,9 +257,7 @@ fn column_name(expr: &Expr) -> Option<String> {
 fn column_from_assignment_target(target: &AssignmentTarget) -> Option<String> {
     match target {
         AssignmentTarget::ColumnName(name) => object_name_last_part(name),
-        AssignmentTarget::Tuple(columns) => columns
-            .first()
-            .and_then(object_name_last_part),
+        AssignmentTarget::Tuple(columns) => columns.first().and_then(object_name_last_part),
     }
 }
 
@@ -320,7 +318,9 @@ fn collect_params_from_expr(expr: &Expr, out: &mut Vec<Option<String>>) {
             collect_params_from_expr(left, out);
             collect_params_from_expr(right, out);
         }
-        Expr::Between { expr, low, high, .. } => {
+        Expr::Between {
+            expr, low, high, ..
+        } => {
             if let Some(col) = column_name(expr) {
                 collect_placeholders_with_column(low, Some(col.clone()), out);
                 collect_placeholders_with_column(high, Some(col), out);

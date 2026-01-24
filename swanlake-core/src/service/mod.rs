@@ -8,9 +8,9 @@ use tonic::{Request, Status};
 use tracing::{error, Span};
 use uuid::Uuid;
 
+use crate::config::SessionIdMode;
 use crate::error::ServerError;
 use crate::metrics::Metrics;
-use crate::config::SessionIdMode;
 use crate::session::{registry::SessionRegistry, Session, SessionId};
 
 mod convert;
