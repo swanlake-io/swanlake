@@ -4,7 +4,9 @@ use arrow_flight::sql::DoPutPreparedStatementResult;
 use arrow_flight::sql::{
     ActionBeginTransactionRequest, ActionBeginTransactionResult,
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, ActionEndTransactionRequest, CommandGetSqlInfo,
+    ActionCreatePreparedStatementResult, ActionEndTransactionRequest, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
     CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
     CommandStatementUpdate, SqlInfo, TicketStatementQuery,
 };
@@ -14,6 +16,7 @@ use tracing::instrument;
 
 use super::SwanFlightSqlService;
 
+mod metadata;
 mod prepared;
 mod sql_info;
 mod statement;
@@ -56,12 +59,156 @@ impl FlightSqlService for SwanFlightSqlService {
     }
 
     #[instrument(skip(self, request), fields(session_id))]
+    async fn get_flight_info_catalogs(
+        &self,
+        query: CommandGetCatalogs,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        metadata::get_flight_info_catalogs(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn get_flight_info_schemas(
+        &self,
+        query: CommandGetDbSchemas,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        metadata::get_flight_info_schemas(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn get_flight_info_tables(
+        &self,
+        query: CommandGetTables,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        metadata::get_flight_info_tables(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn get_flight_info_table_types(
+        &self,
+        query: CommandGetTableTypes,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        metadata::get_flight_info_table_types(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn get_flight_info_primary_keys(
+        &self,
+        query: CommandGetPrimaryKeys,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        metadata::get_flight_info_primary_keys(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn get_flight_info_exported_keys(
+        &self,
+        query: CommandGetExportedKeys,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        metadata::get_flight_info_exported_keys(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn get_flight_info_imported_keys(
+        &self,
+        query: CommandGetImportedKeys,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        metadata::get_flight_info_imported_keys(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn get_flight_info_cross_reference(
+        &self,
+        query: CommandGetCrossReference,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        metadata::get_flight_info_cross_reference(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
     async fn do_get_sql_info(
         &self,
         query: CommandGetSqlInfo,
         request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         sql_info::do_get_sql_info(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn do_get_catalogs(
+        &self,
+        query: CommandGetCatalogs,
+        request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        metadata::do_get_catalogs(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn do_get_schemas(
+        &self,
+        query: CommandGetDbSchemas,
+        request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        metadata::do_get_schemas(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn do_get_tables(
+        &self,
+        query: CommandGetTables,
+        request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        metadata::do_get_tables(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn do_get_table_types(
+        &self,
+        query: CommandGetTableTypes,
+        request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        metadata::do_get_table_types(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn do_get_primary_keys(
+        &self,
+        query: CommandGetPrimaryKeys,
+        request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        metadata::do_get_primary_keys(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn do_get_exported_keys(
+        &self,
+        query: CommandGetExportedKeys,
+        request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        metadata::do_get_exported_keys(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn do_get_imported_keys(
+        &self,
+        query: CommandGetImportedKeys,
+        request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        metadata::do_get_imported_keys(self, query, request).await
+    }
+
+    #[instrument(skip(self, request), fields(session_id))]
+    async fn do_get_cross_reference(
+        &self,
+        query: CommandGetCrossReference,
+        request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        metadata::do_get_cross_reference(self, query, request).await
     }
 
     #[instrument(skip(self, request, command), fields(session_id, sql = %command.query))]

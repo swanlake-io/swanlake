@@ -134,21 +134,29 @@ build_benchbase
 install_arrow_driver
 
 SERVER_BIN="${SERVER_BIN:-$ROOT_DIR/target/debug/swanlake}"
-if [[ ! -x "$SERVER_BIN" ]]; then
-  log "Building swanlake-server binary..."
-  cargo build --package swanlake-server
-fi
+SERVER_MODE="${SERVER_MODE:-cargo}"
 
 # Ensure DuckDB environment variables are available for the server.
 log "Loading DuckDB environment..."
 source "$ROOT_DIR/swanlake-core/.duckdb/env.sh"
 
-read -r -a SERVER_CMD <<<"$SERVER_BIN"
-if [[ -f "$CONFIG_FILE" ]]; then
-  SERVER_CMD+=("--config" "$CONFIG_FILE")
+if [[ "$SERVER_MODE" == "cargo" ]]; then
+  SERVER_CMD=(cargo run --quiet --package swanlake-server --bin swanlake)
+  if [[ -f "$CONFIG_FILE" ]]; then
+    SERVER_CMD+=(-- --config "$CONFIG_FILE")
+  fi
+else
+  if [[ ! -x "$SERVER_BIN" ]]; then
+    log "Building swanlake-server binary..."
+    cargo build --package swanlake-server
+  fi
+  read -r -a SERVER_CMD <<<"$SERVER_BIN"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    SERVER_CMD+=("--config" "$CONFIG_FILE")
+  fi
 fi
 
-log "Starting SwanLake server..."
+log "Starting SwanLake server (mode: $SERVER_MODE)..."
 "${SERVER_CMD[@]}" &
 SERVER_PID=$!
 trap cleanup_server EXIT

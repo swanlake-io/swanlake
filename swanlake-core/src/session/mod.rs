@@ -296,6 +296,12 @@ impl Session {
         )
     }
 
+    /// Return the number of parameters expected by a statement.
+    pub fn parameter_count(&self, sql: &str) -> Result<usize, ServerError> {
+        self.touch();
+        self.with_transaction_recovery(|| self.connection.parameter_count(sql), true)
+    }
+
     /// Execute a statement (DDL/DML)
     #[instrument(skip(self), fields(session_id = %self.id, sql = %sql))]
     pub fn execute_statement(&self, sql: &str) -> Result<i64, ServerError> {

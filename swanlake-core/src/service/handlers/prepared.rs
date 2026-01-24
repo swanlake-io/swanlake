@@ -10,7 +10,7 @@ use arrow_flight::sql::{
     TicketStatementQuery,
 };
 use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
-use arrow_schema::Schema;
+use arrow_schema::{DataType, Field, Schema};
 use prost::Message;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
@@ -88,6 +88,29 @@ pub(crate) async fn do_action_create_prepared_statement(
         (None, Vec::new())
     };
 
+    let param_count = {
+        let sql_for_params = sql.clone();
+        let session_clone = Arc::clone(&session);
+        tokio::task::spawn_blocking(move || session_clone.parameter_count(&sql_for_params))
+            .await
+            .map_err(SwanFlightSqlService::status_from_join)?
+            .map_err(SwanFlightSqlService::status_from_error)?
+    };
+
+    let parameter_schema = if param_count > 0 {
+        let inferred_schema = infer_parameter_schema(&session, &sql, param_count);
+        let schema = inferred_schema.unwrap_or_else(|| {
+            let fields: Vec<Field> = (1..=param_count)
+                .map(|idx| Field::new(format!("${idx}"), DataType::Utf8, true))
+                .collect();
+            Schema::new(fields)
+        });
+        SwanFlightSqlService::schema_to_ipc_bytes(&schema)
+            .map_err(SwanFlightSqlService::status_from_error)?
+    } else {
+        Vec::new()
+    };
+
     let handle = session
         .create_prepared_statement(
             sql.clone(),
@@ -106,8 +129,47 @@ pub(crate) async fn do_action_create_prepared_statement(
     Ok(ActionCreatePreparedStatementResult {
         prepared_statement_handle: handle.into(),
         dataset_schema: dataset_schema.into(),
-        parameter_schema: Vec::<u8>::new().into(),
+        parameter_schema: parameter_schema.into(),
     })
+}
+
+fn infer_parameter_schema(session: &Arc<Session>, sql: &str, param_count: usize) -> Option<Schema> {
+    let parsed = ParsedStatement::parse(sql)?;
+    if !parsed.is_insert() {
+        return None;
+    }
+    let table_ref = parsed.get_insert_table()?;
+    let (catalog_name, table_name) =
+        session.resolve_catalog_and_table(table_ref.parts(), DEFAULT_CATALOG);
+    let qualified_table = format!("{catalog_name}.{table_name}");
+    let table_schema = session.table_schema(&qualified_table).ok()?;
+
+    let mut fields: Vec<Field> = if let Some(columns) = parsed.get_insert_columns() {
+        columns
+            .iter()
+            .filter_map(|name| find_field(&table_schema, name))
+            .collect()
+    } else {
+        table_schema
+            .fields()
+            .iter()
+            .map(|f| (**f).clone())
+            .collect()
+    };
+
+    if fields.len() < param_count {
+        return None;
+    }
+    fields.truncate(param_count);
+    Some(Schema::new(fields))
+}
+
+fn find_field(schema: &Schema, name: &str) -> Option<Field> {
+    schema
+        .fields()
+        .iter()
+        .find(|field| field.name().eq_ignore_ascii_case(name))
+        .map(|field| (**field).clone())
 }
 
 /// Returns FlightInfo (including ticket and schema) for a prepared statement so
