@@ -15,5 +15,5 @@ pub mod maintenance;
 pub mod metrics;
 pub mod service;
 pub mod session;
-pub mod sql_parser;
+pub mod sql;
 pub mod types;

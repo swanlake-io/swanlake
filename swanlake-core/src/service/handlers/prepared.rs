@@ -20,7 +20,7 @@ use crate::engine::batch::align_batch_to_table_schema;
 use crate::service::SwanFlightSqlService;
 use crate::session::id::StatementHandle;
 use crate::session::{PreparedStatementMeta, PreparedStatementOptions, Session};
-use crate::sql_parser::ParsedStatement;
+use crate::sql::parser::ParsedStatement;
 
 const DEFAULT_CATALOG: &str = "swanlake";
 
@@ -58,11 +58,12 @@ pub(crate) async fn do_action_create_prepared_statement(
     query: ActionCreatePreparedStatementRequest,
     request: Request<arrow_flight::Action>,
 ) -> Result<ActionCreatePreparedStatementResult, Status> {
-    let sql = query.query;
+    let raw_sql = query.query;
+    let sql = crate::sql::rewrite::strip_select_locks(&raw_sql).sql;
 
     // Try to parse SQL to determine if this is a query, but don't fail if it can't be parsed
     // (e.g., multi-statement SQL or vendor-specific syntax)
-    let is_query = if let Some(parsed) = crate::sql_parser::ParsedStatement::parse(&sql) {
+    let is_query = if let Some(parsed) = ParsedStatement::parse(&sql) {
         parsed.is_query()
     } else {
         // Fallback: treat multi-statement or unparseable SQL as non-query (safer default)
