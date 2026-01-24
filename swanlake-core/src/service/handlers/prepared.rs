@@ -171,23 +171,50 @@ fn infer_parameter_schema(session: &Arc<Session>, sql: &str, param_count: usize)
         }
 
         if let Some(columns) = parsed.get_insert_columns() {
-            if columns.len() != param_count {
+            let expected = if let Some((rows, cols)) = parsed.insert_values_shape() {
+                rows * cols
+            } else {
+                columns.len()
+            };
+            if expected != param_count {
                 return None;
             }
             let fields: Vec<Field> = columns
                 .iter()
                 .filter_map(|name| find_field(&table_schema, name))
                 .collect();
-            if fields.len() != param_count {
+            if fields.len() != columns.len() {
                 return None;
             }
-            return Some(Schema::new(fields));
+            let field_count = if let Some((rows, cols)) = parsed.insert_values_shape() {
+                rows * cols
+            } else {
+                fields.len()
+            };
+            let repeated: Vec<Field> = (0..field_count)
+                .map(|idx| fields[idx % fields.len()].clone())
+                .collect();
+            return Some(Schema::new(repeated));
         }
 
-        if table_schema.fields().len() != param_count {
+        let expected = if let Some((rows, cols)) = parsed.insert_values_shape() {
+            rows * cols
+        } else {
+            table_schema.fields().len()
+        };
+        if expected != param_count {
             return None;
         }
-        return Some(table_schema);
+        let fields = table_schema.fields();
+        let field_count = if let Some((rows, cols)) = parsed.insert_values_shape() {
+            rows * cols
+        } else {
+            fields.len()
+        };
+        let repeated: Vec<Field> = (0..field_count)
+            .map(|idx| fields[idx % fields.len()].as_ref().clone())
+            .collect();
+        return Some(Schema::new(repeated));
     }
 
     let columns = parsed.parameter_columns()?;

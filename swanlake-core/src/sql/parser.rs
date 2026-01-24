@@ -188,6 +188,34 @@ impl ParsedStatement {
             _ => false,
         }
     }
+
+    /// Return the number of VALUES rows and columns for INSERT VALUES statements.
+    ///
+    /// Returns None if the INSERT does not use VALUES or if the rows are ragged.
+    pub fn insert_values_shape(&self) -> Option<(usize, usize)> {
+        match &self.statement {
+            Statement::Insert(insert) => match &insert.source {
+                Some(query) => match &*query.body {
+                    sqlparser::ast::SetExpr::Values(values) => {
+                        let mut rows = values.rows.iter();
+                        let first = rows.next()?;
+                        let width = first.len();
+                        if width == 0 {
+                            return None;
+                        }
+                        if rows.any(|row| row.len() != width) {
+                            return None;
+                        }
+                        let row_count = values.rows.len();
+                        Some((row_count, width))
+                    }
+                    _ => None,
+                },
+                None => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 impl TableReference {
@@ -459,5 +487,21 @@ mod tests {
         let parsed = ParsedStatement::parse(sql).expect("should parse");
         let cols = parsed.parameter_columns().expect("should infer columns");
         assert_eq!(cols, vec!["field1", "field2", "ycsb_key"]);
+    }
+
+    #[test]
+    fn test_insert_values_shape_single_row() {
+        let sql = "INSERT INTO users (id, name) VALUES (?, ?)";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        let shape = parsed.insert_values_shape().expect("should infer shape");
+        assert_eq!(shape, (1, 2));
+    }
+
+    #[test]
+    fn test_insert_values_shape_multi_row() {
+        let sql = "INSERT INTO users (id, name) VALUES (?, ?), (?, ?)";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        let shape = parsed.insert_values_shape().expect("should infer shape");
+        assert_eq!(shape, (2, 2));
     }
 }
