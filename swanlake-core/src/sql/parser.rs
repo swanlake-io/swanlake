@@ -3,7 +3,10 @@
 //! This module provides lightweight SQL parsing to extract information
 //! needed for optimizations, such as the table name from INSERT statements.
 
-use sqlparser::ast::{ObjectName, Statement, TableObject};
+use sqlparser::ast::{
+    AssignmentTarget, Expr, ObjectName, Query, Select, SetExpr, Statement, TableFactor,
+    TableObject, TableWithJoins, Value, ValueWithSpan,
+};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
@@ -66,6 +69,21 @@ impl ParsedStatement {
         )
     }
 
+    /// Get the primary table reference for this statement when it is a simple
+    /// INSERT/UPDATE/DELETE/SELECT against a single table.
+    pub fn get_statement_table(&self) -> Option<TableReference> {
+        match &self.statement {
+            Statement::Insert(insert) => match &insert.table {
+                TableObject::TableName(name) => Some(TableReference::from_object_name(name)),
+                TableObject::TableFunction(_) => None,
+            },
+            Statement::Update(update) => table_from_joins(&update.table),
+            Statement::Delete(delete) => table_from_from_table(&delete.from),
+            Statement::Query(query) => table_from_query(query),
+            _ => None,
+        }
+    }
+
     /// Get the table name from an INSERT statement, including quoting info.
     pub fn get_insert_table(&self) -> Option<TableReference> {
         match &self.statement {
@@ -74,6 +92,40 @@ impl ParsedStatement {
                 TableObject::TableFunction(_) => None,
             },
             _ => None,
+        }
+    }
+
+    /// Return column names mapped to placeholders in statement order for simple
+    /// UPDATE/DELETE/SELECT statements.
+    pub fn parameter_columns(&self) -> Option<Vec<String>> {
+        let mut columns: Vec<Option<String>> = Vec::new();
+        match &self.statement {
+            Statement::Update(update) => {
+                for assignment in &update.assignments {
+                    let col = column_from_assignment_target(&assignment.target);
+                    collect_placeholders_with_column(&assignment.value, col, &mut columns);
+                }
+                if let Some(selection) = &update.selection {
+                    collect_params_from_expr(selection, &mut columns);
+                }
+            }
+            Statement::Delete(delete) => {
+                if let Some(selection) = &delete.selection {
+                    collect_params_from_expr(selection, &mut columns);
+                }
+            }
+            Statement::Query(query) => {
+                if let Some(selection) = selection_from_query(query) {
+                    collect_params_from_expr(selection, &mut columns);
+                }
+            }
+            _ => return None,
+        }
+
+        if columns.iter().all(|col| col.is_some()) {
+            Some(columns.into_iter().flatten().collect())
+        } else {
+            None
         }
     }
 
@@ -150,6 +202,153 @@ impl TableReference {
             })
             .collect::<Vec<_>>();
         Self { parts }
+    }
+}
+
+fn table_from_query(query: &Query) -> Option<TableReference> {
+    let select = match &*query.body {
+        SetExpr::Select(select) => select.as_ref(),
+        _ => return None,
+    };
+    table_from_select(select)
+}
+
+fn table_from_select(select: &Select) -> Option<TableReference> {
+    if select.from.len() != 1 {
+        return None;
+    }
+    let table = select.from.first()?;
+    table_from_joins(table)
+}
+
+fn table_from_joins(table: &TableWithJoins) -> Option<TableReference> {
+    match &table.relation {
+        TableFactor::Table { name, .. } => Some(TableReference::from_object_name(name)),
+        _ => None,
+    }
+}
+
+fn table_from_from_table(from: &sqlparser::ast::FromTable) -> Option<TableReference> {
+    let tables = match from {
+        sqlparser::ast::FromTable::WithFromKeyword(tables) => tables,
+        sqlparser::ast::FromTable::WithoutKeyword(tables) => tables,
+    };
+    if tables.len() != 1 {
+        return None;
+    }
+    table_from_joins(&tables[0])
+}
+
+fn selection_from_query(query: &Query) -> Option<&Expr> {
+    match &*query.body {
+        SetExpr::Select(select) => select.selection.as_ref(),
+        _ => None,
+    }
+}
+
+fn column_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Identifier(ident) => Some(ident.value.clone()),
+        Expr::CompoundIdentifier(idents) => idents.last().map(|ident| ident.value.clone()),
+        _ => None,
+    }
+}
+
+fn column_from_assignment_target(target: &AssignmentTarget) -> Option<String> {
+    match target {
+        AssignmentTarget::ColumnName(name) => object_name_last_part(name),
+        AssignmentTarget::Tuple(columns) => columns
+            .first()
+            .and_then(object_name_last_part),
+    }
+}
+
+fn object_name_last_part(name: &ObjectName) -> Option<String> {
+    name.0.last().map(|part| {
+        part.as_ident()
+            .map(|ident| ident.value.clone())
+            .unwrap_or_else(|| part.to_string())
+    })
+}
+
+fn collect_placeholders_with_column(
+    expr: &Expr,
+    column: Option<String>,
+    out: &mut Vec<Option<String>>,
+) {
+    match expr {
+        Expr::Value(ValueWithSpan {
+            value: Value::Placeholder(_),
+            ..
+        }) => out.push(column),
+        Expr::Nested(inner) => collect_placeholders_with_column(inner, column, out),
+        Expr::Cast { expr, .. } => collect_placeholders_with_column(expr, column, out),
+        Expr::BinaryOp { left, right, .. } => {
+            collect_placeholders_with_column(left, column.clone(), out);
+            collect_placeholders_with_column(right, column, out);
+        }
+        Expr::Between { low, high, .. } => {
+            collect_placeholders_with_column(low, column.clone(), out);
+            collect_placeholders_with_column(high, column, out);
+        }
+        Expr::InList { list, .. } => {
+            for item in list {
+                collect_placeholders_with_column(item, column.clone(), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_params_from_expr(expr: &Expr, out: &mut Vec<Option<String>>) {
+    match expr {
+        Expr::BinaryOp { left, right, .. } => {
+            if let Some(col) = column_name(left) {
+                let before = out.len();
+                collect_placeholders_with_column(right, Some(col.clone()), out);
+                if out.len() != before {
+                    return;
+                }
+            }
+            if let Some(col) = column_name(right) {
+                let before = out.len();
+                collect_placeholders_with_column(left, Some(col.clone()), out);
+                if out.len() != before {
+                    return;
+                }
+            }
+            collect_params_from_expr(left, out);
+            collect_params_from_expr(right, out);
+        }
+        Expr::Between { expr, low, high, .. } => {
+            if let Some(col) = column_name(expr) {
+                collect_placeholders_with_column(low, Some(col.clone()), out);
+                collect_placeholders_with_column(high, Some(col), out);
+            } else {
+                collect_params_from_expr(expr, out);
+                collect_params_from_expr(low, out);
+                collect_params_from_expr(high, out);
+            }
+        }
+        Expr::InList { expr, list, .. } => {
+            if let Some(col) = column_name(expr) {
+                for item in list {
+                    collect_placeholders_with_column(item, Some(col.clone()), out);
+                }
+            } else {
+                collect_params_from_expr(expr, out);
+                for item in list {
+                    collect_params_from_expr(item, out);
+                }
+            }
+        }
+        Expr::Nested(inner) => collect_params_from_expr(inner, out),
+        Expr::Cast { expr, .. } => collect_params_from_expr(expr, out),
+        Expr::Value(ValueWithSpan {
+            value: Value::Placeholder(_),
+            ..
+        }) => out.push(None),
+        _ => {}
     }
 }
 
@@ -236,5 +435,29 @@ mod tests {
         // Last statement is INSERT, so is_query should be false
         assert!(parsed.is_insert());
         assert!(!parsed.is_query());
+    }
+
+    #[test]
+    fn test_parameter_columns_select_where() {
+        let sql = "SELECT * FROM usertable WHERE ycsb_key = ?";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        let cols = parsed.parameter_columns().expect("should infer columns");
+        assert_eq!(cols, vec!["ycsb_key"]);
+    }
+
+    #[test]
+    fn test_parameter_columns_between() {
+        let sql = "SELECT * FROM usertable WHERE ycsb_key > ? AND ycsb_key < ?";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        let cols = parsed.parameter_columns().expect("should infer columns");
+        assert_eq!(cols, vec!["ycsb_key", "ycsb_key"]);
+    }
+
+    #[test]
+    fn test_parameter_columns_update() {
+        let sql = "UPDATE usertable SET field1=?, field2=? WHERE ycsb_key=?";
+        let parsed = ParsedStatement::parse(sql).expect("should parse");
+        let cols = parsed.parameter_columns().expect("should infer columns");
+        assert_eq!(cols, vec!["field1", "field2", "ycsb_key"]);
     }
 }

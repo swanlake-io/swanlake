@@ -13,7 +13,7 @@ use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
 use arrow_schema::{DataType, Field, Schema};
 use prost::Message;
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use super::ticket::{StatementTicketKind, TicketStatementPayload};
 use crate::engine::batch::align_batch_to_table_schema;
@@ -41,8 +41,25 @@ async fn resolve_session_and_meta<T>(
     context: &'static str,
     request: &Request<T>,
 ) -> Result<(Arc<Session>, StatementHandle, PreparedStatementMeta), Status> {
-    let handle = parse_statement_handle(handle_bytes, context)?;
     let session = service.prepare_request(request).await?;
+    let handle = if handle_bytes.is_empty() {
+        let last_handle = session.last_prepared_statement_handle().ok_or_else(|| {
+            error!(
+                context = %context,
+                handle_len = handle_bytes.len(),
+                "invalid prepared statement handle"
+            );
+            Status::invalid_argument("invalid prepared statement handle")
+        })?;
+        warn!(
+            context = %context,
+            handle = %last_handle,
+            "empty prepared statement handle; falling back to last handle in session"
+        );
+        last_handle
+    } else {
+        parse_statement_handle(handle_bytes, context)?
+    };
     let meta = session
         .get_prepared_statement_meta(handle)
         .map_err(SwanFlightSqlService::status_from_error)?;
@@ -136,26 +153,38 @@ pub(crate) async fn do_action_create_prepared_statement(
 
 fn infer_parameter_schema(session: &Arc<Session>, sql: &str, param_count: usize) -> Option<Schema> {
     let parsed = ParsedStatement::parse(sql)?;
-    if !parsed.is_insert() {
-        return None;
-    }
-    let table_ref = parsed.get_insert_table()?;
+
+    let table_ref = if parsed.is_insert() {
+        parsed.get_insert_table()
+    } else {
+        parsed.get_statement_table()
+    }?;
+
     let (catalog_name, table_name) =
         session.resolve_catalog_and_table(table_ref.parts(), DEFAULT_CATALOG);
     let qualified_table = format!("{catalog_name}.{table_name}");
     let table_schema = session.table_schema(&qualified_table).ok()?;
 
-    let mut fields: Vec<Field> = if let Some(columns) = parsed.get_insert_columns() {
+    let mut fields: Vec<Field> = if parsed.is_insert() {
+        if let Some(columns) = parsed.get_insert_columns() {
+            columns
+                .iter()
+                .filter_map(|name| find_field(&table_schema, name))
+                .collect()
+        } else {
+            table_schema
+                .fields()
+                .iter()
+                .map(|f| (**f).clone())
+                .collect()
+        }
+    } else if let Some(columns) = parsed.parameter_columns() {
         columns
             .iter()
             .filter_map(|name| find_field(&table_schema, name))
             .collect()
     } else {
-        table_schema
-            .fields()
-            .iter()
-            .map(|f| (**f).clone())
-            .collect()
+        return None;
     };
 
     if fields.len() < param_count {

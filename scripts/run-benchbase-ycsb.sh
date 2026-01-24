@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 BENCHBASE_REF="${BENCHBASE_REF:-main}"
-ARROW_VERSION="${ARROW_VERSION:-18.1.0}"
+ARROW_VERSION="${ARROW_VERSION:-18.3.0}"
 
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/target/benchbase-ycsb}"
 BENCHBASE_SRC="$WORK_DIR/benchbase-src"
@@ -16,6 +16,8 @@ DDL_PATH="${DDL_PATH:-$ROOT_DIR/tests/benchbase/ycsb-ddl-ducklake.sql}"
 CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.toml}"
 ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"
+LOG_FILE="${LOG_FILE:-$WORK_DIR/benchbase-$(date +%Y%m%d-%H%M%S).log}"
+SWANLAKE_SESSION_ID_MODE="${SWANLAKE_SESSION_ID_MODE:-peer_ip}"
 
 # For shared state across JDBC connections, set SWANLAKE_DUCKLAKE_INIT_SQL to
 # attach and USE a DuckLake database before running this script.
@@ -157,6 +159,8 @@ else
 fi
 
 log "Starting SwanLake server (mode: $SERVER_MODE)..."
+log "Using session id mode: $SWANLAKE_SESSION_ID_MODE"
+export SWANLAKE_SESSION_ID_MODE
 "${SERVER_CMD[@]}" &
 SERVER_PID=$!
 trap cleanup_server EXIT
@@ -164,7 +168,8 @@ trap cleanup_server EXIT
 log "Waiting for Flight SQL server at $ENDPOINT (timeout ${WAIT_SECONDS}s)..."
 wait_for_server "$ENDPOINT" "$WAIT_SECONDS"
 
-export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} --add-opens=java.base/java.nio=ALL-UNNAMED"
+JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} --add-opens=java.base/java.nio=ALL-UNNAMED"
+export JAVA_TOOL_OPTIONS
 
 RESOLVED_CONFIG="$WORK_DIR/ycsb-flight-sql.resolved.xml"
 if [[ -f "$CONFIG_PATH" ]]; then
@@ -176,12 +181,14 @@ else
 fi
 
 log "Running BenchBase YCSB with config $RESOLVED_CONFIG"
+log "Writing BenchBase output to $LOG_FILE"
 pushd "$BENCHBASE_DIST" >/dev/null
 java -cp "benchbase.jar:lib/*" com.oltpbenchmark.DBWorkload \
   -b ycsb \
   -c "$RESOLVED_CONFIG" \
   --create=true \
   --load=true \
-  --execute=true
+  --execute=true \
+  2>&1 | tee "$LOG_FILE"
 popd >/dev/null
 log "BenchBase YCSB completed successfully"

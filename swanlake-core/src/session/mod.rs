@@ -137,6 +137,7 @@ pub struct Session {
     transactions: Mutex<HashSet<TransactionId>>,
     aborted_transactions: Mutex<HashSet<TransactionId>>,
     prepared_statements: Mutex<HashMap<StatementHandle, PreparedStatementState>>,
+    last_prepared_statement_handle: Mutex<Option<StatementHandle>>,
     transaction_id_gen: TransactionIdGenerator,
     statement_handle_gen: StatementHandleGenerator,
     last_activity: Mutex<Instant>,
@@ -155,6 +156,7 @@ impl Session {
             transactions: Mutex::new(HashSet::new()),
             aborted_transactions: Mutex::new(HashSet::new()),
             prepared_statements: Mutex::new(HashMap::new()),
+            last_prepared_statement_handle: Mutex::new(None),
             transaction_id_gen: TransactionIdGenerator::new(),
             statement_handle_gen: StatementHandleGenerator::new(),
             last_activity: Mutex::new(Instant::now()),
@@ -465,6 +467,12 @@ impl Session {
             .expect("prepared_statements mutex poisoned");
         prepared.insert(handle, PreparedStatementState::new(meta));
 
+        let mut last_handle = self
+            .last_prepared_statement_handle
+            .lock()
+            .expect("last_prepared_statement_handle mutex poisoned");
+        *last_handle = Some(handle);
+
         debug!(handle = %handle, "created prepared statement");
         Ok(handle)
     }
@@ -541,8 +549,23 @@ impl Session {
         prepared
             .remove(&handle)
             .ok_or(ServerError::PreparedStatementNotFound)?;
+        let mut last_handle = self
+            .last_prepared_statement_handle
+            .lock()
+            .expect("last_prepared_statement_handle mutex poisoned");
+        if last_handle.as_ref() == Some(&handle) {
+            *last_handle = None;
+        }
         debug!(handle = %handle, "closed prepared statement");
         Ok(())
+    }
+
+    pub fn last_prepared_statement_handle(&self) -> Option<StatementHandle> {
+        let last = self
+            .last_prepared_statement_handle
+            .lock()
+            .expect("last_prepared_statement_handle mutex poisoned");
+        *last
     }
 
     // === Transactions ===

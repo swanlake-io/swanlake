@@ -4,6 +4,13 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionIdMode {
+    PeerAddr,
+    PeerIp,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
@@ -17,6 +24,8 @@ pub struct ServerConfig {
     pub max_sessions: Option<usize>,
     /// Session idle timeout in seconds.
     pub session_timeout_seconds: Option<u64>,
+    /// Session identifier mode.
+    pub session_id_mode: SessionIdMode,
     /// Log format: "compact" or "json".
     pub log_format: String,
     /// Enable the status HTTP server.
@@ -43,6 +52,7 @@ impl Default for ServerConfig {
             checkpoint_interval_hours: Some(24),
             max_sessions: Some(100),
             session_timeout_seconds: Some(900),
+            session_id_mode: SessionIdMode::PeerAddr,
             log_format: "compact".to_string(),
             status_enabled: true,
             status_host: "0.0.0.0".to_string(),

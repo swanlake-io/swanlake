@@ -56,7 +56,8 @@ async fn main() -> Result<()> {
         config.metrics_history_size.unwrap_or(200),
     ));
 
-    let flight_service = SwanFlightSqlService::new(registry.clone(), metrics.clone());
+    let flight_service =
+        SwanFlightSqlService::new(registry.clone(), metrics.clone(), config.session_id_mode.clone());
 
     status::spawn_status_server(&config, metrics, registry.clone()).await?;
 
