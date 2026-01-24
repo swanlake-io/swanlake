@@ -10,12 +10,65 @@ use crate::error::ServerError;
 /// Check if batch schema uses positional parameter names like "1", "2", "3"
 /// This happens when Go drivers send parameters with $1, $2, $3 placeholders
 fn has_positional_field_names(batch: &RecordBatch) -> bool {
-    batch
-        .schema()
-        .fields()
-        .iter()
-        .enumerate()
-        .all(|(idx, field)| field.name() == &(idx + 1).to_string())
+    if batch.num_columns() == 0 {
+        return false;
+    }
+
+    let mut base: Option<usize> = None;
+    for (idx, field) in batch.schema().fields().iter().enumerate() {
+        let name = field.name();
+        let normalized = name.strip_prefix('$').unwrap_or(name);
+        let value = match normalized.parse::<usize>() {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+
+        if idx == 0 {
+            if value != 0 && value != 1 {
+                return false;
+            }
+            base = Some(value);
+        }
+
+        let expected = base.unwrap() + idx;
+        if value != expected {
+            return false;
+        }
+    }
+
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::Int32Array;
+    use arrow_schema::DataType;
+
+    fn make_batch(names: &[&str]) -> RecordBatch {
+        let fields = names
+            .iter()
+            .map(|name| Field::new(*name, DataType::Int32, true))
+            .collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(fields));
+        let columns: Vec<ArrayRef> = names
+            .iter()
+            .map(|_| Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef)
+            .collect();
+        RecordBatch::try_new(schema, columns).expect("valid batch")
+    }
+
+    #[test]
+    fn positional_names_accepts_zero_or_one_based() {
+        let one_based = make_batch(&["1", "2", "3"]);
+        assert!(has_positional_field_names(&one_based));
+
+        let zero_based = make_batch(&["0", "1", "2"]);
+        assert!(has_positional_field_names(&zero_based));
+
+        let dollar_prefixed = make_batch(&["$1", "$2", "$3"]);
+        assert!(has_positional_field_names(&dollar_prefixed));
+    }
 }
 
 /// Reshape a batch from Go driver's multi-row INSERT format.

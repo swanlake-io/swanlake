@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Int32Array, LargeStringArray, RecordBatch, StringArray, UInt8Array};
@@ -31,6 +32,8 @@ const TABLES_SQL: &str = "SELECT \
     WHERE table_schema NOT IN ('information_schema', 'pg_catalog') \
       AND table_schema NOT LIKE '\\_\\_ducklake_metadata%' ESCAPE '\\' \
       AND table_name NOT LIKE 'ducklake\\_%' ESCAPE '\\'";
+
+const CATALOGS_SQL: &str = "PRAGMA database_list";
 
 fn primary_keys_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -97,12 +100,40 @@ pub(crate) async fn do_get_catalogs(
     request: Request<Ticket>,
 ) -> Result<Response<<SwanFlightSqlService as FlightService>::DoGetStream>, Status> {
     let session = service.prepare_request(&request).await?;
-    let catalog = session
-        .current_catalog()
-        .unwrap_or_else(|_| "memory".to_string());
+    let session_clone = Arc::clone(&session);
+    let result = tokio::task::spawn_blocking(move || {
+        let query_result = session_clone.execute_query(CATALOGS_SQL)?;
+        let mut rows = Vec::new();
+        for batch in query_result.batches {
+            rows.extend(extract_catalog_rows(&batch));
+        }
+        Ok::<_, crate::error::ServerError>(rows)
+    })
+    .await
+    .map_err(SwanFlightSqlService::status_from_join)?;
+
+    let mut catalogs = match result {
+        Ok(rows) => rows,
+        Err(err) => {
+            warn!(%err, "failed to load catalogs; falling back to current catalog");
+            Vec::new()
+        }
+    };
+    if catalogs.is_empty() {
+        catalogs.push(
+            session
+                .current_catalog()
+                .unwrap_or_else(|_| "memory".to_string()),
+        );
+    }
 
     let mut builder = query.into_builder();
-    builder.append(catalog);
+    let mut seen = HashSet::new();
+    for catalog in catalogs {
+        if seen.insert(catalog.clone()) {
+            builder.append(catalog);
+        }
+    }
     let batch = builder
         .build()
         .map_err(|err| Status::internal(format!("failed to build catalogs batch: {err}")))?;
@@ -417,7 +448,7 @@ fn extract_table_rows(
         let table_type = normalize_table_type(string_value(type_col, row));
 
         let schema_def = if include_schema {
-            let qualified_name = format!("{schema}.{name}");
+            let qualified_name = format!("{catalog}.{schema}.{name}");
             match session.table_schema(&qualified_name) {
                 Ok(schema) => schema,
                 Err(err) => {
@@ -448,6 +479,32 @@ fn normalize_table_type(value: Option<String>) -> String {
         Some(other) => other.to_string(),
         None => "TABLE".to_string(),
     }
+}
+
+fn extract_catalog_rows(batch: &RecordBatch) -> Vec<String> {
+    let mut rows = Vec::new();
+    if batch.num_rows() == 0 || batch.num_columns() == 0 {
+        return rows;
+    }
+
+    let schema = batch.schema();
+    let name_idx = column_index(&schema, "name")
+        .or_else(|| column_index(&schema, "database_name"))
+        .or_else(|| {
+            schema
+                .fields()
+                .iter()
+                .position(|field| matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8))
+        })
+        .unwrap_or(0);
+    let name_col = batch.column(name_idx);
+    for row in 0..batch.num_rows() {
+        if let Some(name) = string_value(name_col, row) {
+            rows.push(name);
+        }
+    }
+
+    rows
 }
 
 fn string_value(array: &ArrayRef, row: usize) -> Option<String> {

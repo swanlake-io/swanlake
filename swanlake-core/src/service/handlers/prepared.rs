@@ -165,32 +165,39 @@ fn infer_parameter_schema(session: &Arc<Session>, sql: &str, param_count: usize)
     let qualified_table = format!("{catalog_name}.{table_name}");
     let table_schema = session.table_schema(&qualified_table).ok()?;
 
-    let mut fields: Vec<Field> = if parsed.is_insert() {
+    if parsed.is_insert() {
+        if !parsed.insert_values_all_placeholders() {
+            return None;
+        }
+
         if let Some(columns) = parsed.get_insert_columns() {
-            columns
+            if columns.len() != param_count {
+                return None;
+            }
+            let fields: Vec<Field> = columns
                 .iter()
                 .filter_map(|name| find_field(&table_schema, name))
-                .collect()
-        } else {
-            table_schema
-                .fields()
-                .iter()
-                .map(|f| (**f).clone())
-                .collect()
+                .collect();
+            if fields.len() != param_count {
+                return None;
+            }
+            return Some(Schema::new(fields));
         }
-    } else if let Some(columns) = parsed.parameter_columns() {
-        columns
-            .iter()
-            .filter_map(|name| find_field(&table_schema, name))
-            .collect()
-    } else {
-        return None;
-    };
 
-    if fields.len() < param_count {
+        if table_schema.fields().len() != param_count {
+            return None;
+        }
+        return Some(table_schema);
+    }
+
+    let columns = parsed.parameter_columns()?;
+    let fields: Vec<Field> = columns
+        .iter()
+        .filter_map(|name| find_field(&table_schema, name))
+        .collect();
+    if fields.len() != param_count {
         return None;
     }
-    fields.truncate(param_count);
     Some(Schema::new(fields))
 }
 
