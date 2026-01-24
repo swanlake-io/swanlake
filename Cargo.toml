@@ -17,4 +17,4 @@ arrow-array = "57"
 arrow-schema = "57"
 arrow-flight = { version = "57", features = ["flight-sql"] }
 tonic = { version = "0.14.2", features = ["transport"] }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
