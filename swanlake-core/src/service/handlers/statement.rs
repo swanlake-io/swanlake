@@ -16,7 +16,7 @@ use super::ticket::{StatementTicketKind, TicketStatementPayload};
 use crate::error::ServerError;
 use crate::service::SwanFlightSqlService;
 use crate::session::PreparedStatementOptions;
-use crate::sql_parser::ParsedStatement;
+use crate::sql::parser::ParsedStatement;
 
 /// Plans an ad-hoc SQL statement and returns a FlightInfo+ticket that can be
 /// consumed via DoGet. Supports both queries (with planned schema) and commands
@@ -26,7 +26,8 @@ pub(crate) async fn get_flight_info_statement(
     query: CommandStatementQuery,
     request: Request<FlightDescriptor>,
 ) -> Result<Response<FlightInfo>, Status> {
-    let sql = query.query;
+    let raw_sql = query.query;
+    let sql = crate::sql::rewrite::strip_select_locks(&raw_sql).sql;
     let session = service.prepare_request(&request).await?;
 
     let parsed = ParsedStatement::parse(&sql);

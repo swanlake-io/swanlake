@@ -10,18 +10,16 @@ import (
 )
 
 var schema = `
-use swanlake;
+DROP TABLE IF EXISTS swanlake.person;
+DROP TABLE IF EXISTS swanlake.place;
 
-DROP TABLE IF EXISTS person;
-DROP TABLE IF EXISTS place;
-
-CREATE TABLE IF NOT EXISTS person (
+CREATE TABLE IF NOT EXISTS swanlake.person (
     first_name VARCHAR,
     last_name VARCHAR,
     email VARCHAR
 );
 
-CREATE TABLE IF NOT EXISTS place (
+CREATE TABLE IF NOT EXISTS swanlake.place (
     country VARCHAR,
     city VARCHAR NULL,
     telcode INTEGER
@@ -52,19 +50,19 @@ func main() {
 	db.MustExec(schema)
 
 	tx := db.MustBegin()
-	tx.MustExec("INSERT INTO person (first_name, last_name, email) VALUES ($1, $2, $3)", "Jason", "Moiron", "jmoiron@jmoiron.net")
-	tx.MustExec("INSERT INTO person (first_name, last_name, email) VALUES ($1, $2, $3)", "John", "Doe", "johndoeDNE@gmail.net")
-	tx.MustExec("INSERT INTO place (country, city, telcode) VALUES ($1, $2, $3)", "United States", "New York", 1)
-	tx.MustExec("INSERT INTO place (country, telcode) VALUES ($1, $2)", "Hong Kong", 852)
-	tx.MustExec("INSERT INTO place (country, telcode) VALUES ($1, $2)", "Singapore", 65)
+	tx.MustExec("INSERT INTO swanlake.person (first_name, last_name, email) VALUES ($1, $2, $3)", "Jason", "Moiron", "jmoiron@jmoiron.net")
+	tx.MustExec("INSERT INTO swanlake.person (first_name, last_name, email) VALUES ($1, $2, $3)", "John", "Doe", "johndoeDNE@gmail.net")
+	tx.MustExec("INSERT INTO swanlake.place (country, city, telcode) VALUES ($1, $2, $3)", "United States", "New York", int32(1))
+	tx.MustExec("INSERT INTO swanlake.place (country, telcode) VALUES ($1, $2)", "Hong Kong", int32(852))
+	tx.MustExec("INSERT INTO swanlake.place (country, telcode) VALUES ($1, $2)", "Singapore", int32(65))
 	// Flight SQL only supports positional parameters ($1, $2, $3), not named parameters
-	tx.MustExec("INSERT INTO person (first_name, last_name, email) VALUES ($1, $2, $3)", "Jane", "Citizen", "jane.citzen@example.com")
+	tx.MustExec("INSERT INTO swanlake.person (first_name, last_name, email) VALUES ($1, $2, $3)", "Jane", "Citizen", "jane.citzen@example.com")
 	tx.Commit()
 
 	// Multi-row insert in a single Exec to capture the Flight SQL driver's parameter shaping.
-	db.MustExec("DROP TABLE IF EXISTS multi_row_shape")
-	db.MustExec("CREATE TABLE multi_row_shape (a INT, b INT)")
-	if _, err := db.Exec("INSERT INTO multi_row_shape (a, b) VALUES ($1, $2), ($3, $4)", 10, 20, 30, 40); err != nil {
+	db.MustExec("DROP TABLE IF EXISTS swanlake.multi_row_shape")
+	db.MustExec("CREATE TABLE swanlake.multi_row_shape (a INT, b INT)")
+	if _, err := db.Exec("INSERT INTO swanlake.multi_row_shape (a, b) VALUES ($1, $2), ($3, $4)", int32(10), int32(20), int32(30), int32(40)); err != nil {
 		log.Fatalf("Multi-row insert failed: %v", err)
 	}
 	type pair struct {
@@ -72,7 +70,7 @@ func main() {
 		B int `db:"b"`
 	}
 	var pairs []pair
-	if err := db.Select(&pairs, "SELECT a, b FROM multi_row_shape ORDER BY a"); err != nil {
+	if err := db.Select(&pairs, "SELECT a, b FROM swanlake.multi_row_shape ORDER BY a"); err != nil {
 		log.Fatalf("Failed to read multi_row_shape: %v", err)
 	}
 	if len(pairs) != 2 || pairs[0].A != 10 || pairs[0].B != 20 || pairs[1].A != 30 || pairs[1].B != 40 {
@@ -81,7 +79,7 @@ func main() {
 
 	// Query the database, storing results in a []Person (wrapped in []interface{})
 	people := []Person{}
-	db.Select(&people, "SELECT * FROM person ORDER BY first_name ASC")
+	db.Select(&people, "SELECT * FROM swanlake.person ORDER BY first_name ASC")
 	if len(people) != 3 {
 		log.Fatalf("Expected 3 people, got %d", len(people))
 	}
@@ -101,7 +99,7 @@ func main() {
 	// You can also get a single result, a la QueryRow
 	// Note: Using literal value instead of parameter due to ADBC driver limitation with db.Get
 	jason = Person{}
-	err = db.Get(&jason, "SELECT * FROM person WHERE first_name = 'Jason'")
+	err = db.Get(&jason, "SELECT * FROM swanlake.person WHERE first_name = 'Jason'")
 	if err != nil {
 		log.Fatalf("Failed to get Jason: %v", err)
 	}
@@ -114,7 +112,7 @@ func main() {
 
 	// if you have null fields and use SELECT *, you must use sql.Null* in your struct
 	places := []Place{}
-	err = db.Select(&places, "SELECT * FROM place ORDER BY telcode ASC")
+	err = db.Select(&places, "SELECT * FROM swanlake.place ORDER BY telcode ASC")
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -141,7 +139,7 @@ func main() {
 
 	// Loop through rows using only one struct
 	place := Place{}
-	rows, err := db.Queryx("SELECT * FROM place")
+	rows, err := db.Queryx("SELECT * FROM swanlake.place")
 	if err != nil {
 		log.Fatalf("Failed to query places: %v", err)
 	}
@@ -162,14 +160,14 @@ func main() {
 	// Place{Country:"Singapore", City:sql.NullString{String:"", Valid:false}, TelCode:65}
 
 	// Flight SQL only supports positional parameters, not named parameters
-	_, err = db.Exec(`INSERT INTO person (first_name,last_name,email) VALUES ($1,$2,$3)`,
+	_, err = db.Exec(`INSERT INTO swanlake.person (first_name,last_name,email) VALUES ($1,$2,$3)`,
 		"Bin", "Smuth", "bensmith@allblacks.nz")
 	if err != nil {
 		log.Fatalf("Failed to insert Bin: %v", err)
 	}
 
 	// Query using literal value - ADBC driver has issues with Queryx parameters
-	rows, err = db.Queryx(`SELECT * FROM person WHERE first_name='Bin'`)
+	rows, err = db.Queryx(`SELECT * FROM swanlake.person WHERE first_name='Bin'`)
 	if err != nil {
 		log.Fatalf("Failed to query Bin: %v", err)
 	}
@@ -188,7 +186,7 @@ func main() {
 	}
 
 	// Query using literal value - ADBC driver has issues with Queryx parameters
-	rows, err = db.Queryx(`SELECT * FROM person WHERE first_name='Jason'`)
+	rows, err = db.Queryx(`SELECT * FROM swanlake.person WHERE first_name='Jason'`)
 
 	// batch insert with individual inserts (Flight SQL doesn't support batch named params)
 	personStructs := []Person{
@@ -198,7 +196,7 @@ func main() {
 	}
 
 	for _, p := range personStructs {
-		_, err = db.Exec(`INSERT INTO person (first_name, last_name, email) VALUES ($1, $2, $3)`,
+		_, err = db.Exec(`INSERT INTO swanlake.person (first_name, last_name, email) VALUES ($1, $2, $3)`,
 			p.FirstName, p.LastName, p.Email)
 		if err != nil {
 			log.Fatalf("Failed batch insert with structs: %v", err)
@@ -208,7 +206,7 @@ func main() {
 	// Verify the batch insert worked
 	var count int
 
-	err = db.Get(&count, "SELECT COUNT(*) FROM person WHERE last_name = 'Savea'")
+	err = db.Get(&count, "SELECT COUNT(*) FROM swanlake.person WHERE last_name = 'Savea'")
 	if err != nil || count != 1 {
 		log.Fatalf("Failed to verify Savea insert (after structs): count=%d, err=%v", count, err)
 	}
@@ -221,7 +219,7 @@ func main() {
 	}
 
 	for _, m := range personMaps {
-		_, err = db.Exec(`INSERT INTO person (first_name, last_name, email) VALUES ($1, $2, $3)`,
+		_, err = db.Exec(`INSERT INTO swanlake.person (first_name, last_name, email) VALUES ($1, $2, $3)`,
 			m["first_name"], m["last_name"], m["email"])
 		if err != nil {
 			log.Fatalf("Failed batch insert with maps: %v", err)
@@ -229,14 +227,14 @@ func main() {
 	}
 
 	// Verify we now have 2 Savea records (one from structs, one from maps)
-	err = db.Get(&count, "SELECT COUNT(*) FROM person WHERE last_name = 'Savea'")
+	err = db.Get(&count, "SELECT COUNT(*) FROM swanlake.person WHERE last_name = 'Savea'")
 	if err != nil || count != 2 {
 		log.Fatalf("Failed to verify final Savea count: count=%d, err=%v", count, err)
 	}
 
 	// Verify all inserts - should have 10 total people now
 	// 3 (tx: Jason, John, Jane) + 1 (Bin) + 3 (structs) + 3 (maps duplicates) = 10 total
-	err = db.Get(&count, "SELECT COUNT(*) FROM person")
+	err = db.Get(&count, "SELECT COUNT(*) FROM swanlake.person")
 	if err != nil {
 		log.Fatalf("Failed to count people: %v", err)
 	}

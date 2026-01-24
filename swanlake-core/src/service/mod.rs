@@ -8,6 +8,7 @@ use tonic::{Request, Status};
 use tracing::{error, Span};
 use uuid::Uuid;
 
+use crate::config::SessionIdMode;
 use crate::error::ServerError;
 use crate::metrics::Metrics;
 use crate::session::{registry::SessionRegistry, Session, SessionId};
@@ -26,22 +27,42 @@ mod handlers;
 pub struct SwanFlightSqlService {
     registry: Arc<SessionRegistry>,
     metrics: Arc<Metrics>,
+    session_id_mode: SessionIdMode,
 }
 
 impl SwanFlightSqlService {
-    pub fn new(registry: Arc<SessionRegistry>, metrics: Arc<Metrics>) -> Self {
-        Self { registry, metrics }
+    pub fn new(
+        registry: Arc<SessionRegistry>,
+        metrics: Arc<Metrics>,
+        session_id_mode: SessionIdMode,
+    ) -> Self {
+        Self {
+            registry,
+            metrics,
+            session_id_mode,
+        }
     }
 
     /// Extract session ID from tonic Request for session tracking (Phase 2)
     ///
     /// This uses the remote peer address as the session ID.
     /// Sessions persist across requests from the same gRPC connection.
-    pub(crate) fn extract_session_id<T>(request: &Request<T>) -> SessionId {
-        if let Some(addr) = request.remote_addr() {
-            SessionId::from_string(addr.to_string())
-        } else {
-            SessionId::from_string(Uuid::new_v4().to_string())
+    pub(crate) fn extract_session_id<T>(&self, request: &Request<T>) -> SessionId {
+        match self.session_id_mode {
+            SessionIdMode::PeerAddr => {
+                if let Some(addr) = request.remote_addr() {
+                    SessionId::from_string(addr.to_string())
+                } else {
+                    SessionId::from_string(Uuid::new_v4().to_string())
+                }
+            }
+            SessionIdMode::PeerIp => {
+                if let Some(addr) = request.remote_addr() {
+                    SessionId::from_string(addr.ip().to_string())
+                } else {
+                    SessionId::from_string(Uuid::new_v4().to_string())
+                }
+            }
         }
     }
 
@@ -52,7 +73,7 @@ impl SwanFlightSqlService {
         &self,
         request: &Request<T>,
     ) -> Result<Arc<Session>, Status> {
-        let session_id = Self::extract_session_id(request);
+        let session_id = self.extract_session_id(request);
         Span::current().record("session_id", session_id.as_ref());
         self.registry
             .get_or_create_by_id(&session_id)

@@ -99,6 +99,11 @@ impl DuckDbConnection {
         })
     }
 
+    /// Return the number of parameters expected by a prepared statement.
+    pub fn parameter_count(&self, sql: &str) -> Result<usize, ServerError> {
+        self.with_prepared(sql, |stmt| Ok(stmt.parameter_count()))
+    }
+
     /// Execute a statement (DDL/DML) without returning results
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn execute_statement(&self, sql: &str) -> Result<i64, ServerError> {
