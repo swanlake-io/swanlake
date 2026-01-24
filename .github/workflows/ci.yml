@@ -52,7 +52,14 @@ jobs:
         with:
           distribution: "oracle"
           java-version: "23"
-          cache: maven
+
+      - name: Cache Maven repo (BenchBase deps)
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2/repository
+          key: m2-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase-ycsb.sh') }}
+          restore-keys: |
+            m2-${{ runner.os }}-
 
       - name: Set up Docker Compose
         uses: docker/setup-compose-action@v1
