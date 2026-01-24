@@ -11,7 +11,10 @@ use arrow_flight::sql::{
     CommandStatementUpdate, SqlInfo, TicketStatementQuery,
 };
 use arrow_flight::{FlightDescriptor, FlightInfo, Ticket};
-use tonic::{Request, Response, Status};
+use arrow_flight::{HandshakeRequest, HandshakeResponse};
+use futures::stream;
+use prost::bytes::Bytes;
+use tonic::{Request, Response, Status, Streaming};
 use tracing::instrument;
 
 use super::SwanFlightSqlService;
@@ -26,6 +29,32 @@ mod transaction;
 #[tonic::async_trait]
 impl FlightSqlService for SwanFlightSqlService {
     type FlightService = SwanFlightSqlService;
+
+    async fn do_handshake(
+        &self,
+        request: Request<Streaming<HandshakeRequest>>,
+    ) -> Result<
+        Response<
+            std::pin::Pin<
+                Box<dyn futures::Stream<Item = Result<HandshakeResponse, Status>> + Send>,
+            >,
+        >,
+        Status,
+    > {
+        let mut stream = request.into_inner();
+        // Consume at least one message if present, then respond with empty payload.
+        let mut protocol_version = 0u64;
+        if let Some(item) = stream.message().await.transpose() {
+            let req = item?;
+            protocol_version = req.protocol_version;
+        }
+        let response = HandshakeResponse {
+            protocol_version,
+            payload: Bytes::new(),
+        };
+        let out_stream = stream::once(async move { Ok(response) });
+        Ok(Response::new(Box::pin(out_stream)))
+    }
 
     #[instrument(skip(self, request, query), fields(session_id, sql = %query.query))]
     async fn get_flight_info_statement(
