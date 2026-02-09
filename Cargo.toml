@@ -16,5 +16,5 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "jso
 arrow-array = "57"
 arrow-schema = "57"
 arrow-flight = { version = "57", features = ["flight-sql"] }
-tonic = { version = "0.14.2", features = ["transport"] }
+tonic = { version = "0.14.3", features = ["transport"] }
 thiserror = "2.0.18"
