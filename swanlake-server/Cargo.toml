@@ -15,7 +15,7 @@ dotenvy = "0.15.7"
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tonic-health = "0.14.2"
+tonic-health = "0.14.4"
 tokio = { workspace = true }
 arrow-flight = { workspace = true }
 axum = { version = "0.8", features = ["json"] }
