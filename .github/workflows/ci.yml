@@ -107,6 +107,7 @@ jobs:
       - name: Run integration tests
         run: bash scripts/run-integration-tests.sh
         env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
           GENERATE_COVERAGE_REPORT: 0
           PGPASSWORD: postgres
           PGHOST: 127.0.0.1
@@ -116,6 +117,7 @@ jobs:
 
       - name: Run BenchBase YCSB (Flight SQL)
         run: |
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
           source <(cargo llvm-cov show-env --export-prefix)
           bash scripts/run-benchbase.sh
         env:
@@ -127,7 +129,10 @@ jobs:
           SWANLAKE_CHECKPOINT_DATABASES: swanlake
 
       - name: Generate combined coverage report
-        run: cargo llvm-cov report --lcov --output-path "$GITHUB_WORKSPACE/lcov.info" --package swanlake-server --package swanlake-core
+        run: |
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo llvm-cov report --lcov --output-path "$GITHUB_WORKSPACE/lcov.info" --package swanlake-server --package swanlake-core
 
       - name: Coveralls GitHub Action
         uses: coverallsapp/github-action@v2
