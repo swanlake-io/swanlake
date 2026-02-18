@@ -12,7 +12,7 @@ WORK_DIR="${WORK_DIR:-$ROOT_DIR/target/benchbase-${BENCHMARK}}"
 BENCHBASE_SRC="$WORK_DIR/benchbase-src"
 BENCHBASE_DIST="$WORK_DIR/benchbase-dist"
 BENCHBASE_TARBALL="$WORK_DIR/benchbase-${BENCHBASE_REF}.tar.gz"
-TPCH_DIALECT_PATCH_VERSION="${TPCH_DIALECT_PATCH_VERSION:-duckdb-tpch-v6}"
+TPCH_DIALECT_PATCH_VERSION="${TPCH_DIALECT_PATCH_VERSION:-duckdb-tpch-v7}"
 TPCH_DIALECT_PATCH_MARKER="$WORK_DIR/.${TPCH_DIALECT_PATCH_VERSION}.applied"
 DEFAULT_BENCHBASE_JUL_CONFIG="$BENCHBASE_SRC/src/main/resources/logging.properties"
 DEFAULT_BENCHBASE_LOG4J_CONFIG="$BENCHBASE_SRC/src/main/resources/log4j.properties"
@@ -479,6 +479,13 @@ update_file(
     [
         ("stmt.setDate(1, Date.valueOf(date));", "stmt.setString(1, date);"),
         ("stmt.setDate(2, Date.valueOf(date));", "stmt.setString(2, date);"),
+    ],
+)
+update_file(
+    proc_dir / "Q15.java",
+    [
+        ("CREATE view revenue0 (supplier_no, total_revenue) AS", "CREATE TEMP VIEW revenue0 (supplier_no, total_revenue) AS"),
+        ("DROP VIEW revenue0", "DROP VIEW IF EXISTS revenue0"),
     ],
 )
 update_file(

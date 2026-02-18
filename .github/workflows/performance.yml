@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       scale_factor:
-        description: "TPCH scale factor"
+        description: "TPCH scale factor override (leave empty to use per-storage default)"
         required: false
-        default: "0.1"
+        default: ""
       terminals:
         description: "Concurrent terminals"
         required: false
@@ -36,8 +36,10 @@ jobs:
         include:
           - storage: postgres_s3
             label: postgres+s3
+            scale_factor: "0.1"
           - storage: postgres_r2
             label: postgres+r2
+            scale_factor: "0.01"
     name: BenchBase TPCH (${{ matrix.label }})
     steps:
       - uses: actions/checkout@v6
@@ -157,7 +159,7 @@ jobs:
           CONFIG_PATH: ${{ github.workspace }}/tests/benchbase/tpch-flight-sql.xml
           DDL_PATH: ${{ github.workspace }}/tests/benchbase/tpch-ddl-ducklake.sql
           WORK_DIR: ${{ github.workspace }}/target/benchbase-tpch-${{ matrix.storage }}
-          SCALE_FACTOR: ${{ github.event.inputs.scale_factor || '0.1' }}
+          SCALE_FACTOR: ${{ github.event.inputs.scale_factor || matrix.scale_factor }}
           TERMINALS: ${{ github.event.inputs.terminals || '4' }}
           WARMUP_SECONDS: ${{ github.event.inputs.warmup_seconds || '30' }}
           BENCHMARK_TIME_SECONDS: ${{ github.event.inputs.benchmark_time_seconds || '180' }}
