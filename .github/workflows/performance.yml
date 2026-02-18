@@ -7,7 +7,6 @@ on:
         description: "TPCH scale factor"
         required: false
         default: "0.1"
-  push:
   pull_request:
 
 concurrency:

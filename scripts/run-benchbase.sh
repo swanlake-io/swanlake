@@ -144,7 +144,12 @@ SERVER_MODE="${SERVER_MODE:-cargo}"
 
 # Ensure DuckDB environment variables are available for the server.
 log "Loading DuckDB environment..."
-source "$ROOT_DIR/swanlake-core/.duckdb/env.sh"
+DUCKDB_ENV_FILE="$ROOT_DIR/swanlake-core/.duckdb/env.sh"
+if [[ -f "$DUCKDB_ENV_FILE" ]]; then
+  source "$DUCKDB_ENV_FILE"
+else
+  log "DuckDB environment file not found at $DUCKDB_ENV_FILE; continuing without it"
+fi
 
 if [[ "$SERVER_MODE" == "cargo" ]]; then
   SERVER_CMD=(cargo run --quiet --package swanlake-server --bin swanlake)
