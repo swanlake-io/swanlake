@@ -79,7 +79,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: target/benchbase-tpch-${{ matrix.storage }}
-          key: perf-benchbase-${{ runner.os }}-${{ matrix.storage }}-${{ hashFiles('scripts/run-benchbase.sh', 'tests/benchbase/tpch-flight-sql.xml') }}
+          key: perf-benchbase-${{ runner.os }}-${{ matrix.storage }}-${{ hashFiles('scripts/run-benchbase.sh', 'tests/benchbase/tpch-flight-sql.xml', 'tests/benchbase/tpch-ddl-ducklake.sql') }}
           restore-keys: |
             perf-benchbase-${{ runner.os }}-${{ matrix.storage }}-
             perf-benchbase-${{ runner.os }}-
@@ -143,6 +143,7 @@ jobs:
         env:
           BENCHMARK: tpch
           CONFIG_PATH: ${{ github.workspace }}/tests/benchbase/tpch-flight-sql.xml
+          DDL_PATH: ${{ github.workspace }}/tests/benchbase/tpch-ddl-ducklake.sql
           WORK_DIR: ${{ github.workspace }}/target/benchbase-tpch-${{ matrix.storage }}
           SCALE_FACTOR: ${{ github.event.inputs.scale_factor || '0.1' }}
           TERMINALS: 1
@@ -157,5 +158,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: benchbase-tpch-${{ matrix.storage }}
-          path: target/benchbase-tpch-${{ matrix.storage }}
+          path: |
+            target/benchbase-tpch-${{ matrix.storage }}/benchbase-*.log
+            target/benchbase-tpch-${{ matrix.storage }}/swanlake-server-*.log
+            target/benchbase-tpch-${{ matrix.storage }}/benchbase-dist/results/tpch_*.summary.json
+            target/benchbase-tpch-${{ matrix.storage }}/benchbase-dist/results/tpch_*.results.csv
+            target/benchbase-tpch-${{ matrix.storage }}/benchbase-dist/results/tpch_*.results.Q*.csv
+            target/benchbase-tpch-${{ matrix.storage }}/benchbase-dist/results/tpch_*.samples.csv
+            target/benchbase-tpch-${{ matrix.storage }}/benchbase-dist/results/tpch_*.config.xml
+            target/benchbase-tpch-${{ matrix.storage }}/benchbase-dist/results/tpch_*.params.json
           if-no-files-found: ignore
