@@ -2,14 +2,18 @@ use reqwest::blocking::Client;
 use std::env;
 use std::fs;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use zip::ZipArchive;
 
+const FALLBACK_DUCKDB_VERSION: &str = "1.4.4";
+
 fn main() {
-    let version = env::var("DUCKDB_VERSION").unwrap_or_else(|_| "1.4.1".to_string());
-    let root_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let cache_dir = Path::new(&root_dir).join(".duckdb");
+    println!("cargo:rerun-if-env-changed=DUCKDB_VERSION");
+
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let version = resolve_duckdb_version(&manifest_dir);
+    let cache_dir = manifest_dir.join(".duckdb");
     let install_dir = cache_dir.join(&version);
     let env_file = cache_dir.join("env.sh");
 
@@ -180,4 +184,102 @@ fn detect_dist() -> Result<String, String> {
         },
         _ => Err(format!("Unsupported operating system: {}", os)),
     }
+}
+
+fn resolve_duckdb_version(manifest_dir: &Path) -> String {
+    if let Ok(version) = env::var("DUCKDB_VERSION") {
+        return version;
+    }
+
+    if let Some(lock_path) = find_cargo_lock(manifest_dir) {
+        println!("cargo:rerun-if-changed={}", lock_path.display());
+        if let Some(version) = duckdb_version_from_lock(&lock_path) {
+            return version;
+        }
+        println!(
+            "cargo:warning=Unable to infer DuckDB version from {}; falling back to {}",
+            lock_path.display(),
+            FALLBACK_DUCKDB_VERSION
+        );
+    } else {
+        println!(
+            "cargo:warning=Unable to locate Cargo.lock; falling back to {}",
+            FALLBACK_DUCKDB_VERSION
+        );
+    }
+
+    FALLBACK_DUCKDB_VERSION.to_string()
+}
+
+fn find_cargo_lock(manifest_dir: &Path) -> Option<PathBuf> {
+    manifest_dir
+        .ancestors()
+        .map(|dir| dir.join("Cargo.lock"))
+        .find(|candidate| candidate.is_file())
+}
+
+fn duckdb_version_from_lock(lock_path: &Path) -> Option<String> {
+    let lock = fs::read_to_string(lock_path).ok()?;
+    let mut current_name: Option<String> = None;
+    let mut current_version: Option<String> = None;
+    let mut best_version: Option<String> = None;
+
+    for line in lock.lines().map(str::trim) {
+        if line == "[[package]]" {
+            if current_name.as_deref() == Some("libduckdb-sys") {
+                best_version = pick_newer_version(best_version, current_version.take());
+            }
+            current_name = None;
+            current_version = None;
+            continue;
+        }
+
+        if let Some(name) = parse_quoted_kv(line, "name") {
+            current_name = Some(name);
+            continue;
+        }
+
+        if let Some(version) = parse_quoted_kv(line, "version") {
+            current_version = Some(version);
+        }
+    }
+
+    if current_name.as_deref() == Some("libduckdb-sys") {
+        best_version = pick_newer_version(best_version, current_version);
+    }
+
+    best_version
+}
+
+fn parse_quoted_kv(line: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key} = \"");
+    if !line.starts_with(&prefix) {
+        return None;
+    }
+    line.strip_prefix(&prefix)?
+        .strip_suffix('"')
+        .map(|s| s.to_string())
+}
+
+fn pick_newer_version(current: Option<String>, candidate: Option<String>) -> Option<String> {
+    match (current, candidate) {
+        (None, Some(candidate)) => Some(candidate),
+        (Some(current), None) => Some(current),
+        (None, None) => None,
+        (Some(current), Some(candidate)) => {
+            match (semver_triplet(&current), semver_triplet(&candidate)) {
+                (Some(a), Some(b)) if b > a => Some(candidate),
+                _ => Some(current),
+            }
+        }
+    }
+}
+
+fn semver_triplet(version: &str) -> Option<(u64, u64, u64)> {
+    let core = version.split_once('-').map(|(v, _)| v).unwrap_or(version);
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
 }

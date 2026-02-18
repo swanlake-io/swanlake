@@ -10,9 +10,9 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 arrow-array = { workspace = true }
-arrow-buffer = "57"
+arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
-arrow = { version = "57", features = ["prettyprint"] }
+arrow = { workspace = true, features = ["prettyprint"] }
 chrono = "0.4"
 swanlake-client = { path = "../../swanlake-client" }
 tokio = { workspace = true }

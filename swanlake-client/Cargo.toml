@@ -15,7 +15,7 @@ adbc-driver-flightsql = "0.1"
 anyhow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
-arrow = { version = "57", features = ["prettyprint"] }
+arrow = { workspace = true, features = ["prettyprint"] }
 tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
 
 # cli
