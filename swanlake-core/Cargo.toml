@@ -12,7 +12,7 @@ arrow-ipc = { version = "57" }
 arrow-schema = { workspace = true }
 arrow-cast = "57"
 arrow-select = "57"
-duckdb = { git = "https://github.com/swanlake-io/duckdb-rs", rev = "017cf3c", default-features = false, features = ["appender-arrow"] }
+duckdb = { version = "1.4.4", default-features = false, features = ["appender-arrow"] }
 sqlparser = { version = "0.61.0", features = ["visitor"] }
 futures = "0.3.32"
 prost = "0.14.3"
