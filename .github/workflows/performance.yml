@@ -7,6 +7,18 @@ on:
         description: "TPCH scale factor"
         required: false
         default: "0.1"
+      terminals:
+        description: "Concurrent terminals"
+        required: false
+        default: "4"
+      warmup_seconds:
+        description: "Warmup duration in seconds"
+        required: false
+        default: "30"
+      benchmark_time_seconds:
+        description: "Measured benchmark duration in seconds"
+        required: false
+        default: "180"
   pull_request:
 
 concurrency:
@@ -112,7 +124,7 @@ jobs:
                 echo "AWS_SECRET_ACCESS_KEY=$BENCHBASE_S3_SECRET_ACCESS_KEY"
                 echo "AWS_REGION=$BENCHBASE_S3_REGION"
                 echo "AWS_DEFAULT_REGION=$BENCHBASE_S3_REGION"
-                echo "SWANLAKE_DUCKLAKE_INIT_SQL=ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH 's3://$BENCHBASE_S3_BUCKET/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
+                echo "SWANLAKE_DUCKLAKE_INIT_SQL=CREATE OR REPLACE SECRET s3_secret (TYPE s3, PROVIDER credential_chain); ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH 's3://$BENCHBASE_S3_BUCKET/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
               } >> "$GITHUB_ENV"
               ;;
             postgres_r2)
@@ -146,7 +158,9 @@ jobs:
           DDL_PATH: ${{ github.workspace }}/tests/benchbase/tpch-ddl-ducklake.sql
           WORK_DIR: ${{ github.workspace }}/target/benchbase-tpch-${{ matrix.storage }}
           SCALE_FACTOR: ${{ github.event.inputs.scale_factor || '0.1' }}
-          TERMINALS: 1
+          TERMINALS: ${{ github.event.inputs.terminals || '4' }}
+          WARMUP_SECONDS: ${{ github.event.inputs.warmup_seconds || '30' }}
+          BENCHMARK_TIME_SECONDS: ${{ github.event.inputs.benchmark_time_seconds || '180' }}
           PGPASSWORD: postgres
           PGHOST: 127.0.0.1
           PGPORT: 5442

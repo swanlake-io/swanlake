@@ -16,10 +16,12 @@
     <scalefactor>0.01</scalefactor>
 
     <!-- The workload -->
-    <terminals>1</terminals>
+    <terminals>4</terminals>
     <works>
         <work>
-            <serial>true</serial>
+            <serial>false</serial>
+            <warmup>30</warmup>
+            <time>180</time>
             <rate>unlimited</rate>
             <weights>1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1</weights>
         </work>

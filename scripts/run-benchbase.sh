@@ -29,6 +29,8 @@ ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
 WAIT_SECONDS="${WAIT_SECONDS:-120}"
 SCALE_FACTOR="${SCALE_FACTOR:-}"
 TERMINALS="${TERMINALS:-}"
+WARMUP_SECONDS="${WARMUP_SECONDS:-}"
+BENCHMARK_TIME_SECONDS="${BENCHMARK_TIME_SECONDS:-}"
 LOG_FILE="${LOG_FILE:-$WORK_DIR/benchbase-$(date +%Y%m%d-%H%M%S).log}"
 SERVER_LOG_FILE="${SERVER_LOG_FILE:-$WORK_DIR/swanlake-server-$(date +%Y%m%d-%H%M%S).log}"
 SERVER_LOG_LINES="${SERVER_LOG_LINES:-200}"
@@ -574,13 +576,21 @@ if [[ -f "$CONFIG_PATH" ]]; then
   if [[ -n "$TERMINALS" ]]; then
     log "Overriding ${BENCHMARK} terminals to $TERMINALS"
   fi
-  python3 - "$RESOLVED_CONFIG" "$SCALE_FACTOR" "$TERMINALS" <<'PY'
+  if [[ -n "$WARMUP_SECONDS" ]]; then
+    log "Overriding ${BENCHMARK} warmup to ${WARMUP_SECONDS}s"
+  fi
+  if [[ -n "$BENCHMARK_TIME_SECONDS" ]]; then
+    log "Overriding ${BENCHMARK} benchmark time to ${BENCHMARK_TIME_SECONDS}s"
+  fi
+  python3 - "$RESOLVED_CONFIG" "$SCALE_FACTOR" "$TERMINALS" "$WARMUP_SECONDS" "$BENCHMARK_TIME_SECONDS" <<'PY'
 import re
 import sys
 
 path = sys.argv[1]
 scale = sys.argv[2]
 terminals = sys.argv[3]
+warmup = sys.argv[4]
+run_time = sys.argv[5]
 
 with open(path, "r", encoding="utf-8") as fh:
     text = fh.read()
@@ -593,6 +603,8 @@ def replace_tag(text: str, tag: str, value: str) -> str:
 
 text = replace_tag(text, "scalefactor", scale)
 text = replace_tag(text, "terminals", terminals)
+text = replace_tag(text, "warmup", warmup)
+text = replace_tag(text, "time", run_time)
 
 with open(path, "w", encoding="utf-8") as fh:
     fh.write(text)
