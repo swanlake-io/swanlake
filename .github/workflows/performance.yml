@@ -1,0 +1,160 @@
+name: Performance
+
+on:
+  workflow_dispatch:
+    inputs:
+      scale_factor:
+        description: "TPCH scale factor"
+        required: false
+        default: "0.1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  benchbase-tpch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - storage: postgres_s3
+            label: postgres+s3
+          - storage: postgres_r2
+            label: postgres+r2
+    name: BenchBase TPCH (${{ matrix.label }})
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: swanlake-perf
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: "oracle"
+          java-version: "23"
+
+      - name: Cache Maven repo (BenchBase deps)
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2/repository
+          key: perf-m2-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase.sh') }}
+          restore-keys: |
+            perf-m2-${{ runner.os }}-
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
+
+      - name: Start services
+        run: docker compose up -d
+
+      - name: Cache DuckDB
+        uses: actions/cache@v5
+        with:
+          path: .duckdb
+          key: perf-duckdb-${{ runner.os }}
+
+      - name: Cache BenchBase artifacts
+        uses: actions/cache@v5
+        with:
+          path: target/benchbase-tpch-${{ matrix.storage }}
+          key: perf-benchbase-${{ runner.os }}-${{ matrix.storage }}-${{ hashFiles('scripts/run-benchbase.sh', 'tests/benchbase/tpch-flight-sql.xml') }}
+          restore-keys: |
+            perf-benchbase-${{ runner.os }}-${{ matrix.storage }}-
+            perf-benchbase-${{ runner.os }}-
+
+      - name: Configure storage backend
+        env:
+          BENCHBASE_S3_ACCESS_KEY_ID: ${{ secrets.BENCHBASE_S3_ACCESS_KEY_ID }}
+          BENCHBASE_S3_SECRET_ACCESS_KEY: ${{ secrets.BENCHBASE_S3_SECRET_ACCESS_KEY }}
+          BENCHBASE_S3_REGION: ${{ secrets.BENCHBASE_S3_REGION }}
+          BENCHBASE_S3_BUCKET: ${{ secrets.BENCHBASE_S3_BUCKET }}
+          BENCHBASE_R2_ACCESS_KEY_ID: ${{ secrets.BENCHBASE_R2_ACCESS_KEY_ID }}
+          BENCHBASE_R2_SECRET_ACCESS_KEY: ${{ secrets.BENCHBASE_R2_SECRET_ACCESS_KEY }}
+          BENCHBASE_R2_ACCOUNT_ID: ${{ secrets.BENCHBASE_R2_ACCOUNT_ID }}
+          BENCHBASE_R2_BUCKET: ${{ secrets.BENCHBASE_R2_BUCKET }}
+        run: |
+          set -euo pipefail
+
+          case "${{ matrix.storage }}" in
+            postgres_s3)
+              required=(BENCHBASE_S3_ACCESS_KEY_ID BENCHBASE_S3_SECRET_ACCESS_KEY BENCHBASE_S3_REGION BENCHBASE_S3_BUCKET)
+              for var in "${required[@]}"; do
+                if [[ -z "${!var:-}" ]]; then
+                  echo "Missing required secret for postgres+s3: $var" >&2
+                  exit 1
+                fi
+              done
+
+              {
+                echo "AWS_ACCESS_KEY_ID=$BENCHBASE_S3_ACCESS_KEY_ID"
+                echo "AWS_SECRET_ACCESS_KEY=$BENCHBASE_S3_SECRET_ACCESS_KEY"
+                echo "AWS_REGION=$BENCHBASE_S3_REGION"
+                echo "AWS_DEFAULT_REGION=$BENCHBASE_S3_REGION"
+                echo "SWANLAKE_DUCKLAKE_INIT_SQL=ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH 's3://$BENCHBASE_S3_BUCKET/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
+              } >> "$GITHUB_ENV"
+              ;;
+            postgres_r2)
+              required=(BENCHBASE_R2_ACCESS_KEY_ID BENCHBASE_R2_SECRET_ACCESS_KEY BENCHBASE_R2_ACCOUNT_ID BENCHBASE_R2_BUCKET)
+              for var in "${required[@]}"; do
+                if [[ -z "${!var:-}" ]]; then
+                  echo "Missing required secret for postgres+r2: $var" >&2
+                  exit 1
+                fi
+              done
+
+              {
+                echo "AWS_ACCESS_KEY_ID=$BENCHBASE_R2_ACCESS_KEY_ID"
+                echo "AWS_SECRET_ACCESS_KEY=$BENCHBASE_R2_SECRET_ACCESS_KEY"
+                echo "AWS_SECRET_ACCOUNT_ID=$BENCHBASE_R2_ACCOUNT_ID"
+                echo "DUCKDB_S3_ENDPOINT=$BENCHBASE_R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+                echo "SWANLAKE_DUCKLAKE_INIT_SQL=CREATE OR REPLACE SECRET r2_secret (TYPE r2, ENDPOINT '$BENCHBASE_R2_ACCOUNT_ID.r2.cloudflarestorage.com'); ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH 'r2://$BENCHBASE_R2_BUCKET/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
+              } >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "Unknown storage backend: ${{ matrix.storage }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Run BenchBase TPCH (Flight SQL)
+        run: bash scripts/run-benchbase.sh
+        env:
+          BENCHMARK: tpch
+          CONFIG_PATH: ${{ github.workspace }}/tests/benchbase/tpch-flight-sql.xml
+          WORK_DIR: ${{ github.workspace }}/target/benchbase-tpch-${{ matrix.storage }}
+          SCALE_FACTOR: ${{ github.event.inputs.scale_factor || '0.1' }}
+          TERMINALS: 1
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5442
+          PGUSER: postgres
+          SWANLAKE_CHECKPOINT_DATABASES: swanlake
+
+      - name: Upload BenchBase artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchbase-tpch-${{ matrix.storage }}
+          path: target/benchbase-tpch-${{ matrix.storage }}
+          if-no-files-found: ignore

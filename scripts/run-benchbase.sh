@@ -5,8 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 BENCHBASE_REF="${BENCHBASE_REF:-main}"
 ARROW_VERSION="${ARROW_VERSION:-18.3.0}"
+# Defaults to YCSB for backward compatibility; set BENCHMARK=tpch (etc.) to run others.
+BENCHMARK="${BENCHMARK:-ycsb}"
 
-WORK_DIR="${WORK_DIR:-$ROOT_DIR/target/benchbase-ycsb}"
+WORK_DIR="${WORK_DIR:-$ROOT_DIR/target/benchbase-${BENCHMARK}}"
 BENCHBASE_SRC="$WORK_DIR/benchbase-src"
 BENCHBASE_DIST="$WORK_DIR/benchbase-dist"
 BENCHBASE_TARBALL="$WORK_DIR/benchbase-${BENCHBASE_REF}.tar.gz"
@@ -25,7 +27,7 @@ SWANLAKE_SESSION_ID_MODE="${SWANLAKE_SESSION_ID_MODE:-peer_ip}"
 # attach and USE a DuckLake database before running this script.
 
 log() {
-  printf '[benchbase-ycsb] %s\n' "$*"
+  printf '[benchbase-%s] %s\n' "$BENCHMARK" "$*"
 }
 
 mkdir -p "$WORK_DIR"
@@ -173,15 +175,15 @@ wait_for_server "$ENDPOINT" "$WAIT_SECONDS"
 JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} --add-opens=java.base/java.nio=ALL-UNNAMED"
 export JAVA_TOOL_OPTIONS
 
-RESOLVED_CONFIG="$WORK_DIR/ycsb-flight-sql.resolved.xml"
+RESOLVED_CONFIG="$WORK_DIR/${BENCHMARK}-flight-sql.resolved.xml"
 if [[ -f "$CONFIG_PATH" ]]; then
   log "Rendering BenchBase config with ddlpath $DDL_PATH"
   sed "s|__DDL_PATH__|$DDL_PATH|g" "$CONFIG_PATH" > "$RESOLVED_CONFIG"
   if [[ -n "$SCALE_FACTOR" ]]; then
-    log "Overriding YCSB scalefactor to $SCALE_FACTOR"
+    log "Overriding ${BENCHMARK} scalefactor to $SCALE_FACTOR"
   fi
   if [[ -n "$TERMINALS" ]]; then
-    log "Overriding YCSB terminals to $TERMINALS"
+    log "Overriding ${BENCHMARK} terminals to $TERMINALS"
   fi
   python3 - "$RESOLVED_CONFIG" "$SCALE_FACTOR" "$TERMINALS" <<'PY'
 import re
@@ -211,11 +213,11 @@ else
   exit 1
 fi
 
-log "Running BenchBase YCSB with config $RESOLVED_CONFIG"
+log "Running BenchBase $BENCHMARK with config $RESOLVED_CONFIG"
 log "Writing BenchBase output to $LOG_FILE"
 pushd "$BENCHBASE_DIST" >/dev/null
 java -cp "benchbase.jar:lib/*" com.oltpbenchmark.DBWorkload \
-  -b ycsb \
+  -b "$BENCHMARK" \
   -c "$RESOLVED_CONFIG" \
   --create=true \
   --load=true \
@@ -223,31 +225,59 @@ java -cp "benchbase.jar:lib/*" com.oltpbenchmark.DBWorkload \
   2>&1 | tee "$LOG_FILE"
 popd >/dev/null
 
-SUMMARY_FILE="$(ls -t "$BENCHBASE_DIST"/results/*.summary.json 2>/dev/null | head -n1 || true)"
+SUMMARY_FILE="$(ls -t "$BENCHBASE_DIST"/results/"${BENCHMARK}"_*.summary.json 2>/dev/null | head -n1 || true)"
 if [[ -z "$SUMMARY_FILE" ]]; then
-  log "BenchBase summary file not found in $BENCHBASE_DIST/results"
+  log "BenchBase summary file for benchmark '$BENCHMARK' not found in $BENCHBASE_DIST/results"
   exit 1
 fi
 
-python3 - "$SUMMARY_FILE" <<'PY'
+python3 - "$SUMMARY_FILE" "$BENCHMARK" <<'PY'
 import json
 import sys
 
 path = sys.argv[1]
+benchmark = sys.argv[2]
 with open(path, "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
+final_state = str(data.get("Final State", "") or "")
 goodput = float(data.get("Goodput (requests/second)", 0.0) or 0.0)
+throughput = float(data.get("Throughput (requests/second)", 0.0) or 0.0)
 measured = int(data.get("Measured Requests", 0) or 0)
 
-if goodput <= 0 or measured <= 0:
+if final_state.upper() != "EXIT":
     print(
-        f"BenchBase YCSB failed: measured_requests={measured}, goodput={goodput}",
+        f"BenchBase {benchmark} failed: final_state={final_state!r}",
         file=sys.stderr,
     )
     sys.exit(1)
 
-print(f"BenchBase YCSB OK: measured_requests={measured}, goodput={goodput}")
+if measured <= 0:
+    print(
+        f"BenchBase {benchmark} failed: measured_requests={measured}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if benchmark.lower() == "ycsb":
+    metric = goodput if goodput > 0 else throughput
+    metric_name = "goodput" if goodput > 0 else "throughput"
+else:
+    metric = throughput
+    metric_name = "throughput"
+
+if metric <= 0:
+    print(
+        f"BenchBase {benchmark} failed: measured_requests={measured}, "
+        f"goodput={goodput}, throughput={throughput}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+print(
+    f"BenchBase {benchmark} OK: measured_requests={measured}, "
+    f"{metric_name}={metric}"
+)
 PY
 
-log "BenchBase YCSB completed successfully"
+log "BenchBase $BENCHMARK completed successfully"
