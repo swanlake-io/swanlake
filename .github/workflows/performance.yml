@@ -23,7 +23,6 @@ on:
         description: "Measured benchmark duration in seconds"
         required: false
         default: "180"
-  pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
