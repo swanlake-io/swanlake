@@ -90,7 +90,10 @@ impl CheckpointService {
     }
 
     async fn run_loop(self) {
+        // The first `interval` tick fires immediately; consume it so we don't race
+        // startup session creation with an immediate checkpoint connection bootstrap.
         let mut ticker = tokio::time::interval(self.cfg.tick());
+        ticker.tick().await;
         loop {
             ticker.tick().await;
             for db in self.cfg.databases() {

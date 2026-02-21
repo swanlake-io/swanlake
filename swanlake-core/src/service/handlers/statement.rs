@@ -31,9 +31,20 @@ pub(crate) async fn get_flight_info_statement(
     let session = service.prepare_request(&request).await?;
 
     let parsed = ParsedStatement::parse(&sql);
-    let mut returns_rows = parsed.as_ref().is_some_and(|p| p.is_query());
+    let statement_count = ParsedStatement::statement_count(&sql);
+    let multi_statement = statement_count.is_some_and(|count| count > 1);
+    let mut returns_rows = ParsedStatement::contains_query(&sql)
+        .unwrap_or_else(|| parsed.as_ref().is_some_and(|p| p.is_query()));
 
-    let schema = if returns_rows || parsed.is_none() {
+    if multi_statement && returns_rows {
+        debug!(
+            count = statement_count.unwrap_or_default(),
+            "skipping schema planning for multi-statement query"
+        );
+    }
+
+    let should_plan_schema = !multi_statement && (returns_rows || parsed.is_none());
+    let schema = if should_plan_schema {
         let sql_for_schema = sql.clone();
         let session_for_schema = Arc::clone(&session);
         match tokio::task::spawn_blocking(move || {

@@ -484,7 +484,7 @@ update_file(
 update_file(
     proc_dir / "Q15.java",
     [
-        ("CREATE view revenue0 (supplier_no, total_revenue) AS", "CREATE TEMP VIEW revenue0 (supplier_no, total_revenue) AS"),
+        ("CREATE view revenue0 (supplier_no, total_revenue) AS", "CREATE OR REPLACE TEMP VIEW revenue0 (supplier_no, total_revenue) AS"),
         ("DROP VIEW revenue0", "DROP VIEW IF EXISTS revenue0"),
     ],
 )
@@ -645,6 +645,12 @@ if [[ -n "$BENCHBASE_JAVA_OPTS" ]]; then
 fi
 
 pushd "$BENCHBASE_DIST" >/dev/null
+RESULTS_DIR="$BENCHBASE_DIST/results"
+mkdir -p "$RESULTS_DIR"
+# Remove stale benchmark artifacts so summary validation always reflects this run.
+find "$RESULTS_DIR" -maxdepth 1 -type f -name "${BENCHMARK}_*" -delete
+
+set +e
 java "${JAVA_FLAGS[@]}" -cp "benchbase.jar:lib/*" com.oltpbenchmark.DBWorkload \
   -b "$BENCHMARK" \
   -c "$RESOLVED_CONFIG" \
@@ -652,7 +658,19 @@ java "${JAVA_FLAGS[@]}" -cp "benchbase.jar:lib/*" com.oltpbenchmark.DBWorkload \
   --load=true \
   --execute=true \
   2>&1 | tee "$LOG_FILE"
+BENCHBASE_EXIT_CODE=${PIPESTATUS[0]}
+set -e
 popd >/dev/null
+
+if [[ "$BENCHBASE_EXIT_CODE" -ne 0 ]]; then
+  log "BenchBase JVM exited with code $BENCHBASE_EXIT_CODE"
+  exit "$BENCHBASE_EXIT_CODE"
+fi
+
+if grep -Fq "Unexpected error when creating benchmark database tables." "$LOG_FILE"; then
+  log "BenchBase reported fatal setup error while creating benchmark tables"
+  exit 1
+fi
 
 BENCHBASE_UNEXPECTED_SQL_ERRORS=0
 summarize_benchbase_sql_errors "$LOG_FILE"

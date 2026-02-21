@@ -37,12 +37,26 @@ impl ParsedStatement {
     /// For multi-statement SQL, returns the last statement (which determines the result type).
     /// Returns `None` if the SQL cannot be parsed.
     pub fn parse(sql: &str) -> Option<Self> {
-        let dialect = GenericDialect {};
-        let statements = Parser::parse_sql(&dialect, sql).ok()?;
+        let statements = Self::parse_statements(sql)?;
 
         Some(Self {
             statement: statements.into_iter().last()?,
         })
+    }
+
+    /// Count the number of parsed statements.
+    ///
+    /// Returns `None` if SQL parsing fails.
+    pub fn statement_count(sql: &str) -> Option<usize> {
+        Some(Self::parse_statements(sql)?.len())
+    }
+
+    /// Returns whether any statement in the SQL text produces rows.
+    ///
+    /// Returns `None` if SQL parsing fails.
+    pub fn contains_query(sql: &str) -> Option<bool> {
+        let statements = Self::parse_statements(sql)?;
+        Some(statements.iter().any(statement_returns_rows))
     }
 
     /// Check if this is an INSERT statement.
@@ -55,18 +69,7 @@ impl ParsedStatement {
     /// Returns true for SELECT, SHOW, EXPLAIN, PRAGMA, and other query statements.
     /// Returns false for INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, etc.
     pub fn is_query(&self) -> bool {
-        matches!(
-            self.statement,
-            Statement::Query(_)
-                | Statement::ShowTables { .. }
-                | Statement::ShowColumns { .. }
-                | Statement::ShowCreate { .. }
-                | Statement::ShowVariable { .. }
-                | Statement::ShowVariables { .. }
-                | Statement::Explain { .. }
-                | Statement::ExplainTable { .. }
-                | Statement::Pragma { .. }
-        )
+        statement_returns_rows(&self.statement)
     }
 
     /// Get the primary table reference for this statement when it is a simple
@@ -216,6 +219,11 @@ impl ParsedStatement {
             _ => None,
         }
     }
+
+    fn parse_statements(sql: &str) -> Option<Vec<Statement>> {
+        let dialect = GenericDialect {};
+        Parser::parse_sql(&dialect, sql).ok()
+    }
 }
 
 impl TableReference {
@@ -265,6 +273,21 @@ fn table_from_from_table(from: &sqlparser::ast::FromTable) -> Option<TableRefere
         return None;
     }
     table_from_joins(&tables[0])
+}
+
+fn statement_returns_rows(statement: &Statement) -> bool {
+    matches!(
+        statement,
+        Statement::Query(_)
+            | Statement::ShowTables { .. }
+            | Statement::ShowColumns { .. }
+            | Statement::ShowCreate { .. }
+            | Statement::ShowVariable { .. }
+            | Statement::ShowVariables { .. }
+            | Statement::Explain { .. }
+            | Statement::ExplainTable { .. }
+            | Statement::Pragma { .. }
+    )
 }
 
 fn selection_from_query(query: &Query) -> Option<&Expr> {
@@ -463,6 +486,25 @@ mod tests {
         // Last statement is INSERT, so is_query should be false
         assert!(parsed.is_insert());
         assert!(!parsed.is_query());
+    }
+
+    #[test]
+    fn test_contains_query_with_create_select_drop() {
+        let sql =
+            "CREATE TEMP VIEW revenue0 AS SELECT 1; SELECT * FROM revenue0; DROP VIEW revenue0;";
+        assert_eq!(ParsedStatement::contains_query(sql), Some(true));
+    }
+
+    #[test]
+    fn test_statement_count_multi_statement() {
+        let sql = "CREATE TABLE t(a INTEGER); INSERT INTO t VALUES (1); SELECT * FROM t;";
+        assert_eq!(ParsedStatement::statement_count(sql), Some(3));
+    }
+
+    #[test]
+    fn test_contains_query_false_for_only_commands() {
+        let sql = "CREATE TABLE t(a INTEGER); DROP TABLE t;";
+        assert_eq!(ParsedStatement::contains_query(sql), Some(false));
     }
 
     #[test]
