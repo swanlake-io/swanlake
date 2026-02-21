@@ -44,6 +44,9 @@ jobs:
           - storage: postgres_r2
             label: postgres+r2
             scale_factor: "0.01"
+          - storage: postgres_local_file
+            label: postgres+local-file
+            scale_factor: "0.1"
     name: BenchBase TPCH (${{ matrix.label }})
     steps:
       - uses: actions/checkout@v6
@@ -148,6 +151,11 @@ jobs:
                 echo "AWS_SECRET_ACCOUNT_ID=$BENCHBASE_R2_ACCOUNT_ID"
                 echo "DUCKDB_S3_ENDPOINT=$BENCHBASE_R2_ACCOUNT_ID.r2.cloudflarestorage.com"
                 echo "SWANLAKE_DUCKLAKE_INIT_SQL=CREATE OR REPLACE SECRET r2_secret (TYPE r2, ENDPOINT '$BENCHBASE_R2_ACCOUNT_ID.r2.cloudflarestorage.com'); ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH 'r2://$BENCHBASE_R2_BUCKET/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
+              } >> "$GITHUB_ENV"
+              ;;
+            postgres_local_file)
+              {
+                echo "SWANLAKE_DUCKLAKE_INIT_SQL=ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '/tmp/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
               } >> "$GITHUB_ENV"
               ;;
             *)
