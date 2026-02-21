@@ -37,6 +37,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: swanlake
+          shared-key: swanlake-rust
 
       - name: Setup Go
         uses: actions/setup-go@v6
