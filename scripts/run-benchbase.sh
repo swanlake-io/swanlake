@@ -36,6 +36,8 @@ SERVER_LOG_FILE="${SERVER_LOG_FILE:-$WORK_DIR/swanlake-server-$(date +%Y%m%d-%H%
 SERVER_LOG_LINES="${SERVER_LOG_LINES:-200}"
 BENCHBASE_LOG_LINES="${BENCHBASE_LOG_LINES:-200}"
 SWANLAKE_SESSION_ID_MODE="${SWANLAKE_SESSION_ID_MODE:-peer_addr}"
+BENCHBASE_ENABLE_CHECKPOINT="${BENCHBASE_ENABLE_CHECKPOINT:-false}"
+BENCHBASE_CHECKPOINT_DATABASES="${BENCHBASE_CHECKPOINT_DATABASES:-${SWANLAKE_CHECKPOINT_DATABASES:-}}"
 
 # For shared state across JDBC connections, set SWANLAKE_DUCKLAKE_INIT_SQL to
 # attach and USE a DuckLake database before running this script.
@@ -538,15 +540,7 @@ install_arrow_driver
 
 SERVER_BIN="${SERVER_BIN:-$ROOT_DIR/target/debug/swanlake}"
 SERVER_MODE="${SERVER_MODE:-cargo}"
-
-# Ensure DuckDB environment variables are available for the server.
-log "Loading DuckDB environment..."
 DUCKDB_ENV_FILE="$ROOT_DIR/swanlake-core/.duckdb/env.sh"
-if [[ -f "$DUCKDB_ENV_FILE" ]]; then
-  source "$DUCKDB_ENV_FILE"
-else
-  log "DuckDB environment file not found at $DUCKDB_ENV_FILE; continuing without it"
-fi
 
 if [[ "$SERVER_MODE" == "cargo" ]]; then
   # Keep startup timeout focused on server bootstrap, not first-time compile.
@@ -567,10 +561,31 @@ else
   fi
 fi
 
+# Ensure DuckDB environment variables are available for the server runtime.
+# On fresh CI runs, build.rs may generate this file during the build above.
+log "Loading DuckDB environment..."
+if [[ -f "$DUCKDB_ENV_FILE" ]]; then
+  source "$DUCKDB_ENV_FILE"
+else
+  log "DuckDB environment file not found at $DUCKDB_ENV_FILE; continuing without it"
+fi
+
 log "Starting SwanLake server (mode: $SERVER_MODE)..."
 log "Using session id mode: $SWANLAKE_SESSION_ID_MODE"
 if [[ "$SWANLAKE_SESSION_ID_MODE" == "peer_ip" ]]; then
   log "WARNING: peer_ip shares one session across workers and can cause prepared-statement handle collisions; prefer peer_addr for concurrent TPCH runs"
+fi
+if [[ "$BENCHBASE_ENABLE_CHECKPOINT" == "true" ]]; then
+  if [[ -n "$BENCHBASE_CHECKPOINT_DATABASES" ]]; then
+    export SWANLAKE_CHECKPOINT_DATABASES="$BENCHBASE_CHECKPOINT_DATABASES"
+    log "DuckLake auto-checkpoint enabled for benchmark run: $SWANLAKE_CHECKPOINT_DATABASES"
+  else
+    export SWANLAKE_CHECKPOINT_DATABASES=""
+    log "DuckLake auto-checkpoint requested but no databases configured; checkpoint service disabled"
+  fi
+else
+  export SWANLAKE_CHECKPOINT_DATABASES=""
+  log "DuckLake auto-checkpoint disabled for benchmark run (BENCHBASE_ENABLE_CHECKPOINT=false)"
 fi
 log "Writing SwanLake server output to $SERVER_LOG_FILE"
 export SWANLAKE_SESSION_ID_MODE

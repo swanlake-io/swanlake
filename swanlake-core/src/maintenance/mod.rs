@@ -117,19 +117,26 @@ impl CheckpointService {
             return Ok(());
         };
 
-        if let Some(last) = self.last_checkpoint_at(db_name, lock.client()).await? {
-            let elapsed = Utc::now()
-                .signed_duration_since(last)
-                .to_std()
-                .unwrap_or_default();
-            if elapsed < self.cfg.interval() {
-                info!(
-                    db_name = %db_name,
-                    last_checkpoint_at = %last.to_rfc3339(),
-                    "checkpoint skipped this round: interval not reached"
-                );
-                return Ok(());
-            }
+        let Some(last) = self.last_checkpoint_at(db_name, lock.client()).await? else {
+            self.record_checkpoint(db_name, lock.client()).await?;
+            info!(
+                db_name = %db_name,
+                "checkpoint schedule initialized; skipping immediate checkpoint"
+            );
+            return Ok(());
+        };
+
+        let elapsed = Utc::now()
+            .signed_duration_since(last)
+            .to_std()
+            .unwrap_or_default();
+        if elapsed < self.cfg.interval() {
+            info!(
+                db_name = %db_name,
+                last_checkpoint_at = %last.to_rfc3339(),
+                "checkpoint skipped this round: interval not reached"
+            );
+            return Ok(());
         }
 
         self.run_checkpoint(db_name).await?;

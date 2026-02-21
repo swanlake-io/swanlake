@@ -29,6 +29,13 @@ impl EngineFactory {
             LOAD ducklake; LOAD httpfs; LOAD aws; LOAD postgres;"
                 .to_string(),
         );
+
+        if let Some(threads) = config.duckdb_threads {
+            let threads = threads.max(1);
+            info!(threads, "applying DuckDB threads override");
+            init_statements.push(format!("SET threads = {};", threads));
+        }
+
         if let Some(sql) = config.ducklake_init_sql.as_ref() {
             let trimmed = sql.trim();
             if !trimmed.is_empty() {

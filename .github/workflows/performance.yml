@@ -30,6 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      NO_COLOR: "1"
+      CARGO_TERM_COLOR: never
+      CLICOLOR: "0"
     strategy:
       fail-fast: false
       matrix:
