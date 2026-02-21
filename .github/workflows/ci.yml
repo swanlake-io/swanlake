@@ -57,7 +57,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.m2/repository
-          key: m2-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase-ycsb.sh') }}
+          key: m2-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase.sh') }}
           restore-keys: |
             m2-${{ runner.os }}-
 
@@ -77,7 +77,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: target/benchbase-ycsb
-          key: benchbase-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase-ycsb.sh', 'tests/benchbase/ycsb-flight-sql.xml', 'tests/benchbase/ycsb-ddl-ducklake.sql') }}
+          key: benchbase-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase.sh', 'tests/benchbase/ycsb-flight-sql.xml', 'tests/benchbase/ycsb-ddl-ducklake.sql') }}
           restore-keys: |
             benchbase-${{ runner.os }}-
 
@@ -107,6 +107,8 @@ jobs:
       - name: Run integration tests
         run: bash scripts/run-integration-tests.sh
         env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+          GENERATE_COVERAGE_REPORT: 0
           PGPASSWORD: postgres
           PGHOST: 127.0.0.1
           PGPORT: 5442
@@ -114,7 +116,10 @@ jobs:
           SWANLAKE_DUCKDB_UI_SERVER_ENABLED: true
 
       - name: Run BenchBase YCSB (Flight SQL)
-        run: bash scripts/run-benchbase-ycsb.sh
+        run: |
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+          source <(cargo llvm-cov show-env --export-prefix)
+          bash scripts/run-benchbase.sh
         env:
           PGPASSWORD: postgres
           PGHOST: 127.0.0.1
@@ -122,6 +127,12 @@ jobs:
           PGUSER: postgres
           SWANLAKE_DUCKLAKE_INIT_SQL: "ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '/tmp/swanlake-benchbase', OVERRIDE_DATA_PATH true); USE swanlake;"
           SWANLAKE_CHECKPOINT_DATABASES: swanlake
+
+      - name: Generate combined coverage report
+        run: |
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo llvm-cov report --lcov --output-path "$GITHUB_WORKSPACE/lcov.info" --package swanlake-server --package swanlake-core
 
       - name: Coveralls GitHub Action
         uses: coverallsapp/github-action@v2

@@ -78,20 +78,25 @@ pub(crate) async fn do_action_create_prepared_statement(
     let raw_sql = query.query;
     let sql = crate::sql::rewrite::strip_select_locks(&raw_sql).sql;
 
-    // Try to parse SQL to determine if this is a query, but don't fail if it can't be parsed
-    // (e.g., multi-statement SQL or vendor-specific syntax)
-    let is_query = if let Some(parsed) = ParsedStatement::parse(&sql) {
-        parsed.is_query()
-    } else {
-        // Fallback: treat multi-statement or unparseable SQL as non-query (safer default)
-        // User will get appropriate error when trying to execute if this is wrong
-        false
-    };
+    // Parse once for SQL shape decisions. If parsing fails, keep the historical
+    // non-query fallback.
+    let parsed = ParsedStatement::parse(&sql);
+    let statement_count = ParsedStatement::statement_count(&sql);
+    let multi_statement = statement_count.is_some_and(|count| count > 1);
+    let is_query = ParsedStatement::contains_query(&sql)
+        .unwrap_or_else(|| parsed.as_ref().is_some_and(|p| p.is_query()));
 
     tracing::Span::current().record("is_query", is_query);
     let session = service.prepare_request(&request).await?;
 
-    let (cached_schema, dataset_schema) = if is_query {
+    if multi_statement && is_query {
+        debug!(
+            count = statement_count.unwrap_or_default(),
+            "skipping schema planning for multi-statement prepared query"
+        );
+    }
+
+    let (cached_schema, dataset_schema) = if is_query && !multi_statement {
         let sql_for_schema = sql.clone();
         let session_clone = Arc::clone(&session);
         tokio::task::spawn_blocking(move || {

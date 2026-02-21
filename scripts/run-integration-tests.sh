@@ -22,6 +22,7 @@ CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.toml}"
 ENDPOINT="${ENDPOINT:-grpc://127.0.0.1:4214}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"
 TEST_FILTER="${TEST_FILTER:-*.test}"
+GENERATE_COVERAGE_REPORT="${GENERATE_COVERAGE_REPORT:-1}"
 
 # ============================================================================
 # Reusable Functions
@@ -171,4 +172,8 @@ echo "Integration tests completed. Coverage data collected in target/"
 # Generate Coverage Report
 # ============================================================================
 
-cargo llvm-cov report --lcov --output-path "$ROOT_DIR/lcov.info" --package swanlake-server --package swanlake-core
+if [[ "$GENERATE_COVERAGE_REPORT" == "1" ]]; then
+  cargo llvm-cov report --lcov --output-path "$ROOT_DIR/lcov.info" --package swanlake-server --package swanlake-core
+else
+  echo "Skipping coverage report generation (GENERATE_COVERAGE_REPORT=$GENERATE_COVERAGE_REPORT)"
+fi
