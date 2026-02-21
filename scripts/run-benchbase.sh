@@ -12,7 +12,7 @@ WORK_DIR="${WORK_DIR:-$ROOT_DIR/target/benchbase-${BENCHMARK}}"
 BENCHBASE_SRC="$WORK_DIR/benchbase-src"
 BENCHBASE_DIST="$WORK_DIR/benchbase-dist"
 BENCHBASE_TARBALL="$WORK_DIR/benchbase-${BENCHBASE_REF}.tar.gz"
-TPCH_DIALECT_PATCH_VERSION="${TPCH_DIALECT_PATCH_VERSION:-duckdb-tpch-v7}"
+TPCH_DIALECT_PATCH_VERSION="${TPCH_DIALECT_PATCH_VERSION:-duckdb-tpch-v8}"
 TPCH_DIALECT_PATCH_MARKER="$WORK_DIR/.${TPCH_DIALECT_PATCH_VERSION}.applied"
 DEFAULT_BENCHBASE_JUL_CONFIG="$BENCHBASE_SRC/src/main/resources/logging.properties"
 DEFAULT_BENCHBASE_LOG4J_CONFIG="$BENCHBASE_SRC/src/main/resources/log4j.properties"
@@ -35,7 +35,7 @@ LOG_FILE="${LOG_FILE:-$WORK_DIR/benchbase-$(date +%Y%m%d-%H%M%S).log}"
 SERVER_LOG_FILE="${SERVER_LOG_FILE:-$WORK_DIR/swanlake-server-$(date +%Y%m%d-%H%M%S).log}"
 SERVER_LOG_LINES="${SERVER_LOG_LINES:-200}"
 BENCHBASE_LOG_LINES="${BENCHBASE_LOG_LINES:-200}"
-SWANLAKE_SESSION_ID_MODE="${SWANLAKE_SESSION_ID_MODE:-peer_ip}"
+SWANLAKE_SESSION_ID_MODE="${SWANLAKE_SESSION_ID_MODE:-peer_addr}"
 
 # For shared state across JDBC connections, set SWANLAKE_DUCKLAKE_INIT_SQL to
 # attach and USE a DuckLake database before running this script.
@@ -560,6 +560,9 @@ fi
 
 log "Starting SwanLake server (mode: $SERVER_MODE)..."
 log "Using session id mode: $SWANLAKE_SESSION_ID_MODE"
+if [[ "$SWANLAKE_SESSION_ID_MODE" == "peer_ip" ]]; then
+  log "WARNING: peer_ip shares one session across workers and can cause prepared-statement handle collisions; prefer peer_addr for concurrent TPCH runs"
+fi
 log "Writing SwanLake server output to $SERVER_LOG_FILE"
 export SWANLAKE_SESSION_ID_MODE
 ("${SERVER_CMD[@]}") >"$SERVER_LOG_FILE" 2>&1 &
