@@ -12,7 +12,7 @@ WORK_DIR="${WORK_DIR:-$ROOT_DIR/target/benchbase-${BENCHMARK}}"
 BENCHBASE_SRC="$WORK_DIR/benchbase-src"
 BENCHBASE_DIST="$WORK_DIR/benchbase-dist"
 BENCHBASE_TARBALL="$WORK_DIR/benchbase-${BENCHBASE_REF}.tar.gz"
-TPCH_DIALECT_PATCH_VERSION="${TPCH_DIALECT_PATCH_VERSION:-duckdb-tpch-v8}"
+TPCH_DIALECT_PATCH_VERSION="${TPCH_DIALECT_PATCH_VERSION:-duckdb-tpch-v9}"
 TPCH_DIALECT_PATCH_MARKER="$WORK_DIR/.${TPCH_DIALECT_PATCH_VERSION}.applied"
 DEFAULT_BENCHBASE_JUL_CONFIG="$BENCHBASE_SRC/src/main/resources/logging.properties"
 DEFAULT_BENCHBASE_LOG4J_CONFIG="$BENCHBASE_SRC/src/main/resources/log4j.properties"
@@ -396,6 +396,15 @@ dialect = dialect.replace("(? * interval '1 day')", "CAST(? AS INTEGER)")
 dialect = re.sub(r"\?::date\b", "CAST(? AS DATE)", dialect)
 dialect = re.sub(r"\?::decimal\b", "CAST(? AS DOUBLE)", dialect)
 dialect = re.sub(r"interval\s+'([0-9]+)'\s+(month|year)\b", r"interval '\1 \2'", dialect)
+# Q15: avoid shared non-temp view races across workers.
+dialect = re.sub(
+    r"create\s+view\s+revenue0\s*\(\s*supplier_no\s*,\s*total_revenue\s*\)\s+as",
+    "create or replace temp view revenue0 (supplier_no, total_revenue) as",
+    dialect,
+    flags=re.IGNORECASE,
+)
+if '<procedure name="Q15">' in dialect and "create or replace temp view revenue0 (supplier_no, total_revenue) as" not in dialect.lower():
+    raise RuntimeError("failed to patch Q15 createview_stmt in dialect-postgres.xml")
 
 # Q1: bind an absolute cutoff date instead of interval arithmetic placeholder.
 dialect = re.sub(
