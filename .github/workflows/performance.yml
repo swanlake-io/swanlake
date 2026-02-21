@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     env:
       NO_COLOR: "1"
       CARGO_TERM_COLOR: never
@@ -68,7 +69,9 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: swanlake-perf
+          prefix-key: swanlake
+          shared-key: swanlake-rust
+          cache-on-failure: true
 
       - name: Setup Java
         uses: actions/setup-java@v5
