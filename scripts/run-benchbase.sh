@@ -227,8 +227,8 @@ cleanup_server() {
 
 print_server_log() {
   if [[ -f "$SERVER_LOG_FILE" ]]; then
-    log "SwanLake server log (last ${SERVER_LOG_LINES} lines): $SERVER_LOG_FILE"
-    tail -n "$SERVER_LOG_LINES" "$SERVER_LOG_FILE" || true
+    log "SwanLake server log: $SERVER_LOG_FILE"
+    cat "$SERVER_LOG_FILE" || true
   else
     log "SwanLake server log file not found at $SERVER_LOG_FILE"
   fi
