@@ -7,6 +7,10 @@ on:
         description: "TPCH scale factor override (leave empty to use per-storage default)"
         required: false
         default: ""
+      BENCHBASE_ENABLE_CACHE_HTTPFS:
+        description: "Enable DuckDB cache_httpfs extension (true/false). Empty uses storage default."
+        required: false
+        default: ""
       terminals:
         description: "Concurrent terminals"
         required: false
@@ -110,6 +114,7 @@ jobs:
 
       - name: Configure storage backend
         env:
+          BENCHBASE_ENABLE_CACHE_HTTPFS_INPUT: ${{ github.event.inputs.BENCHBASE_ENABLE_CACHE_HTTPFS }}
           BENCHBASE_S3_ACCESS_KEY_ID: ${{ secrets.BENCHBASE_S3_ACCESS_KEY_ID }}
           BENCHBASE_S3_SECRET_ACCESS_KEY: ${{ secrets.BENCHBASE_S3_SECRET_ACCESS_KEY }}
           BENCHBASE_S3_REGION: ${{ secrets.BENCHBASE_S3_REGION }}
@@ -121,6 +126,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          cache_httpfs="${BENCHBASE_ENABLE_CACHE_HTTPFS_INPUT:-}"
+
           case "${{ matrix.storage }}" in
             postgres_s3)
               required=(BENCHBASE_S3_ACCESS_KEY_ID BENCHBASE_S3_SECRET_ACCESS_KEY BENCHBASE_S3_REGION BENCHBASE_S3_BUCKET)
@@ -130,6 +137,10 @@ jobs:
                   exit 1
                 fi
               done
+
+              if [[ -z "$cache_httpfs" ]]; then
+                cache_httpfs="true"
+              fi
 
               {
                 echo "AWS_ACCESS_KEY_ID=$BENCHBASE_S3_ACCESS_KEY_ID"
@@ -148,6 +159,10 @@ jobs:
                 fi
               done
 
+              if [[ -z "$cache_httpfs" ]]; then
+                cache_httpfs="false"
+              fi
+
               {
                 echo "AWS_ACCESS_KEY_ID=$BENCHBASE_R2_ACCESS_KEY_ID"
                 echo "AWS_SECRET_ACCESS_KEY=$BENCHBASE_R2_SECRET_ACCESS_KEY"
@@ -157,6 +172,10 @@ jobs:
               } >> "$GITHUB_ENV"
               ;;
             postgres_local_file)
+              if [[ -z "$cache_httpfs" ]]; then
+                cache_httpfs="false"
+              fi
+
               {
                 echo "SWANLAKE_DUCKLAKE_INIT_SQL=ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '/tmp/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
               } >> "$GITHUB_ENV"
@@ -166,6 +185,8 @@ jobs:
               exit 1
               ;;
           esac
+
+          echo "BENCHBASE_ENABLE_CACHE_HTTPFS=$cache_httpfs" >> "$GITHUB_ENV"
 
       - name: Run BenchBase TPCH (Flight SQL)
         run: bash scripts/run-benchbase.sh
