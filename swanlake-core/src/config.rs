@@ -1,6 +1,6 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -22,6 +22,8 @@ pub struct ServerConfig {
     pub checkpoint_databases: Option<String>,
     /// Interval in hours between checkpoints for each configured database.
     pub checkpoint_interval_hours: Option<u64>,
+    /// Poll interval in seconds for checking whether a checkpoint is due.
+    pub checkpoint_poll_seconds: Option<u64>,
     /// Maximum number of concurrent sessions.
     pub max_sessions: Option<usize>,
     /// Session idle timeout in seconds.
@@ -53,6 +55,7 @@ impl Default for ServerConfig {
             duckdb_threads: None,
             checkpoint_databases: None,
             checkpoint_interval_hours: Some(24),
+            checkpoint_poll_seconds: Some(300),
             max_sessions: Some(100),
             session_timeout_seconds: Some(900),
             session_id_mode: SessionIdMode::PeerAddr,
@@ -93,6 +96,16 @@ impl ServerConfig {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
+        if let Some(hours) = self.checkpoint_interval_hours {
+            if hours == 0 {
+                bail!("SWANLAKE_CHECKPOINT_INTERVAL_HOURS must be greater than 0");
+            }
+        }
+        if let Some(seconds) = self.checkpoint_poll_seconds {
+            if seconds == 0 {
+                bail!("SWANLAKE_CHECKPOINT_POLL_SECONDS must be greater than 0");
+            }
+        }
         Ok(())
     }
 }

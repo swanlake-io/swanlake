@@ -74,6 +74,7 @@ SwanLake can run background DuckLake checkpoints across multiple instances. Coor
 | --- | --- | --- |
 | `SWANLAKE_CHECKPOINT_DATABASES` | Comma-separated DuckLake database names to checkpoint (e.g. `db1,db2`) | _(unset)_ (disabled) |
 | `SWANLAKE_CHECKPOINT_INTERVAL_HOURS` | Interval between checkpoints per database | `24` |
+| `SWANLAKE_CHECKPOINT_POLL_SECONDS` | Polling interval used to check whether each database reached its checkpoint interval | `300` |
 | `PGHOST` | PostgreSQL host | `localhost` |
 | `PGPORT` | PostgreSQL port | `5432` |
 | `PGUSER` | PostgreSQL user | `postgres` |
@@ -85,6 +86,7 @@ Notes:
 - If `SWANLAKE_CHECKPOINT_DATABASES` is empty/unset, the checkpoint task is not started.
 - Each configured database is checkpointed at most once per interval across all running instances.
 - On first startup (no existing checkpoint record), SwanLake initializes the schedule and waits until the next interval instead of running an immediate checkpoint.
+- Increasing `SWANLAKE_CHECKPOINT_POLL_SECONDS` lowers background polling overhead at the cost of less precise checkpoint timing.
 
 ## Validation
 

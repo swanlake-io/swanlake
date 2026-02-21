@@ -1,9 +1,10 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use tracing::warn;
 
 const DEFAULT_HISTORY_SIZE: usize = 200;
 const DEFAULT_SLOW_QUERY_THRESHOLD_MS: u64 = 1_000;
@@ -51,6 +52,17 @@ pub struct ErrorEvent {
 }
 
 #[derive(Clone, Serialize)]
+pub struct SlowQueryGroup {
+    pub sql: String,
+    pub is_query: bool,
+    pub count: u64,
+    pub total_ms: u64,
+    pub avg_ms: u64,
+    pub max_ms: u64,
+    pub latest_timestamp_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
 pub struct MetricsSnapshot {
     pub started_at_ms: u64,
     pub uptime_ms: u64,
@@ -59,6 +71,7 @@ pub struct MetricsSnapshot {
     pub in_flight: InFlightSnapshot,
     pub latency: LatencyStatsSnapshot,
     pub slow_queries: Vec<SlowQuery>,
+    pub slow_query_groups: Vec<SlowQueryGroup>,
     pub recent_errors: Vec<ErrorEvent>,
     pub history_size: usize,
 }
@@ -233,6 +246,7 @@ impl Metrics {
             .rev()
             .cloned()
             .collect::<Vec<_>>();
+        let slow_query_groups = summarize_slow_query_groups(&slow_queries, 10);
 
         MetricsSnapshot {
             started_at_ms: self.inner.started_at_ms,
@@ -245,6 +259,7 @@ impl Metrics {
                 updates: summarize_latencies(update_latencies),
             },
             slow_queries,
+            slow_query_groups,
             recent_errors,
             history_size: self.inner.history_size,
         }
@@ -296,14 +311,25 @@ impl Metrics {
             self.inner
                 .total_slow_queries
                 .fetch_add(1, Ordering::Relaxed);
+            let threshold_ms = self.inner.slow_query_threshold.as_millis() as u64;
             let reasons = infer_reasons(
                 &truncated_sql,
                 is_query,
                 rows,
                 bytes,
                 duration_ms,
-                self.inner.slow_query_threshold.as_millis() as u64,
+                threshold_ms,
                 had_error,
+            );
+            warn!(
+                duration_ms,
+                threshold_ms,
+                is_query,
+                rows = ?rows,
+                bytes = ?bytes,
+                sql = %truncated_sql,
+                reasons = ?reasons,
+                "slow statement recorded"
             );
             let slow_query = SlowQuery {
                 timestamp_ms: now_millis(),
@@ -388,6 +414,44 @@ fn summarize_latencies(values: Vec<u64>) -> LatencySummarySnapshot {
         p99_ms,
         max_ms,
     }
+}
+
+fn summarize_slow_query_groups(slow_queries: &[SlowQuery], limit: usize) -> Vec<SlowQueryGroup> {
+    let mut grouped: HashMap<(bool, String), SlowQueryGroup> = HashMap::new();
+    for query in slow_queries {
+        let key = (query.is_query, query.sql.clone());
+        let entry = grouped.entry(key).or_insert_with(|| SlowQueryGroup {
+            sql: query.sql.clone(),
+            is_query: query.is_query,
+            count: 0,
+            total_ms: 0,
+            avg_ms: 0,
+            max_ms: 0,
+            latest_timestamp_ms: query.timestamp_ms,
+        });
+        entry.count = entry.count.saturating_add(1);
+        entry.total_ms = entry.total_ms.saturating_add(query.duration_ms);
+        entry.max_ms = entry.max_ms.max(query.duration_ms);
+        entry.latest_timestamp_ms = entry.latest_timestamp_ms.max(query.timestamp_ms);
+    }
+
+    let mut out = grouped.into_values().collect::<Vec<_>>();
+    for group in &mut out {
+        if group.count > 0 {
+            group.avg_ms = group.total_ms / group.count;
+        }
+    }
+
+    out.sort_unstable_by(|a, b| {
+        b.total_ms
+            .cmp(&a.total_ms)
+            .then_with(|| b.max_ms.cmp(&a.max_ms))
+            .then_with(|| b.count.cmp(&a.count))
+    });
+    if out.len() > limit {
+        out.truncate(limit);
+    }
+    out
 }
 
 fn percentile(sorted: &[u64], quantile: f64) -> u64 {

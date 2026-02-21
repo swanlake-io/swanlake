@@ -21,6 +21,8 @@ BENCHBASE_LOG4J_CONFIG="${BENCHBASE_LOG4J_CONFIG:-$DEFAULT_BENCHBASE_LOG4J_CONFI
 BENCHBASE_ENABLE_JDBC_LOGGING="${BENCHBASE_ENABLE_JDBC_LOGGING:-false}"
 BENCHBASE_JAVA_OPTS="${BENCHBASE_JAVA_OPTS:-}"
 BENCHBASE_DEBUG_LOGGING="${BENCHBASE_DEBUG_LOGGING:-false}"
+BENCHBASE_ANALYZE_RESULTS="${BENCHBASE_ANALYZE_RESULTS:-true}"
+BENCHBASE_ANALYSIS_LINES="${BENCHBASE_ANALYSIS_LINES:-120}"
 
 CONFIG_PATH="${CONFIG_PATH:-}"
 DDL_PATH="${DDL_PATH:-}"
@@ -38,6 +40,8 @@ BENCHBASE_LOG_LINES="${BENCHBASE_LOG_LINES:-200}"
 SWANLAKE_SESSION_ID_MODE="${SWANLAKE_SESSION_ID_MODE:-peer_addr}"
 BENCHBASE_ENABLE_CHECKPOINT="${BENCHBASE_ENABLE_CHECKPOINT:-false}"
 BENCHBASE_CHECKPOINT_DATABASES="${BENCHBASE_CHECKPOINT_DATABASES:-${SWANLAKE_CHECKPOINT_DATABASES:-}}"
+TPCH_DEFAULT_WARMUP_SECONDS="${TPCH_DEFAULT_WARMUP_SECONDS:-180}"
+BENCHBASE_ENABLE_CACHE_HTTPFS="${BENCHBASE_ENABLE_CACHE_HTTPFS:-false}"
 
 # For shared state across JDBC connections, set SWANLAKE_DUCKLAKE_INIT_SQL to
 # attach and USE a DuckLake database before running this script.
@@ -570,6 +574,15 @@ else
   log "DuckDB environment file not found at $DUCKDB_ENV_FILE; continuing without it"
 fi
 
+if [[ "$BENCHBASE_ENABLE_CACHE_HTTPFS" == "true" ]]; then
+  if [[ "${SWANLAKE_DUCKLAKE_INIT_SQL:-}" == *"cache_httpfs"* ]]; then
+    log "cache_httpfs already present in SWANLAKE_DUCKLAKE_INIT_SQL"
+  else
+    export SWANLAKE_DUCKLAKE_INIT_SQL="INSTALL cache_httpfs FROM community; LOAD cache_httpfs; ${SWANLAKE_DUCKLAKE_INIT_SQL:-}"
+    log "Enabled cache_httpfs community extension for benchmark run"
+  fi
+fi
+
 log "Starting SwanLake server (mode: $SERVER_MODE)..."
 log "Using session id mode: $SWANLAKE_SESSION_ID_MODE"
 if [[ "$SWANLAKE_SESSION_ID_MODE" == "peer_ip" ]]; then
@@ -601,6 +614,10 @@ JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} --add-opens=java.base/java.nio=ALL-UNN
 export JAVA_TOOL_OPTIONS
 
 RESOLVED_CONFIG="$WORK_DIR/${BENCHMARK}-flight-sql.resolved.xml"
+if [[ "$BENCHMARK" == "tpch" && -z "$WARMUP_SECONDS" && -n "$TPCH_DEFAULT_WARMUP_SECONDS" ]]; then
+  WARMUP_SECONDS="$TPCH_DEFAULT_WARMUP_SECONDS"
+  log "Applying default TPCH warmup: ${WARMUP_SECONDS}s (override with WARMUP_SECONDS)"
+fi
 if [[ -f "$CONFIG_PATH" ]]; then
   log "Rendering BenchBase config with ddlpath $DDL_PATH"
   sed "s|__DDL_PATH__|$DDL_PATH|g" "$CONFIG_PATH" > "$RESOLVED_CONFIG"
@@ -760,6 +777,27 @@ PY
 if [[ "$BENCHBASE_UNEXPECTED_SQL_ERRORS" -gt 0 ]]; then
   log "BenchBase $BENCHMARK failed: unexpected_sql_errors=$BENCHBASE_UNEXPECTED_SQL_ERRORS"
   exit 1
+fi
+
+if [[ "$BENCHBASE_ANALYZE_RESULTS" == "true" ]]; then
+  ANALYSIS_SCRIPT="$ROOT_DIR/scripts/analyze-benchbase-results.py"
+  if [[ -f "$ANALYSIS_SCRIPT" ]]; then
+    ANALYSIS_FILE="${SUMMARY_FILE%.summary.json}.analysis.txt"
+    ANALYSIS_JSON_FILE="${SUMMARY_FILE%.summary.json}.analysis.json"
+    log "Generating bottleneck analysis report..."
+    if python3 "$ANALYSIS_SCRIPT" \
+      --summary-file "$SUMMARY_FILE" \
+      --server-log "$SERVER_LOG_FILE" \
+      --output-json "$ANALYSIS_JSON_FILE" >"$ANALYSIS_FILE"; then
+      log "Bottleneck analysis written to $ANALYSIS_FILE"
+      log "Bottleneck analysis (last ${BENCHBASE_ANALYSIS_LINES} lines):"
+      tail -n "$BENCHBASE_ANALYSIS_LINES" "$ANALYSIS_FILE" || true
+    else
+      log "Bottleneck analysis failed; continuing without report"
+    fi
+  else
+    log "Analysis script not found at $ANALYSIS_SCRIPT; skipping bottleneck report"
+  fi
 fi
 
 log "BenchBase $BENCHMARK completed successfully"

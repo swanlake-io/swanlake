@@ -320,6 +320,10 @@
                     <div id="slow-list" class="data-list">
                         <!-- Populated by JS -->
                     </div>
+                    <h3 class="section-title" style="margin-top: 1rem">Slow Hotspots (Grouped)</h3>
+                    <div id="slow-group-list" class="data-list">
+                        <!-- Populated by JS -->
+                    </div>
                 </div>
 
                 <!-- Errors -->
@@ -425,6 +429,26 @@
                         </div>
                     `;
                         slowContainer.appendChild(el);
+                    });
+                }
+
+                // Slow Query Groups
+                const slowGroupContainer = $("slow-group-list");
+                slowGroupContainer.innerHTML = "";
+                if (!metrics.slow_query_groups || metrics.slow_query_groups.length === 0) {
+                    slowGroupContainer.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted)">No grouped hotspots</div>`;
+                } else {
+                    metrics.slow_query_groups.slice(0, 5).forEach((g) => {
+                        const el = document.createElement("div");
+                        el.className = "list-item";
+                        el.innerHTML = `
+                        <div class="list-item-header">
+                            <span class="tag warn">${formatDuration(g.total_ms)}</span>
+                            <span class="timestamp">${g.count}x • avg ${formatDuration(g.avg_ms)} • max ${formatDuration(g.max_ms)}</span>
+                        </div>
+                        <div class="sql-code">${escapeHtml(g.sql)}</div>
+                    `;
+                        slowGroupContainer.appendChild(el);
                     });
                 }
 

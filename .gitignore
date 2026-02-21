@@ -28,3 +28,4 @@ uv.lock
 __marimo__
 
 recipe.json
+__pycache__/

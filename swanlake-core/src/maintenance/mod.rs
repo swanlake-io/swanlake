@@ -4,8 +4,8 @@
 //! metadata (`ducklake_checkpoints` table) and advisory locks.
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
@@ -13,7 +13,7 @@ use tokio_postgres::Client;
 use tracing::{debug, info, warn};
 
 use crate::config::ServerConfig;
-use crate::engine::EngineFactory;
+use crate::engine::{DuckDbConnection, EngineFactory};
 
 mod lock;
 mod postgres;
@@ -38,11 +38,12 @@ impl CheckpointConfig {
         }
 
         let hours = config.checkpoint_interval_hours.unwrap_or(24);
+        let tick_secs = config.checkpoint_poll_seconds.unwrap_or(CHECK_TICK_SECS);
         let interval = Duration::from_secs(hours.saturating_mul(3600));
         Some(Self {
             databases,
             interval,
-            tick: Duration::from_secs(CHECK_TICK_SECS),
+            tick: Duration::from_secs(tick_secs),
         })
     }
 
@@ -63,11 +64,16 @@ impl CheckpointConfig {
 pub struct CheckpointService {
     cfg: CheckpointConfig,
     factory: Arc<EngineFactory>,
+    checkpoint_conn: Arc<Mutex<Option<DuckDbConnection>>>,
 }
 
 impl CheckpointService {
     pub fn new(cfg: CheckpointConfig, factory: Arc<EngineFactory>) -> Self {
-        Self { cfg, factory }
+        Self {
+            cfg,
+            factory,
+            checkpoint_conn: Arc::new(Mutex::new(None)),
+        }
     }
 
     /// Spawn the checkpoint loop if there is work configured.
@@ -90,7 +96,7 @@ impl CheckpointService {
     }
 
     async fn run_loop(self) {
-        // The first `interval` tick fires immediately; consume it so we don't race
+        // The first tick fires immediately; consume it so we don't race
         // startup session creation with an immediate checkpoint connection bootstrap.
         let mut ticker = tokio::time::interval(self.cfg.tick());
         ticker.tick().await;
@@ -139,9 +145,15 @@ impl CheckpointService {
             return Ok(());
         }
 
+        let started = Instant::now();
         self.run_checkpoint(db_name).await?;
+        let duration_ms = started.elapsed().as_millis() as u64;
         self.record_checkpoint(db_name, lock.client()).await?;
-        info!(db_name = %db_name, "ducklake checkpoint completed successfully");
+        info!(
+            db_name = %db_name,
+            duration_ms,
+            "ducklake checkpoint completed successfully"
+        );
         Ok(())
     }
 
@@ -179,14 +191,29 @@ impl CheckpointService {
     async fn run_checkpoint(&self, db_name: &str) -> Result<()> {
         let db = db_name.to_string();
         let factory = self.factory.clone();
+        let checkpoint_conn = self.checkpoint_conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = factory
-                .create_connection()
-                .map_err(|e| anyhow!(e.to_string()))?;
+            let mut guard = checkpoint_conn
+                .lock()
+                .map_err(|_| anyhow!("checkpoint connection lock poisoned"))?;
+            if guard.is_none() {
+                let conn = factory
+                    .create_connection()
+                    .map_err(|e| anyhow!(e.to_string()))?;
+                *guard = Some(conn);
+            }
+
             let sql = format!("USE {}; CHECKPOINT;", db);
-            conn.execute_batch(&sql)
-                .map_err(|e| anyhow!(e.to_string()))
-                .context("running checkpoint")?;
+            let exec = guard
+                .as_ref()
+                .expect("checkpoint connection initialized")
+                .execute_batch(&sql)
+                .map_err(|e| anyhow!(e.to_string()));
+            if let Err(err) = exec {
+                // Recreate connection on next attempt.
+                *guard = None;
+                return Err(err).context("running checkpoint");
+            }
             Ok(())
         })
         .await
