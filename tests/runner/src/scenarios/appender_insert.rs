@@ -6,7 +6,7 @@ use std::sync::Arc;
 use swanlake_client::FlightSQLClient;
 use tracing::info;
 
-pub async fn run(args: &CliArgs) -> Result<()> {
+pub fn run(args: &CliArgs) -> Result<()> {
     info!("Running appender insert tests");
 
     let mut client = FlightSQLClient::connect(&args.endpoint)

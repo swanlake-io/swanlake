@@ -30,7 +30,10 @@ fn has_positional_field_names(batch: &RecordBatch) -> bool {
             base = Some(value);
         }
 
-        let expected = base.unwrap() + idx;
+        let expected = match base {
+            Some(base_value) => base_value + idx,
+            None => return false,
+        };
         if value != expected {
             return false;
         }

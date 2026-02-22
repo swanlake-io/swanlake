@@ -106,11 +106,7 @@ async fn perf_async_pool_mixed_load() -> Result<()> {
 
     let elapsed = start.elapsed();
     let total_ops = readers * read_iters + writers * write_iters;
-    let ops_per_sec = total_ops as f64 / elapsed.as_secs_f64().max(0.001);
-
-    println!(
-        "perf_async_pool_mixed_load: ops={total_ops} elapsed={elapsed:.2?} ops/s={ops_per_sec:.1}"
-    );
+    let _ops_per_sec = total_ops as f64 / elapsed.as_secs_f64().max(0.001);
 
     pool.update(&format!("DROP TABLE {schema}.{table}")).await?;
     Ok(())

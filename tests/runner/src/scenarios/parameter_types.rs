@@ -14,7 +14,7 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use crate::CliArgs;
 use swanlake_client::FlightSQLClient;
 
-pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
+pub fn run_parameter_types(args: &CliArgs) -> Result<()> {
     let endpoint = &args.endpoint;
     let mut client = FlightSQLClient::connect(endpoint)?;
     client.update("use swanlake")?;
@@ -122,21 +122,26 @@ fn query_scalar_i64(client: &mut FlightSQLClient, sql: &str) -> Result<i64> {
 }
 
 fn build_parameter_batch() -> Result<RecordBatch> {
-    let epoch_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let base_date = NaiveDate::from_ymd_opt(2023, 12, 25).unwrap();
-    let base_time = NaiveTime::from_hms_nano_opt(10, 20, 30, 123456789).unwrap();
+    let epoch_date = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .ok_or_else(|| anyhow!("invalid epoch date in parameter test setup"))?;
+    let base_date = NaiveDate::from_ymd_opt(2023, 12, 25)
+        .ok_or_else(|| anyhow!("invalid base date in parameter test setup"))?;
+    let base_time = NaiveTime::from_hms_nano_opt(10, 20, 30, 123456789)
+        .ok_or_else(|| anyhow!("invalid base time in parameter test setup"))?;
     let base_datetime = NaiveDateTime::new(base_date, base_time);
     let timestamp_sec = base_datetime.and_utc().timestamp();
     let timestamp_ms = base_datetime.and_utc().timestamp_millis();
     let timestamp_us = base_datetime.and_utc().timestamp_micros();
-    let timestamp_ns = base_datetime.and_utc().timestamp_nanos_opt().unwrap();
+    let timestamp_ns = base_datetime
+        .and_utc()
+        .timestamp_nanos_opt()
+        .ok_or_else(|| anyhow!("nanosecond timestamp overflow in parameter test setup"))?;
 
+    let midnight = NaiveTime::from_hms_opt(0, 0, 0)
+        .ok_or_else(|| anyhow!("invalid midnight value in parameter test setup"))?;
     let date32_value = base_date.signed_duration_since(epoch_date).num_days() as i32;
-    let date64_value = NaiveDateTime::new(base_date, NaiveTime::from_hms_opt(0, 0, 0).unwrap())
-        .signed_duration_since(NaiveDateTime::new(
-            epoch_date,
-            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
-        ))
+    let date64_value = NaiveDateTime::new(base_date, midnight)
+        .signed_duration_since(NaiveDateTime::new(epoch_date, midnight))
         .num_milliseconds();
 
     let seconds = base_time.num_seconds_from_midnight() as i32;

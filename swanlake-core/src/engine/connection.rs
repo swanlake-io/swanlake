@@ -108,7 +108,10 @@ impl DuckDbConnection {
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn execute_statement(&self, sql: &str) -> Result<i64, ServerError> {
         Self::validate_sql(sql)?;
-        let conn = self.conn.lock().expect("connection mutex poisoned");
+        let conn = self
+            .conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         conn.execute_batch(sql)?;
         debug!("executed statement");
         Ok(0)
@@ -132,7 +135,10 @@ impl DuckDbConnection {
     #[instrument(skip(self), fields(sql = %sql))]
     pub fn execute_batch(&self, sql: &str) -> Result<(), ServerError> {
         Self::validate_sql(sql)?;
-        let conn = self.conn.lock().expect("connection mutex poisoned");
+        let conn = self
+            .conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         conn.execute_batch(sql)?;
         debug!("executed batch");
         Ok(())
@@ -250,7 +256,10 @@ impl DuckDbConnection {
         F: FnOnce(&mut Statement) -> Result<T, ServerError>,
     {
         Self::validate_sql(sql)?;
-        let conn = self.conn.lock().expect("connection mutex poisoned");
+        let conn = self
+            .conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut stmt = conn.prepare(sql)?;
         f(&mut stmt)
     }

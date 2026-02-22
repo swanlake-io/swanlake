@@ -13,7 +13,7 @@ use crate::service::SwanFlightSqlService;
 
 /// Static registration hook for SqlInfo; currently unused because values are
 /// compiled in.
-pub(crate) async fn register_sql_info(_id: i32, _result: &SqlInfo) {
+pub(crate) fn register_sql_info(_id: i32, _result: SqlInfo) {
     // No-op: we don't need to register info dynamically
 }
 

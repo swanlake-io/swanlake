@@ -215,7 +215,7 @@ impl Metrics {
             .inner
             .query_latencies
             .read()
-            .expect("query latency lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
             .copied()
             .collect::<Vec<_>>();
@@ -223,7 +223,7 @@ impl Metrics {
             .inner
             .update_latencies
             .read()
-            .expect("update latency lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
             .copied()
             .collect::<Vec<_>>();
@@ -232,7 +232,7 @@ impl Metrics {
             .inner
             .slow_queries
             .read()
-            .expect("slow query lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
             .rev()
             .cloned()
@@ -241,7 +241,7 @@ impl Metrics {
             .inner
             .recent_errors
             .read()
-            .expect("error lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
             .rev()
             .cloned()
@@ -344,7 +344,7 @@ impl Metrics {
                 .inner
                 .slow_queries
                 .write()
-                .expect("slow query lock poisoned");
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             push_ring(&mut slow_queries, slow_query, self.inner.history_size);
         }
     }
@@ -361,12 +361,14 @@ impl Metrics {
             .inner
             .recent_errors
             .write()
-            .expect("error lock poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         push_ring(&mut errors, event, self.inner.history_size);
     }
 
     fn push_latency(&self, target: &RwLock<VecDeque<u64>>, duration: Duration) {
-        let mut latencies = target.write().expect("latency lock poisoned");
+        let mut latencies = target
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         push_ring(
             &mut latencies,
             duration.as_millis() as u64,

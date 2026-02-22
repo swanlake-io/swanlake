@@ -95,12 +95,11 @@ fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
     })
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() {
+fn main() {
     init_logging();
 
-    if let Err(err) = run_entrypoint().await {
-        eprintln!("runner failed: {err:?}");
+    if let Err(err) = run_entrypoint() {
+        tracing::error!(error = ?err, "runner failed");
         process::exit(1);
     }
 
@@ -108,7 +107,7 @@ async fn main() {
     process::exit(0);
 }
 
-async fn run_entrypoint() -> Result<()> {
+fn run_entrypoint() -> Result<()> {
     let raw_args: Vec<String> = env::args().skip(1).collect();
     let args = parse_args(raw_args)?;
 
@@ -116,12 +115,12 @@ async fn run_entrypoint() -> Result<()> {
         "Running SQL tests with {count} script(s)",
         count = args.test_files.len()
     );
-    run_sql_tests(&args).await?;
-    scenarios::run_all(&args).await?;
+    run_sql_tests(&args)?;
+    scenarios::run_all(&args)?;
     Ok(())
 }
 
-async fn run_sql_tests(args: &CliArgs) -> Result<()> {
+fn run_sql_tests(args: &CliArgs) -> Result<()> {
     let test_dir = args
         .test_dir
         .as_ref()
@@ -134,7 +133,6 @@ async fn run_sql_tests(args: &CliArgs) -> Result<()> {
         info!("Executing script {path}", path = path.display());
         let records = parse_test_file(path)?;
         execute_records(&args.endpoint, &substitutions, &records)
-            .await
             .with_context(|| format!("failed while running {path}", path = path.display()))?;
         info!(
             "Script {path} completed successfully",
@@ -229,7 +227,7 @@ fn parse_test_file(path: &Path) -> Result<Vec<TestRecord>> {
     Ok(records)
 }
 
-async fn execute_records(
+fn execute_records(
     endpoint: &str,
     substitutions: &HashMap<String, String>,
     records: &[TestRecord],

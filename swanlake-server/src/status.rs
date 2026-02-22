@@ -22,7 +22,7 @@ struct StatusPayload {
     sessions: SessionRegistrySnapshot,
 }
 
-pub async fn spawn_status_server(
+pub fn spawn_status_server(
     config: &ServerConfig,
     metrics: Arc<Metrics>,
     registry: Arc<SessionRegistry>,
