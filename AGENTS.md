@@ -45,6 +45,13 @@ Precedence: env > CLI `--config` > `config.toml` > `.env`.
 - `./scripts/run-integration-tests.sh` — end-to-end (builds server, runs Go client tests).
 - `examples/go-adbc/main.go` — quick manual smoke test (`SWANLAKE_PORT=50051 go run main.go`).
 
+## Clippy Notes
+- Workspace now enforces strict clippy denies for: `expect_used`, `unwrap_used`, `panic`, `print_stdout`, `print_stderr`, `missing_panics_doc`, `unnecessary_wraps`, `unused_async`.
+- `cargo clippy --workspace --all-targets` does **not** cover feature-gated client modules like `swanlake-client/src/async_pool.rs` (`tokio`) or CLI code (`cli`).
+- For client linting, prefer: `cargo clippy -p swanlake-client --all-targets --all-features`.
+- If `adbc-driver-flightsql` build script fails in local environments, set `ADBC_FLIGHTSQL_LIB_PATH` to an existing `libadbc_driver_flightsql.so` and rerun clippy.
+- Keep functions synchronous unless they actually `await` or must satisfy an async trait/API boundary.
+
 ## Common Agent Tasks
 - **Add config option**: extend `ServerConfig` in `src/config.rs`, wire defaults + **always update `CONFIGURATION.md`** with the new env var in the appropriate table.
 - **Extend Flight endpoints**: implement handler in `src/service/…`, add DuckDB helper if required, cover with Go example/Rust test.
