@@ -203,7 +203,7 @@ impl CheckpointService {
                 *guard = Some(conn);
             }
 
-            let sql = format!("USE {}; CHECKPOINT;", db);
+            let sql = format!("USE {db}; CHECKPOINT;");
             let exec = guard
                 .as_ref()
                 .expect("checkpoint connection initialized")

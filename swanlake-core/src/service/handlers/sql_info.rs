@@ -32,7 +32,7 @@ fn build_sql_info_data() -> Result<SqlInfoData, Status> {
 
     builder
         .build()
-        .map_err(|e| Status::internal(format!("Failed to build SqlInfo data: {}", e)))
+        .map_err(|e| Status::internal(format!("Failed to build SqlInfo data: {e}")))
 }
 
 /// Builds `FlightInfo` for the SqlInfo metadata endpoint so clients can fetch
@@ -75,7 +75,7 @@ pub(crate) async fn do_get_sql_info(
     let batch = query
         .into_builder(&info_data)
         .build()
-        .map_err(|e| Status::internal(format!("Failed to build SqlInfo response: {}", e)))?;
+        .map_err(|e| Status::internal(format!("Failed to build SqlInfo response: {e}")))?;
 
     let schema = batch.schema();
 

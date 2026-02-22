@@ -16,32 +16,26 @@ fn main() {
     let cache_dir = manifest_dir.join(".duckdb");
     let install_dir = cache_dir.join(&version);
     let env_file = cache_dir.join("env.sh");
-
-    let client = Client::builder()
-        .timeout(Duration::from_secs(600))
-        .build()
-        .unwrap();
+    let mut client: Option<Client> = None;
 
     let dist = detect_dist().expect("Unsupported platform");
-    let zip_name = format!("libduckdb-{}.zip", dist);
-    let download_url = format!(
-        "https://github.com/duckdb/duckdb/releases/download/v{}/{}",
-        version, zip_name
-    );
+    let zip_name = format!("libduckdb-{dist}.zip");
+    let download_url =
+        format!("https://github.com/duckdb/duckdb/releases/download/v{version}/{zip_name}");
 
     fs::create_dir_all(&install_dir).unwrap();
     env::set_current_dir(&install_dir).unwrap();
 
-    if !Path::new(&zip_name).exists() {
-        println!("cargo:warning=Downloading DuckDB {} ({})...", version, dist);
-        let response = client
+    if Path::new(&zip_name).exists() {
+        println!("cargo:warning=Using cached archive {zip_name}");
+    } else {
+        println!("cargo:warning=Downloading DuckDB {version} ({dist})...");
+        let response = ensure_http_client(&mut client)
             .get(&download_url)
             .send()
             .expect("Failed to download DuckDB");
         let bytes = response.bytes().expect("Failed to read response bytes");
         fs::write(&zip_name, bytes).expect("Failed to write zip file");
-    } else {
-        println!("cargo:warning=Using cached archive {}", zip_name);
     }
 
     // Check for platform-specific library
@@ -52,24 +46,30 @@ fn main() {
     };
     let lib_exists = Path::new(lib_name).exists();
     println!(
-        "cargo:debug=Checking for library in {}: {} exists = {}",
-        install_dir.display(),
-        lib_name,
-        lib_exists
+        "cargo:debug=Checking for library in {install_dir}: {lib_name} exists = {lib_exists}",
+        install_dir = install_dir.display()
     );
 
-    if !lib_exists {
-        println!("cargo:warning=Extracting {}...", zip_name);
+    if lib_exists {
+        println!("cargo:warning=Using cached library files");
+    } else {
+        println!("cargo:warning=Extracting {zip_name}...");
         let file = fs::File::open(&zip_name).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
-        println!("cargo:debug=Archive contains {} files", archive.len());
+        println!(
+            "cargo:debug=Archive contains {archive_len} files",
+            archive_len = archive.len()
+        );
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).unwrap();
             let outpath = match file.enclosed_name() {
                 Some(path) => path,
                 None => continue,
             };
-            println!("cargo:debug=Extracting: {}", outpath.display());
+            println!(
+                "cargo:debug=Extracting: {outpath}",
+                outpath = outpath.display()
+            );
             if file.is_dir() {
                 fs::create_dir_all(&outpath).unwrap();
             } else {
@@ -80,36 +80,32 @@ fn main() {
                 }
                 let mut outfile = fs::File::create(&outpath).unwrap();
                 let bytes_copied = std::io::copy(&mut file, &mut outfile).unwrap();
-                println!("cargo:debug=  -> wrote {} bytes", bytes_copied);
+                println!("cargo:debug=  -> wrote {bytes_copied} bytes");
             }
         }
         println!(
-            "cargo:debug=Extraction complete. {} exists = {}",
-            lib_name,
-            Path::new(lib_name).exists()
+            "cargo:debug=Extraction complete. {lib_name} exists = {exists}",
+            exists = Path::new(lib_name).exists()
         );
-    } else {
-        println!("cargo:warning=Using cached library files");
     }
 
     // List directory contents for debugging
     println!(
-        "cargo:debug=Directory contents of {}:",
-        install_dir.display()
+        "cargo:debug=Directory contents of {install_dir}:",
+        install_dir = install_dir.display()
     );
     if let Ok(entries) = fs::read_dir(&install_dir) {
         for entry in entries.flatten() {
-            println!("cargo:debug=  - {}", entry.path().display());
+            println!("cargo:debug=  - {entry}", entry = entry.path().display());
         }
     }
 
     if !Path::new("duckdb.h").exists() {
         println!("cargo:warning=duckdb.h missing from archive; attempting to download...");
         let headers_url = format!(
-            "https://github.com/duckdb/duckdb/releases/download/v{}/duckdb-{}.zip",
-            version, dist
+            "https://github.com/duckdb/duckdb/releases/download/v{version}/duckdb-{dist}.zip"
         );
-        let response = client
+        let response = ensure_http_client(&mut client)
             .get(&headers_url)
             .send()
             .expect("Failed to download headers");
@@ -131,10 +127,10 @@ fn main() {
 
     let lib_dir = install_dir.display();
     let mut env_content = "# Generated by build.rs\n".to_string();
-    env_content.push_str(&format!("export DUCKDB_VERSION='{}'\n", version));
+    env_content.push_str(&format!("export DUCKDB_VERSION='{version}'\n"));
     env_content.push_str(&format!(
-        "export DUCKDB_PREFIX=\"${{DUCKDB_PREFIX:-{}}}\"\n",
-        cache_dir.display()
+        "export DUCKDB_PREFIX=\"${{DUCKDB_PREFIX:-{cache_dir}}}\"\n",
+        cache_dir = cache_dir.display()
     ));
     env_content.push_str("export DUCKDB_LIB_DIR=\"${DUCKDB_PREFIX}/${DUCKDB_VERSION}\"\n");
     env_content.push_str("export DUCKDB_INCLUDE_DIR=\"${DUCKDB_LIB_DIR}\"\n");
@@ -153,20 +149,22 @@ fn main() {
     fs::write(&env_file, env_content).unwrap();
 
     // Propagate metadata to dependent crates for easier runtime linking
-    println!("cargo:lib_dir={}", install_dir.display());
-    println!("cargo:env_file={}", env_file.display());
-    println!("cargo:duckdb_version={}", version);
+    println!(
+        "cargo:lib_dir={install_dir}",
+        install_dir = install_dir.display()
+    );
+    println!("cargo:env_file={env_file}", env_file = env_file.display());
+    println!("cargo:duckdb_version={version}");
 
     println!(
-        "cargo:warning=DuckDB {} ready at {}",
-        version,
-        install_dir.display()
+        "cargo:warning=DuckDB {version} ready at {install_dir}",
+        install_dir = install_dir.display()
     );
 
     // Set Cargo link paths for dynamic linking
-    println!("cargo:rustc-link-search=native={}", lib_dir);
+    println!("cargo:rustc-link-search=native={lib_dir}");
     println!("cargo:rustc-link-lib=dylib=duckdb");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir);
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{lib_dir}");
 }
 
 fn detect_dist() -> Result<String, String> {
@@ -175,15 +173,30 @@ fn detect_dist() -> Result<String, String> {
     match os {
         "macos" => match arch {
             "aarch64" | "x86_64" => Ok("osx-universal".to_string()),
-            _ => Err(format!("Unsupported macOS architecture: {}", arch)),
+            _ => Err(format!("Unsupported macOS architecture: {arch}")),
         },
         "linux" => match arch {
             "x86_64" => Ok("linux-amd64".to_string()),
             "aarch64" => Ok("linux-arm64".to_string()),
-            _ => Err(format!("Unsupported Linux architecture: {}", arch)),
+            _ => Err(format!("Unsupported Linux architecture: {arch}")),
         },
-        _ => Err(format!("Unsupported operating system: {}", os)),
+        _ => Err(format!("Unsupported operating system: {os}")),
     }
+}
+
+fn ensure_http_client(client: &mut Option<Client>) -> &Client {
+    if client.is_none() {
+        *client = Some(
+            Client::builder()
+                .timeout(Duration::from_secs(600))
+                .build()
+                .expect("Failed to initialize HTTP client"),
+        );
+    }
+
+    client
+        .as_ref()
+        .expect("HTTP client should be initialized before use")
 }
 
 fn resolve_duckdb_version(manifest_dir: &Path) -> String {
@@ -192,19 +205,21 @@ fn resolve_duckdb_version(manifest_dir: &Path) -> String {
     }
 
     if let Some(lock_path) = find_cargo_lock(manifest_dir) {
-        println!("cargo:rerun-if-changed={}", lock_path.display());
+        println!(
+            "cargo:rerun-if-changed={lock_path}",
+            lock_path = lock_path.display()
+        );
         if let Some(version) = duckdb_version_from_lock(&lock_path) {
             return version;
         }
         println!(
-            "cargo:warning=Unable to infer DuckDB version from {}; falling back to {}",
-            lock_path.display(),
-            FALLBACK_DUCKDB_VERSION
+            "cargo:warning=Unable to infer DuckDB version from {lock_path}; falling back to {fallback}",
+            lock_path = lock_path.display(),
+            fallback = FALLBACK_DUCKDB_VERSION
         );
     } else {
         println!(
-            "cargo:warning=Unable to locate Cargo.lock; falling back to {}",
-            FALLBACK_DUCKDB_VERSION
+            "cargo:warning=Unable to locate Cargo.lock; falling back to {FALLBACK_DUCKDB_VERSION}"
         );
     }
 

@@ -104,9 +104,9 @@ fn interactive_mode(client: &mut FlightSQLClient, debug: bool) -> Result<()> {
 
                 // Execute query
                 if let Err(e) = execute_and_display(client, query) {
-                    eprintln!("Error: {}", e);
+                    eprintln!("Error: {e}");
                     if debug {
-                        eprintln!("Details: {:?}", e);
+                        eprintln!("Details: {e:?}");
                     }
                 }
                 println!();
@@ -126,7 +126,7 @@ fn interactive_mode(client: &mut FlightSQLClient, debug: bool) -> Result<()> {
                 break;
             }
             Err(err) => {
-                eprintln!("Error reading input: {}", err);
+                eprintln!("Error reading input: {err}");
                 break;
             }
         }
@@ -241,7 +241,7 @@ fn display_results(batches: &[RecordBatch]) -> Result<()> {
         }
     }
 
-    println!("{}", table);
+    println!("{table}");
     Ok(())
 }
 

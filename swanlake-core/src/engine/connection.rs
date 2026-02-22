@@ -172,7 +172,7 @@ impl DuckDbConnection {
             .conn
             .lock()
             .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
-        conn.execute(&format!("USE {};", catalog_name), [])?;
+        conn.execute(&format!("USE {catalog_name};"), [])?;
         let mut appender = conn.appender(table_name)?;
         for batch in batches {
             appender.append_record_batch(batch)?;
@@ -196,7 +196,7 @@ impl DuckDbConnection {
             .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
 
         // Use DESC to get table schema without preparing parameters
-        let desc_query = format!("DESC SELECT * FROM {}", table_name);
+        let desc_query = format!("DESC SELECT * FROM {table_name}");
         let mut stmt = conn.prepare(&desc_query).map_err(ServerError::DuckDb)?;
         let rows = stmt
             .query_map([], |row| {

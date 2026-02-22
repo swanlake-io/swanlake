@@ -45,7 +45,7 @@ impl<'a> PreparedStatementTester<'a> {
         self.drop_table_if_exists(PREPARED_UPDATE_TABLE)?;
         let test_result = (|| -> Result<()> {
             self.update(
-                r#"
+                r"
                 CREATE TABLE prepared_update_test (
                     id INTEGER PRIMARY KEY,
                     int8_col TINYINT,
@@ -71,10 +71,10 @@ impl<'a> PreparedStatementTester<'a> {
                     time64_ns_col TIME,
                     interval_ym_col INTERVAL
                 )
-                "#,
+                ",
             )?;
             self.update(
-                r#"
+                r"
                 INSERT INTO prepared_update_test VALUES (
                     1,
                     0, 0, 0, 0,
@@ -93,12 +93,12 @@ impl<'a> PreparedStatementTester<'a> {
                     TIME '00:00:00',
                     INTERVAL '0 months'
                 )
-                "#,
+                ",
             )?;
 
             let update_params = build_update_parameter_batch()?;
             self.client.update_with_record_batch(
-                r#"
+                r"
                 UPDATE prepared_update_test SET
                     int8_col = ?,
                     int16_col = ?,
@@ -123,7 +123,7 @@ impl<'a> PreparedStatementTester<'a> {
                     time64_ns_col = ?,
                     interval_ym_col = ?
                 WHERE id = ?
-                "#,
+                ",
                 update_params,
             )?;
 
@@ -136,7 +136,7 @@ impl<'a> PreparedStatementTester<'a> {
 
     fn verify_update_results(&mut self) -> Result<()> {
         let result = self.client.query(
-            r#"
+            r"
             SELECT CAST(int8_col AS INTEGER) AS int8_col,
                    int16_col,
                    int32_col,
@@ -153,32 +153,32 @@ impl<'a> PreparedStatementTester<'a> {
                    CAST(EXTRACT(epoch FROM time64_ns_col) * 1000000000 AS BIGINT) AS time64_ns_col
             FROM prepared_update_test
             WHERE id = 1
-            "#,
+            ",
         )?;
         let batch = result
             .batches
             .first()
             .context("expected row in prepared_update_test after update")?;
 
-        self.expect_i64(batch, 0, 42, "int8_col")?;
-        self.expect_i64(batch, 1, 1000, "int16_col")?;
-        self.expect_i64(batch, 2, 100000, "int32_col")?;
-        self.expect_i64(batch, 3, 1000000000, "int64_col")?;
-        self.expect_i64(batch, 4, 255, "uint8_col")?;
-        self.expect_i64(batch, 5, 65000, "uint16_col")?;
-        self.expect_i64(batch, 6, 4000000000, "uint32_col")?;
-        self.expect_f64(batch, 7, std::f32::consts::PI as f64, "float32_col")?;
-        self.expect_f64(batch, 8, std::f64::consts::E, "float64_col")?;
-        self.expect_bool(batch, 9, true, "bool_col")?;
-        self.expect_string(batch, 10, "updated value", "string_col")?;
-        self.expect_i64(batch, 11, 20081i64 * 24 * 3600 * 1000, "date64_col")?;
-        self.expect_i64(
+        Self::expect_i64(batch, 0, 42, "int8_col")?;
+        Self::expect_i64(batch, 1, 1000, "int16_col")?;
+        Self::expect_i64(batch, 2, 100000, "int32_col")?;
+        Self::expect_i64(batch, 3, 1000000000, "int64_col")?;
+        Self::expect_i64(batch, 4, 255, "uint8_col")?;
+        Self::expect_i64(batch, 5, 65000, "uint16_col")?;
+        Self::expect_i64(batch, 6, 4000000000, "uint32_col")?;
+        Self::expect_f64(batch, 7, std::f32::consts::PI as f64, "float32_col")?;
+        Self::expect_f64(batch, 8, std::f64::consts::E, "float64_col")?;
+        Self::expect_bool(batch, 9, true, "bool_col")?;
+        Self::expect_string(batch, 10, "updated value", "string_col")?;
+        Self::expect_i64(batch, 11, 20081i64 * 24 * 3600 * 1000, "date64_col")?;
+        Self::expect_i64(
             batch,
             12,
             ((14 * 3600 + 30 * 60 + 45) * 1000) as i64,
             "time32_col",
         )?;
-        self.expect_i64(
+        Self::expect_i64(
             batch,
             13,
             (14 * 3600 + 30 * 60 + 45) * 1_000_000 * 1000,
@@ -191,7 +191,7 @@ impl<'a> PreparedStatementTester<'a> {
         self.drop_table_if_exists(PREPARED_DELETE_TABLE)?;
         let test_result = (|| -> Result<()> {
             self.update(
-                r#"
+                r"
                 CREATE TABLE prepared_delete_test (
                     id INTEGER,
                     category VARCHAR,
@@ -199,16 +199,16 @@ impl<'a> PreparedStatementTester<'a> {
                     created_date DATE,
                     is_active BOOLEAN
                 )
-                "#,
+                ",
             )?;
             self.update(
-                r#"
+                r"
                 INSERT INTO prepared_delete_test VALUES
                     (1, 'A', 100, DATE '2024-01-01', true),
                     (2, 'B', 200, DATE '2024-01-02', true),
                     (3, 'A', 300, DATE '2024-01-03', false),
                     (4, 'C', 400, DATE '2024-01-04', true)
-                "#,
+                ",
             )?;
 
             self.client.update_with_record_batch(
@@ -238,7 +238,7 @@ impl<'a> PreparedStatementTester<'a> {
         self.drop_table_if_exists(PREPARED_SELECT_TABLE)?;
         let test_result = (|| -> Result<()> {
             self.update(
-                r#"
+                r"
                 CREATE TABLE prepared_select_test (
                     id INTEGER,
                     name VARCHAR,
@@ -246,16 +246,16 @@ impl<'a> PreparedStatementTester<'a> {
                     created_at TIMESTAMP,
                     metadata BLOB
                 )
-                "#,
+                ",
             )?;
             self.update(
-                r#"
+                r"
                 INSERT INTO prepared_select_test VALUES
                     (1, 'Alice', 95.5, TIMESTAMP '2024-01-01 10:00:00', 'meta1'::BLOB),
                     (2, 'Bob', 87.3, TIMESTAMP '2024-01-02 11:00:00', 'meta2'::BLOB),
                     (3, 'Charlie', 92.1, TIMESTAMP '2024-01-03 12:00:00', 'meta3'::BLOB),
                     (4, 'Diana', 88.9, TIMESTAMP '2024-01-04 13:00:00', 'meta4'::BLOB)
-                "#,
+                ",
             )?;
 
             let param_schema =
@@ -268,7 +268,7 @@ impl<'a> PreparedStatementTester<'a> {
                 "SELECT score, metadata FROM prepared_select_test WHERE name = ?",
                 params,
             )?;
-            self.verify_select_result(result)?;
+            Self::verify_select_result(result)?;
             Ok(())
         })();
 
@@ -457,11 +457,11 @@ impl<'a> PreparedStatementTester<'a> {
         self.finalize_table(TABLE, test_result)
     }
 
-    fn verify_select_result(&self, result: QueryResult) -> Result<()> {
+    fn verify_select_result(result: QueryResult) -> Result<()> {
         ensure!(
             result.total_rows == 1,
-            "expected one row for prepared_select_test lookup, got {}",
-            result.total_rows
+            "expected one row for prepared_select_test lookup, got {total_rows}",
+            total_rows = result.total_rows
         );
         let batch = result
             .batches
@@ -470,14 +470,12 @@ impl<'a> PreparedStatementTester<'a> {
         let score = read_f64(batch.column(0).as_ref(), 0)?;
         ensure!(
             (score - 92.1).abs() < 1e-6,
-            "expected score 92.1, got {}",
-            score
+            "expected score 92.1, got {score}"
         );
         let metadata = read_string(batch.column(1).as_ref(), 0)?;
         ensure!(
             metadata == "meta3",
-            "expected metadata 'meta3', got '{}'",
-            metadata
+            "expected metadata 'meta3', got '{metadata}'"
         );
         Ok(())
     }
@@ -486,9 +484,7 @@ impl<'a> PreparedStatementTester<'a> {
         let ids = self.collect_i64_column("SELECT id FROM prepared_delete_test ORDER BY id")?;
         ensure!(
             ids == expected_ids,
-            "expected ids {:?}, got {:?}",
-            expected_ids,
-            ids
+            "expected ids {expected_ids:?}, got {ids:?}"
         );
         Ok(())
     }
@@ -506,7 +502,6 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn expect_i64(
-        &self,
         batch: &RecordBatch,
         column_idx: usize,
         expected: i64,
@@ -521,7 +516,6 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn expect_f64(
-        &self,
         batch: &RecordBatch,
         column_idx: usize,
         expected: f64,
@@ -536,7 +530,6 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn expect_bool(
-        &self,
         batch: &RecordBatch,
         column_idx: usize,
         expected: bool,
@@ -551,7 +544,6 @@ impl<'a> PreparedStatementTester<'a> {
     }
 
     fn expect_string(
-        &self,
         batch: &RecordBatch,
         column_idx: usize,
         expected: &str,
@@ -615,8 +607,8 @@ fn read_i64(column: &dyn Array, idx: usize) -> Result<i64> {
         return Ok(arr.value(idx) as i64);
     }
     Err(anyhow!(
-        "unsupported column type {} for integer projection",
-        column.data_type()
+        "unsupported column type {data_type} for integer projection",
+        data_type = column.data_type()
     ))
 }
 
@@ -631,8 +623,8 @@ fn read_f64(column: &dyn Array, idx: usize) -> Result<f64> {
         return Ok(arr.value(idx) as f64);
     }
     Err(anyhow!(
-        "unsupported column type {} for float projection",
-        column.data_type()
+        "unsupported column type {data_type} for float projection",
+        data_type = column.data_type()
     ))
 }
 
@@ -644,8 +636,8 @@ fn read_bool(column: &dyn Array, idx: usize) -> Result<bool> {
         return Ok(arr.value(idx));
     }
     Err(anyhow!(
-        "unsupported column type {} for boolean projection",
-        column.data_type()
+        "unsupported column type {data_type} for boolean projection",
+        data_type = column.data_type()
     ))
 }
 
@@ -666,15 +658,15 @@ fn read_string(column: &dyn Array, idx: usize) -> Result<String> {
         return Ok(binary_bytes_to_string(arr.value(idx)));
     }
     Err(anyhow!(
-        "unsupported column type {} for string projection",
-        column.data_type()
+        "unsupported column type {data_type} for string projection",
+        data_type = column.data_type()
     ))
 }
 
 fn binary_bytes_to_string(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_string(),
-        Err(_) => format!("{:?}", bytes),
+        Err(_) => format!("{bytes:?}"),
     }
 }
 

@@ -37,9 +37,9 @@ impl PoolConfig {
         }
         if self.min_idle > self.max_size {
             return Err(anyhow!(
-                "PoolConfig.min_idle ({}) exceeds max_size ({})",
-                self.min_idle,
-                self.max_size
+                "PoolConfig.min_idle ({min_idle}) exceeds max_size ({max_size})",
+                min_idle = self.min_idle,
+                max_size = self.max_size
             ));
         }
         Ok(())
@@ -122,7 +122,7 @@ impl PoolInner {
             let mut state = inner
                 .state
                 .lock()
-                .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {}", e))?;
+                .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {e}"))?;
             for conn in warm {
                 inner.total.fetch_add(1, Ordering::SeqCst);
                 state.idle.push(IdleConnection {
@@ -147,7 +147,7 @@ impl PoolInner {
         let mut state = self
             .state
             .lock()
-            .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {e}"))?;
 
         loop {
             self.evict_idle_locked(&mut state);
@@ -172,22 +172,22 @@ impl PoolInner {
             let now = Instant::now();
             if now >= deadline {
                 return Err(anyhow!(
-                    "timed out waiting for pool connection (max_size={}, acquire_timeout_ms={})",
-                    self.config.max_size,
-                    self.config.acquire_timeout_ms
+                    "timed out waiting for pool connection (max_size={max_size}, acquire_timeout_ms={acquire_timeout_ms})",
+                    max_size = self.config.max_size,
+                    acquire_timeout_ms = self.config.acquire_timeout_ms
                 ));
             }
             let remaining = deadline.saturating_duration_since(now);
             let (guard, wait_result) = self
                 .condvar
                 .wait_timeout(state, remaining)
-                .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {}", e))?;
+                .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {e}"))?;
             state = guard;
             if wait_result.timed_out() {
                 return Err(anyhow!(
-                    "timed out waiting for pool connection (max_size={}, acquire_timeout_ms={})",
-                    self.config.max_size,
-                    self.config.acquire_timeout_ms
+                    "timed out waiting for pool connection (max_size={max_size}, acquire_timeout_ms={acquire_timeout_ms})",
+                    max_size = self.config.max_size,
+                    acquire_timeout_ms = self.config.acquire_timeout_ms
                 ));
             }
         }

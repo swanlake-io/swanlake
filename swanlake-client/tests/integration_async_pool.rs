@@ -26,7 +26,7 @@ fn unique_table_name() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("async_multi_row_{}", nanos)
+    format!("async_multi_row_{nanos}")
 }
 
 fn extract_count(result: &QueryResult) -> Result<i64> {
@@ -72,22 +72,18 @@ async fn integration_async_pool_multi_row_params() -> Result<()> {
     let pool = AsyncFlightSQLPool::with_default(&endpoint).await?;
 
     let table = unique_table_name();
-    pool.update(&format!("CREATE TABLE {}.{} (val INTEGER)", schema, table))
+    pool.update(&format!("CREATE TABLE {schema}.{table} (val INTEGER)"))
         .await?;
 
     let params = sample_int_batch(vec![4, 5, 6])?;
-    pool.update_with_record_batch(
-        &format!("INSERT INTO {}.{} VALUES (?)", schema, table),
-        params,
-    )
-    .await?;
+    pool.update_with_record_batch(&format!("INSERT INTO {schema}.{table} VALUES (?)"), params)
+        .await?;
 
     let result = pool
-        .query(&format!("SELECT COUNT(*) FROM {}.{}", schema, table))
+        .query(&format!("SELECT COUNT(*) FROM {schema}.{table}"))
         .await?;
     assert_eq!(extract_count(&result)?, 3);
 
-    pool.update(&format!("DROP TABLE {}.{}", schema, table))
-        .await?;
+    pool.update(&format!("DROP TABLE {schema}.{table}")).await?;
     Ok(())
 }

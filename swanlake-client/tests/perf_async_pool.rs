@@ -21,7 +21,7 @@ fn unique_table_name() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("perf_async_{}", nanos)
+    format!("perf_async_{nanos}")
 }
 
 fn build_insert_batch(batch_size: usize) -> Result<RecordBatch> {
@@ -57,8 +57,7 @@ async fn perf_async_pool_mixed_load() -> Result<()> {
 
     let table = unique_table_name();
     pool.update(&format!(
-        "CREATE TABLE {}.{} (id INTEGER, payload VARCHAR)",
-        schema, table
+        "CREATE TABLE {schema}.{table} (id INTEGER, payload VARCHAR)"
     ))
     .await?;
 
@@ -69,8 +68,8 @@ async fn perf_async_pool_mixed_load() -> Result<()> {
     let batch_size = read_env_usize("SWANLAKE_PERF_BATCH_SIZE", 128);
 
     let insert_batch = build_insert_batch(batch_size)?;
-    let insert_sql = format!("INSERT INTO {}.{} VALUES (?, ?)", schema, table);
-    let read_sql = format!("SELECT COUNT(*) FROM {}.{}", schema, table);
+    let insert_sql = format!("INSERT INTO {schema}.{table} VALUES (?, ?)");
+    let read_sql = format!("SELECT COUNT(*) FROM {schema}.{table}");
 
     let start = Instant::now();
 
@@ -110,11 +109,9 @@ async fn perf_async_pool_mixed_load() -> Result<()> {
     let ops_per_sec = total_ops as f64 / elapsed.as_secs_f64().max(0.001);
 
     println!(
-        "perf_async_pool_mixed_load: ops={} elapsed={:.2?} ops/s={:.1}",
-        total_ops, elapsed, ops_per_sec
+        "perf_async_pool_mixed_load: ops={total_ops} elapsed={elapsed:.2?} ops/s={ops_per_sec:.1}"
     );
 
-    pool.update(&format!("DROP TABLE {}.{}", schema, table))
-        .await?;
+    pool.update(&format!("DROP TABLE {schema}.{table}")).await?;
     Ok(())
 }

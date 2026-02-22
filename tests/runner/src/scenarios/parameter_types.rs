@@ -21,7 +21,7 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
 
     // Create test table with various supported types
     client.update(
-        r#"
+        r"
         CREATE TABLE IF NOT EXISTS parameter_types_test (
             id INTEGER,
             date32_col DATE,
@@ -38,7 +38,7 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
             timestamp_us_col TIMESTAMP,
             timestamp_ns_col TIMESTAMP
         )
-        "#,
+        ",
     )?;
 
     // Clear table
@@ -54,13 +54,13 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     // Verify insertion
     let count = query_scalar_i64(&mut client, "SELECT COUNT(*) FROM parameter_types_test")?;
     if count != 1 {
-        return Err(anyhow!("Expected 1 row, got {}", count));
+        return Err(anyhow!("Expected 1 row, got {count}"));
     }
 
     // Query back and verify values (basic check for non-null)
     let id = query_scalar_i64(&mut client, "SELECT id FROM parameter_types_test")?;
     if id != 1 {
-        return Err(anyhow!("Expected id 1, got {}", id));
+        return Err(anyhow!("Expected id 1, got {id}"));
     }
 
     // Check each column is not null
@@ -83,13 +83,10 @@ pub async fn run_parameter_types(args: &CliArgs) -> Result<()> {
     for col in columns {
         let col_count = query_scalar_i64(
             &mut client,
-            &format!(
-                "SELECT COUNT({}) FROM parameter_types_test WHERE {} IS NOT NULL",
-                col, col
-            ),
+            &format!("SELECT COUNT({col}) FROM parameter_types_test WHERE {col} IS NOT NULL"),
         )?;
         if col_count != 1 {
-            return Err(anyhow!("{} column not inserted correctly", col));
+            return Err(anyhow!("{col} column not inserted correctly"));
         }
     }
 

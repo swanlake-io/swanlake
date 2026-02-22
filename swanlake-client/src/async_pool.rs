@@ -45,7 +45,7 @@ impl AsyncPoolInner {
                 let mut state = inner
                     .state
                     .lock()
-                    .map_err(|e| anyhow!("Flight SQL async pool mutex poisoned: {}", e))?;
+                    .map_err(|e| anyhow!("Flight SQL async pool mutex poisoned: {e}"))?;
                 state.idle.push(IdleConnection {
                     conn,
                     last_used: Instant::now(),
@@ -61,7 +61,7 @@ impl AsyncPoolInner {
         let endpoint = self.endpoint.clone();
         tokio::task::spawn_blocking(move || driver.new_connection(&endpoint))
             .await
-            .map_err(|e| anyhow!("connection task failed: {}", e))?
+            .map_err(|e| anyhow!("connection task failed: {e}"))?
     }
 
     async fn acquire_connection(self: &Arc<Self>) -> Result<AsyncPooledConnection> {
@@ -73,9 +73,9 @@ impl AsyncPoolInner {
             Ok(Err(_)) => return Err(anyhow!("connection pool closed while waiting for permit")),
             Err(_) => {
                 return Err(anyhow!(
-                    "timed out waiting for pool connection (max_size={}, acquire_timeout_ms={})",
-                    self.config.max_size,
-                    self.config.acquire_timeout_ms
+                    "timed out waiting for pool connection (max_size={max_size}, acquire_timeout_ms={acquire_timeout_ms})",
+                    max_size = self.config.max_size,
+                    acquire_timeout_ms = self.config.acquire_timeout_ms
                 ))
             }
         };
@@ -84,7 +84,7 @@ impl AsyncPoolInner {
             let mut state = self
                 .state
                 .lock()
-                .map_err(|e| anyhow!("Flight SQL async pool mutex poisoned: {}", e))?;
+                .map_err(|e| anyhow!("Flight SQL async pool mutex poisoned: {e}"))?;
             self.evict_idle_locked(&mut state);
             if let Some(idle) = state.idle.pop() {
                 (Some(idle.conn), false)
@@ -113,8 +113,8 @@ impl AsyncPoolInner {
             }
         } else {
             Err(anyhow!(
-                "connection pool exhausted (max_size={})",
-                self.config.max_size
+                "connection pool exhausted (max_size={max_size})",
+                max_size = self.config.max_size
             ))
         }
     }
@@ -192,7 +192,7 @@ impl AsyncPooledConnection {
                 self.had_error = true;
                 self._permit = None;
                 self.pool.total.fetch_sub(1, Ordering::SeqCst);
-                Err(anyhow!("blocking task failed: {}", err))
+                Err(anyhow!("blocking task failed: {err}"))
             }
         }
     }

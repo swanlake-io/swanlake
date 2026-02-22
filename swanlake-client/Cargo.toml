@@ -34,3 +34,6 @@ tokio = ["dep:tokio"]
 name = "swanlake-cli"
 path = "src/bin/cli.rs"
 required-features = ["cli"]
+
+[lints]
+workspace = true

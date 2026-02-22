@@ -77,7 +77,10 @@ fn main() -> Result<()> {
         println!("{:?}", people[0]);
         println!("{:?}", people[1]);
     } else {
-        return Err(anyhow!("Expect at least 2 people, got {}", people.len()));
+        return Err(anyhow!(
+            "Expect at least 2 people, got {count}",
+            count = people.len()
+        ));
     }
 
     // Select single person (simulate QueryRow)
@@ -88,7 +91,7 @@ fn main() -> Result<()> {
     )?;
     if !single_person.is_empty() {
         let jason = &single_person[0];
-        println!("{:?}", jason);
+        println!("{jason:?}");
     }
 
     // Select places
@@ -148,7 +151,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-const SCHEMA: &str = r#"
+const SCHEMA: &str = r"
 use swanlake;
 
 DROP TABLE IF EXISTS person;
@@ -164,7 +167,7 @@ CREATE TABLE IF NOT EXISTS place (
     country VARCHAR,
     city VARCHAR NULL,
     telcode INTEGER
-)"#;
+)";
 
 fn execute_statement(client: &mut FlightSQLClient, sql: &str) -> Result<()> {
     client.update(sql)?;
@@ -335,7 +338,7 @@ fn iterate_places(client: &mut FlightSQLClient) -> Result<()> {
                 },
                 telcode: telcodes.value(i),
             };
-            println!("{:?}", place);
+            println!("{place:?}");
         }
     }
     Ok(())

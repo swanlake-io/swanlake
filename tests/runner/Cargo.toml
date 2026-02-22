@@ -19,3 +19,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 hex = "0.4"
+
+[lints]
+workspace = true

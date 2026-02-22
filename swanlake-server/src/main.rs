@@ -92,10 +92,10 @@ async fn main() -> Result<()> {
         let terminate = std::future::pending::<()>();
 
         tokio::select! {
-            _ = ctrl_c => {
+            () = ctrl_c => {
                 info!("received SIGINT, initiating graceful shutdown");
             }
-            _ = terminate => {
+            () = terminate => {
                 info!("received SIGTERM, initiating graceful shutdown");
             }
         }

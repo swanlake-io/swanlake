@@ -87,8 +87,7 @@ pub fn duckdb_type_to_arrow(duckdb_type: &str) -> Result<DataType, ServerError> 
         "BIGNUM" | "HUGEINT" => Ok(DataType::Decimal128(38, 0)),
         "UHUGEINT" => Ok(DataType::Decimal128(38, 0)),
         _ => Err(ServerError::Internal(format!(
-            "unsupported DuckDB type: {}",
-            duckdb_type
+            "unsupported DuckDB type: {duckdb_type}"
         ))),
     }
 }
@@ -201,11 +200,11 @@ pub fn arrow_array_to_duckdb_values(array: &ArrayRef) -> Result<Vec<Value>, Serv
         DataType::Float64 => push_values!(array, values, Float64Array, Value::Double),
         DataType::Utf8 => push_values!(array, values, StringArray, Value::Text, to_string),
         DataType::LargeUtf8 => {
-            push_values!(array, values, LargeStringArray, Value::Text, to_string)
+            push_values!(array, values, LargeStringArray, Value::Text, to_string);
         }
         DataType::Binary => push_values!(array, values, BinaryArray, Value::Blob, to_vec),
         DataType::LargeBinary => {
-            push_values!(array, values, LargeBinaryArray, Value::Blob, to_vec)
+            push_values!(array, values, LargeBinaryArray, Value::Blob, to_vec);
         }
         DataType::Date32 => {
             let arr = downcast_array::<Date32Array>(array)?;
@@ -259,8 +258,7 @@ pub fn arrow_array_to_duckdb_values(array: &ArrayRef) -> Result<Vec<Value>, Serv
             }
             _ => {
                 return Err(ServerError::UnsupportedParameter(format!(
-                    "Time32 with unit {:?}",
-                    unit
+                    "Time32 with unit {unit:?}"
                 )))
             }
         },
@@ -287,8 +285,7 @@ pub fn arrow_array_to_duckdb_values(array: &ArrayRef) -> Result<Vec<Value>, Serv
             }
             _ => {
                 return Err(ServerError::UnsupportedParameter(format!(
-                    "Time64 with unit {:?}",
-                    unit
+                    "Time64 with unit {unit:?}"
                 )))
             }
         },
@@ -336,16 +333,16 @@ pub fn arrow_array_to_duckdb_values(array: &ArrayRef) -> Result<Vec<Value>, Serv
             };
             match unit {
                 TimeUnit::Second => {
-                    push_timestamp_values!(array, values, TimestampSecondArray, duck_unit)
+                    push_timestamp_values!(array, values, TimestampSecondArray, duck_unit);
                 }
                 TimeUnit::Millisecond => {
-                    push_timestamp_values!(array, values, TimestampMillisecondArray, duck_unit)
+                    push_timestamp_values!(array, values, TimestampMillisecondArray, duck_unit);
                 }
                 TimeUnit::Microsecond => {
-                    push_timestamp_values!(array, values, TimestampMicrosecondArray, duck_unit)
+                    push_timestamp_values!(array, values, TimestampMicrosecondArray, duck_unit);
                 }
                 TimeUnit::Nanosecond => {
-                    push_timestamp_values!(array, values, TimestampNanosecondArray, duck_unit)
+                    push_timestamp_values!(array, values, TimestampNanosecondArray, duck_unit);
                 }
             }
         }

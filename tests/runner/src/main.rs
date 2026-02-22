@@ -76,7 +76,7 @@ fn parse_args<I: IntoIterator<Item = String>>(args_iter: I) -> Result<CliArgs> {
         let root = PathBuf::from("tests/sql");
         for entry in root
             .read_dir()
-            .with_context(|| format!("failed to read {}", root.display()))?
+            .with_context(|| format!("failed to read {root}", root = root.display()))?
         {
             let entry = entry?;
             if entry.file_type()?.is_file()
@@ -112,7 +112,10 @@ async fn run_entrypoint() -> Result<()> {
     let raw_args: Vec<String> = env::args().skip(1).collect();
     let args = parse_args(raw_args)?;
 
-    info!("Running SQL tests with {} script(s)", args.test_files.len());
+    info!(
+        "Running SQL tests with {count} script(s)",
+        count = args.test_files.len()
+    );
     run_sql_tests(&args).await?;
     scenarios::run_all(&args).await?;
     Ok(())
@@ -128,18 +131,22 @@ async fn run_sql_tests(args: &CliArgs) -> Result<()> {
     substitutions.insert("__TEST_DIR__".to_string(), test_dir.clone());
 
     for path in &args.test_files {
-        info!("Executing script {}", path.display());
+        info!("Executing script {path}", path = path.display());
         let records = parse_test_file(path)?;
         execute_records(&args.endpoint, &substitutions, &records)
             .await
-            .with_context(|| format!("failed while running {}", path.display()))?;
-        info!("Script {} completed successfully", path.display());
+            .with_context(|| format!("failed while running {path}", path = path.display()))?;
+        info!(
+            "Script {path} completed successfully",
+            path = path.display()
+        );
     }
     Ok(())
 }
 
 fn parse_test_file(path: &Path) -> Result<Vec<TestRecord>> {
-    let file = File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let file = File::open(path)
+        .with_context(|| format!("failed to read {path}", path = path.display()))?;
     let mut reader = BufReader::new(file);
     let mut buf = String::new();
     let mut records = Vec::new();
@@ -260,10 +267,7 @@ async fn execute_records(
                             rows.into_iter().map(|r| r.join("\t")).collect();
                         if normalized != *expected_rows {
                             bail!(
-                                "unexpected rows for sql {}: got {:?}, expected {:?}",
-                                sql,
-                                normalized,
-                                expected_rows
+                                "unexpected rows for sql {sql}: got {normalized:?}, expected {expected_rows:?}"
                             );
                         }
                     }

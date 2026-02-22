@@ -185,7 +185,7 @@ impl SessionRegistry {
         let factory = self.factory.clone();
         let connection = tokio::task::spawn_blocking(move || factory.create_connection())
             .await
-            .map_err(|e| ServerError::Internal(format!("connection task failed: {}", e)))??;
+            .map_err(|e| ServerError::Internal(format!("connection task failed: {e}")))??;
 
         // Create session with the specified ID
         let session = Arc::new(Session::new_with_id(session_id.clone(), connection));
