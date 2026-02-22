@@ -20,3 +20,6 @@ tokio = { workspace = true }
 arrow-flight = { workspace = true }
 axum = { version = "0.8", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
+
+[lints]
+workspace = true

@@ -75,7 +75,7 @@ impl FlightSqlService for SwanFlightSqlService {
     }
 
     async fn register_sql_info(&self, id: i32, result: &SqlInfo) {
-        sql_info::register_sql_info(id, result).await
+        sql_info::register_sql_info(id, *result);
     }
 
     #[instrument(skip(self, request), fields(session_id))]

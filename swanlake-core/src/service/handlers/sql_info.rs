@@ -13,7 +13,7 @@ use crate::service::SwanFlightSqlService;
 
 /// Static registration hook for SqlInfo; currently unused because values are
 /// compiled in.
-pub(crate) async fn register_sql_info(_id: i32, _result: &SqlInfo) {
+pub(crate) fn register_sql_info(_id: i32, _result: SqlInfo) {
     // No-op: we don't need to register info dynamically
 }
 
@@ -32,7 +32,7 @@ fn build_sql_info_data() -> Result<SqlInfoData, Status> {
 
     builder
         .build()
-        .map_err(|e| Status::internal(format!("Failed to build SqlInfo data: {}", e)))
+        .map_err(|e| Status::internal(format!("Failed to build SqlInfo data: {e}")))
 }
 
 /// Builds `FlightInfo` for the SqlInfo metadata endpoint so clients can fetch
@@ -75,7 +75,7 @@ pub(crate) async fn do_get_sql_info(
     let batch = query
         .into_builder(&info_data)
         .build()
-        .map_err(|e| Status::internal(format!("Failed to build SqlInfo response: {}", e)))?;
+        .map_err(|e| Status::internal(format!("Failed to build SqlInfo response: {e}")))?;
 
     let schema = batch.schema();
 

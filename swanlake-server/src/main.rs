@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
         config.session_id_mode.clone(),
     );
 
-    status::spawn_status_server(&config, metrics, registry.clone()).await?;
+    status::spawn_status_server(&config, metrics, registry.clone())?;
 
     // Set up gRPC health service
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -75,27 +75,33 @@ async fn main() -> Result<()> {
 
     tokio::spawn(async move {
         let ctrl_c = async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to install CTRL+C handler");
+            if let Err(err) = tokio::signal::ctrl_c().await {
+                tracing::error!(%err, "failed to install CTRL+C handler");
+                std::future::pending::<()>().await;
+            }
         };
 
         #[cfg(unix)]
         let terminate = async {
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler")
-                .recv()
-                .await;
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut signal) => {
+                    signal.recv().await;
+                }
+                Err(err) => {
+                    tracing::error!(%err, "failed to install SIGTERM handler");
+                    std::future::pending::<()>().await;
+                }
+            }
         };
 
         #[cfg(not(unix))]
         let terminate = std::future::pending::<()>();
 
         tokio::select! {
-            _ = ctrl_c => {
+            () = ctrl_c => {
                 info!("received SIGINT, initiating graceful shutdown");
             }
-            _ = terminate => {
+            () = terminate => {
                 info!("received SIGTERM, initiating graceful shutdown");
             }
         }

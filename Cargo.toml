@@ -24,3 +24,53 @@ arrow-select = "57"
 duckdb = { git = "https://github.com/duckdb/duckdb-rs", rev = "a2639608d946690e04b1d5f6448302d57bb99d7e", default-features = false, features = ["appender-arrow"] }
 tonic = { version = "0.14.4", features = ["transport"] }
 thiserror = "2.0.18"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+allow_attributes = "deny"
+dbg_macro = "deny"
+disallowed-types = "deny"
+expect_used = "deny"
+explicit_into_iter_loop = "deny"
+explicit_iter_loop = "deny"
+if_not_else = "deny"
+ignored_unit_patterns = "deny"
+inconsistent_struct_constructor = "deny"
+manual_assert = "deny"
+manual_string_new = "deny"
+match_bool = "deny"
+match_wildcard_for_single_variants = "deny"
+missing_panics_doc = "deny"
+needless_raw_string_hashes = "deny"
+or_fun_call = "deny"
+panic = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
+semicolon-if-nothing-returned = "deny"
+todo = "deny"
+trivially_copy_pass_by_ref = "deny"
+unimplemented = "deny"
+uninlined_format_args = "deny"
+unnecessary_wraps = "deny"
+unreachable = "deny"
+unused_self = "deny"
+unwrap_used = "deny"
+large_futures = "deny"
+cloned_instead_of_copied = "deny"
+inefficient_to_string = "deny"
+assigning_clones = "deny"
+stable_sort_primitive = "deny"
+ref_option = "deny"
+unnecessary_literal_bound = "deny"
+unused_async = "deny"
+
+# The following pedantic lints are explicitly set to "allow" to give authors discretion on their use.
+default_trait_access = "allow"
+match_same_arms = "allow"
+must_use_candidate = "allow"
+single_match_else = "allow"
+
+# This lint cannot be fixed by rustfmt and we don't currently generate docs.
+doc_lazy_continuation = "allow"

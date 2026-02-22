@@ -45,12 +45,9 @@ impl PgConfig {
         let dbname = std::env::var("PGDATABASE").unwrap_or_else(|_| "postgres".to_string());
         let password = std::env::var("PGPASSWORD").ok();
 
-        let mut config = format!(
-            "host={} port={} user={} dbname={}",
-            host, port, user, dbname
-        );
+        let mut config = format!("host={host} port={port} user={user} dbname={dbname}");
         if let Some(pwd) = password {
-            config.push_str(&format!(" password={}", pwd));
+            config.push_str(&format!(" password={pwd}"));
         }
 
         Self {

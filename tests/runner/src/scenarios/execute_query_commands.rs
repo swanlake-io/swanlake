@@ -6,7 +6,7 @@ use tracing::info;
 
 const TABLE_NAME: &str = "execute_query_accepts_commands";
 
-pub async fn run_execute_query_commands(args: &CliArgs) -> Result<()> {
+pub fn run_execute_query_commands(args: &CliArgs) -> Result<()> {
     info!("Running ExecuteQuery compatibility tests for command statements");
 
     exercise_commands_via_execute(args)?;

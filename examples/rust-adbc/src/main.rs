@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use swanlake_client::FlightSQLClient;
@@ -74,10 +74,13 @@ fn main() -> Result<()> {
         vec![],
     )?;
     if people.len() >= 2 {
-        println!("{:?}", people[0]);
-        println!("{:?}", people[1]);
+        info!(person = ?people[0], "person row 1");
+        info!(person = ?people[1], "person row 2");
     } else {
-        return Err(anyhow!("Expect at least 2 people, got {}", people.len()));
+        return Err(anyhow!(
+            "Expect at least 2 people, got {count}",
+            count = people.len()
+        ));
     }
 
     // Select single person (simulate QueryRow)
@@ -88,19 +91,19 @@ fn main() -> Result<()> {
     )?;
     if !single_person.is_empty() {
         let jason = &single_person[0];
-        println!("{:?}", jason);
+        info!(person = ?jason, "single person row");
     }
 
     // Select places
     let places = select_places(&mut client, "SELECT * FROM place ORDER BY telcode ASC")?;
     if places.len() >= 3 {
-        println!("{:?}", places[0]);
-        println!("{:?}", places[1]);
-        println!("{:?}", places[2]);
+        info!(place = ?places[0], "place row 1");
+        info!(place = ?places[1], "place row 2");
+        info!(place = ?places[2], "place row 3");
     }
 
     // Iterate places
-    println!("\n=== Iterating Through Rows ===");
+    info!("=== Iterating Through Rows ===");
     iterate_places(&mut client)?;
 
     // Additional batch insert
@@ -143,12 +146,12 @@ fn main() -> Result<()> {
     ];
     insert_people(&mut client, additional_people)?;
 
-    println!("\n✅ All operations completed successfully!");
+    info!("All operations completed successfully");
 
     Ok(())
 }
 
-const SCHEMA: &str = r#"
+const SCHEMA: &str = r"
 use swanlake;
 
 DROP TABLE IF EXISTS person;
@@ -164,7 +167,7 @@ CREATE TABLE IF NOT EXISTS place (
     country VARCHAR,
     city VARCHAR NULL,
     telcode INTEGER
-)"#;
+)";
 
 fn execute_statement(client: &mut FlightSQLClient, sql: &str) -> Result<()> {
     client.update(sql)?;
@@ -251,17 +254,17 @@ fn select_people(
             .column(0)
             .as_any()
             .downcast_ref::<StringArray>()
-            .unwrap();
+            .context("expected StringArray for first_name")?;
         let last_names = batch
             .column(1)
             .as_any()
             .downcast_ref::<StringArray>()
-            .unwrap();
+            .context("expected StringArray for last_name")?;
         let emails = batch
             .column(2)
             .as_any()
             .downcast_ref::<StringArray>()
-            .unwrap();
+            .context("expected StringArray for email")?;
         for i in 0..batch.num_rows() {
             people.push(Person {
                 first_name: first_names.value(i).to_string(),
@@ -281,17 +284,17 @@ fn select_places(client: &mut FlightSQLClient, sql: &str) -> Result<Vec<Place>> 
             .column(0)
             .as_any()
             .downcast_ref::<StringArray>()
-            .unwrap();
+            .context("expected StringArray for country")?;
         let cities = batch
             .column(1)
             .as_any()
             .downcast_ref::<StringArray>()
-            .unwrap();
+            .context("expected StringArray for city")?;
         let telcodes = batch
             .column(2)
             .as_any()
             .downcast_ref::<Int32Array>()
-            .unwrap();
+            .context("expected Int32Array for telcode")?;
         for i in 0..batch.num_rows() {
             places.push(Place {
                 country: countries.value(i).to_string(),
@@ -314,17 +317,17 @@ fn iterate_places(client: &mut FlightSQLClient) -> Result<()> {
             .column(0)
             .as_any()
             .downcast_ref::<StringArray>()
-            .unwrap();
+            .context("expected StringArray for country")?;
         let cities = batch
             .column(1)
             .as_any()
             .downcast_ref::<StringArray>()
-            .unwrap();
+            .context("expected StringArray for city")?;
         let telcodes = batch
             .column(2)
             .as_any()
             .downcast_ref::<Int32Array>()
-            .unwrap();
+            .context("expected Int32Array for telcode")?;
         for i in 0..batch.num_rows() {
             let place = Place {
                 country: countries.value(i).to_string(),
@@ -335,7 +338,7 @@ fn iterate_places(client: &mut FlightSQLClient) -> Result<()> {
                 },
                 telcode: telcodes.value(i),
             };
-            println!("{:?}", place);
+            info!(place = ?place, "iterated place row");
         }
     }
     Ok(())

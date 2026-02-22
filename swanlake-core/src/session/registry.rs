@@ -79,7 +79,10 @@ impl SessionRegistry {
     }
 
     pub fn snapshot(&self) -> SessionRegistrySnapshot {
-        let inner = self.inner.read().expect("registry lock poisoned");
+        let inner = self
+            .inner
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let total_sessions = inner.sessions.len();
         let session_timeout_seconds = self.session_timeout.as_secs();
         let mut total_idle_ms = 0u64;
@@ -111,7 +114,10 @@ impl SessionRegistry {
     /// Clean up idle sessions that have exceeded the timeout
     #[instrument(skip(self))]
     pub fn cleanup_idle_sessions(&self) -> usize {
-        let mut inner = self.inner.write().expect("registry lock poisoned");
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let before = inner.sessions.len();
 
         inner.sessions.retain(|id, entry| {
@@ -150,7 +156,10 @@ impl SessionRegistry {
     ) -> Result<Arc<Session>, ServerError> {
         // First, try to get existing session (read lock)
         {
-            let inner = self.inner.read().expect("registry lock poisoned");
+            let inner = self
+                .inner
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(entry) = inner.sessions.get(session_id) {
                 debug!(
                     session_id = %session_id,
@@ -169,7 +178,7 @@ impl SessionRegistry {
                 let current = self
                     .inner
                     .read()
-                    .expect("registry lock poisoned")
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .sessions
                     .len();
                 warn!(
@@ -185,14 +194,17 @@ impl SessionRegistry {
         let factory = self.factory.clone();
         let connection = tokio::task::spawn_blocking(move || factory.create_connection())
             .await
-            .map_err(|e| ServerError::Internal(format!("connection task failed: {}", e)))??;
+            .map_err(|e| ServerError::Internal(format!("connection task failed: {e}")))??;
 
         // Create session with the specified ID
         let session = Arc::new(Session::new_with_id(session_id.clone(), connection));
 
         // Register session
         {
-            let mut inner = self.inner.write().expect("registry lock poisoned");
+            let mut inner = self
+                .inner
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(entry) = inner.sessions.get(session_id) {
                 return Ok(entry.session.clone());
             }

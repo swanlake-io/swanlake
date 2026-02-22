@@ -22,7 +22,7 @@ struct StatusPayload {
     sessions: SessionRegistrySnapshot,
 }
 
-pub async fn spawn_status_server(
+pub fn spawn_status_server(
     config: &ServerConfig,
     metrics: Arc<Metrics>,
     registry: Arc<SessionRegistry>,
@@ -38,8 +38,8 @@ pub async fn spawn_status_server(
     let state = StatusState { metrics, registry };
 
     let prefix = normalize_prefix(&config.status_path_prefix);
-    let root_path = format!("{}/", prefix);
-    let json_path = format!("{}/status.json", prefix);
+    let root_path = format!("{prefix}/");
+    let json_path = format!("{prefix}/status.json");
 
     let app = Router::new()
         .route(&root_path, get(status_page))
@@ -90,7 +90,7 @@ fn normalize_prefix(prefix: &str) -> String {
     if trimmed.is_empty() {
         String::new()
     } else {
-        format!("/{}", trimmed)
+        format!("/{trimmed}")
     }
 }
 

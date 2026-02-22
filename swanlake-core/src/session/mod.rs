@@ -169,7 +169,7 @@ impl Session {
         let last = self
             .last_activity
             .lock()
-            .expect("last_activity mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         last.elapsed()
     }
 
@@ -178,7 +178,7 @@ impl Session {
         let mut last = self
             .last_activity
             .lock()
-            .expect("last_activity mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *last = Instant::now();
     }
 
@@ -224,7 +224,7 @@ impl Session {
                     let mut txs = self
                         .transactions
                         .lock()
-                        .expect("transactions mutex poisoned");
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     let cleared = txs.len();
                     let ids = txs.iter().copied().collect::<Vec<_>>();
                     txs.clear();
@@ -234,7 +234,7 @@ impl Session {
                     let mut aborted = self
                         .aborted_transactions
                         .lock()
-                        .expect("aborted_transactions mutex poisoned");
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     for id in cleared_ids {
                         aborted.insert(id);
                     }
@@ -265,7 +265,7 @@ impl Session {
         let mut aborted = self
             .aborted_transactions
             .lock()
-            .expect("aborted_transactions mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if aborted.remove(&transaction_id) {
             return Err(ServerError::TransactionAborted);
         }
@@ -343,7 +343,7 @@ impl Session {
             if let Some(schema) = self
                 .schema_cache
                 .lock()
-                .expect("schema_cache mutex poisoned")
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .get(&cache_key)
             {
                 debug!(field_count = schema.fields().len(), "schema cache hit");
@@ -357,7 +357,7 @@ impl Session {
         if !cache_key.is_empty() {
             self.schema_cache
                 .lock()
-                .expect("schema_cache mutex poisoned")
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(cache_key, schema.clone());
         }
 
@@ -415,7 +415,7 @@ impl Session {
         let mut cache = self
             .schema_cache
             .lock()
-            .expect("schema_cache mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.clear();
     }
 
@@ -464,13 +464,13 @@ impl Session {
         let mut prepared = self
             .prepared_statements
             .lock()
-            .expect("prepared_statements mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         prepared.insert(handle, PreparedStatementState::new(meta));
 
         let mut last_handle = self
             .last_prepared_statement_handle
             .lock()
-            .expect("last_prepared_statement_handle mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *last_handle = Some(handle);
 
         debug!(handle = %handle, "created prepared statement");
@@ -485,7 +485,7 @@ impl Session {
         let prepared = self
             .prepared_statements
             .lock()
-            .expect("prepared_statements mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         prepared
             .get(&handle)
             .map(|state| state.meta.clone())
@@ -500,7 +500,7 @@ impl Session {
         let mut prepared = self
             .prepared_statements
             .lock()
-            .expect("prepared_statements mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let state = prepared
             .get_mut(&handle)
             .ok_or(ServerError::PreparedStatementNotFound)?;
@@ -517,7 +517,7 @@ impl Session {
         let mut prepared = self
             .prepared_statements
             .lock()
-            .expect("prepared_statements mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let state = prepared
             .get_mut(&handle)
             .ok_or(ServerError::PreparedStatementNotFound)?;
@@ -533,7 +533,7 @@ impl Session {
         let mut prepared = self
             .prepared_statements
             .lock()
-            .expect("prepared_statements mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let state = prepared
             .get_mut(&handle)
             .ok_or(ServerError::PreparedStatementNotFound)?;
@@ -545,14 +545,14 @@ impl Session {
         let mut prepared = self
             .prepared_statements
             .lock()
-            .expect("prepared_statements mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         prepared
             .remove(&handle)
             .ok_or(ServerError::PreparedStatementNotFound)?;
         let mut last_handle = self
             .last_prepared_statement_handle
             .lock()
-            .expect("last_prepared_statement_handle mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if last_handle.as_ref() == Some(&handle) {
             *last_handle = None;
         }
@@ -564,7 +564,7 @@ impl Session {
         let last = self
             .last_prepared_statement_handle
             .lock()
-            .expect("last_prepared_statement_handle mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *last
     }
 
@@ -585,7 +585,7 @@ impl Session {
         let mut transactions = self
             .transactions
             .lock()
-            .expect("transactions mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         transactions.insert(tx_id);
 
         debug!(transaction_id = %tx_id, "began transaction");
@@ -617,7 +617,7 @@ impl Session {
             let transactions = self
                 .transactions
                 .lock()
-                .expect("transactions mutex poisoned");
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if !transactions.contains(&transaction_id) {
                 return self.transaction_absent(transaction_id);
             }
@@ -629,12 +629,12 @@ impl Session {
         let mut transactions = self
             .transactions
             .lock()
-            .expect("transactions mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         transactions.remove(&transaction_id);
         let mut aborted = self
             .aborted_transactions
             .lock()
-            .expect("aborted_transactions mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         aborted.remove(&transaction_id);
         debug!(
             transaction_id = %transaction_id,

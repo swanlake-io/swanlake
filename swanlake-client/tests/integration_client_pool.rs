@@ -76,19 +76,18 @@ fn integration_client_multi_row_params() -> Result<()> {
     let schema = table_schema();
 
     client.update(&format!(
-        "CREATE TABLE {}.multi_row_tmp (val INTEGER)",
-        schema
+        "CREATE TABLE {schema}.multi_row_tmp (val INTEGER)"
     ))?;
     let params = sample_int_batch(vec![1, 2, 3])?;
     client.update_with_record_batch(
-        &format!("INSERT INTO {}.multi_row_tmp VALUES (?)", schema),
+        &format!("INSERT INTO {schema}.multi_row_tmp VALUES (?)"),
         params,
     )?;
 
-    let result = client.query(&format!("SELECT COUNT(*) FROM {}.multi_row_tmp", schema))?;
+    let result = client.query(&format!("SELECT COUNT(*) FROM {schema}.multi_row_tmp"))?;
     assert_eq!(extract_count(&result)?, 3);
 
-    client.update(&format!("DROP TABLE {}.multi_row_tmp", schema))?;
+    client.update(&format!("DROP TABLE {schema}.multi_row_tmp"))?;
 
     Ok(())
 }

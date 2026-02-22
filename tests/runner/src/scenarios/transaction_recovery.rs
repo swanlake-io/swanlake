@@ -1,4 +1,4 @@
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use arrow_array::Int32Array;
 use swanlake_client::{FlightSQLClient, QueryResult};
 use tracing::info;
@@ -18,7 +18,7 @@ use crate::CliArgs;
 ///   (should return TransactionAborted error, not Ok)
 /// - Explicit ROLLBACK via ActionEndTransaction on an aborted transaction
 ///   (should return TransactionAborted error, not TransactionNotFound)
-pub async fn run_transaction_recovery(args: &CliArgs) -> Result<()> {
+pub fn run_transaction_recovery(args: &CliArgs) -> Result<()> {
     info!("Running transaction recovery tests");
 
     let mut client = FlightSQLClient::connect(&args.endpoint)
@@ -43,9 +43,10 @@ fn test_auto_rollback_after_abort(client: &mut FlightSQLClient, table: &str) -> 
         client.update(&format!("INSERT INTO {table} VALUES (1)"))?;
 
         // Cause an error inside the transaction so the context is marked aborted.
-        let type_err = client
-            .update(&format!("INSERT INTO {table} VALUES ('oops')"))
-            .expect_err("expected type error inside transaction");
+        let type_err = match client.update(&format!("INSERT INTO {table} VALUES ('oops')")) {
+            Ok(_) => bail!("expected type error inside transaction"),
+            Err(err) => err,
+        };
         let err_text = type_err.to_string().to_lowercase();
         ensure!(
             err_text.contains("type")
@@ -84,9 +85,10 @@ fn test_auto_retry_after_schema_error(client: &mut FlightSQLClient) -> Result<()
 
     // First, cause an error that puts the transaction in aborted state.
     // We'll try to query a non-existent table.
-    let err = client
-        .execute("SELECT * FROM non_existent_table_xyz LIMIT 10")
-        .expect_err("expected error for non-existent table");
+    let err = match client.execute("SELECT * FROM non_existent_table_xyz LIMIT 10") {
+        Ok(_) => bail!("expected error for non-existent table"),
+        Err(err) => err,
+    };
     let err_text = err.to_string().to_lowercase();
     ensure!(
         err_text.contains("catalog")

@@ -471,7 +471,7 @@ pub(crate) async fn do_put_prepared_statement_update(
             let sql_for_exec = sql.clone();
             let result = tokio::task::spawn_blocking(move || {
                 // Get the target table schema for validation and alignment
-                let qualified_table = format!("{}.{}", catalog_name, table_name);
+                let qualified_table = format!("{catalog_name}.{table_name}");
                 let table_schema = Arc::new(session_clone.table_schema(&qualified_table)?);
 
                 // Align batches if INSERT specifies column list

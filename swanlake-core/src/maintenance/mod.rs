@@ -203,12 +203,12 @@ impl CheckpointService {
                 *guard = Some(conn);
             }
 
-            let sql = format!("USE {}; CHECKPOINT;", db);
-            let exec = guard
-                .as_ref()
-                .expect("checkpoint connection initialized")
-                .execute_batch(&sql)
-                .map_err(|e| anyhow!(e.to_string()));
+            let sql = format!("USE {db}; CHECKPOINT;");
+            let exec = if let Some(conn) = guard.as_ref() {
+                conn.execute_batch(&sql).map_err(|e| anyhow!(e.to_string()))
+            } else {
+                Err(anyhow!("checkpoint connection initialization failed"))
+            };
             if let Err(err) = exec {
                 // Recreate connection on next attempt.
                 *guard = None;

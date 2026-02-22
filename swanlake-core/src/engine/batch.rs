@@ -30,7 +30,10 @@ fn has_positional_field_names(batch: &RecordBatch) -> bool {
             base = Some(value);
         }
 
-        let expected = base.unwrap() + idx;
+        let expected = match base {
+            Some(base_value) => base_value + idx,
+            None => return false,
+        };
         if value != expected {
             return false;
         }
@@ -54,8 +57,7 @@ fn reshape_batch_for_multi_row_insert(
 
     if !total_params.is_multiple_of(num_columns) {
         return Err(ServerError::Internal(format!(
-            "Cannot reshape batch: {} total parameters is not divisible by {} columns",
-            total_params, num_columns
+            "Cannot reshape batch: {total_params} total parameters is not divisible by {num_columns} columns"
         )));
     }
 
@@ -136,7 +138,7 @@ fn build_lookup(
             }
         } else {
             // Map each column name to its actual position in the batch schema
-            for name in names.iter() {
+            for name in names {
                 let batch_idx = batch.schema().index_of(name).map_err(|_| {
                     ServerError::Internal(format!(
                         "Column '{}' not found in batch schema {}",

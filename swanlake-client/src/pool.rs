@@ -37,9 +37,9 @@ impl PoolConfig {
         }
         if self.min_idle > self.max_size {
             return Err(anyhow!(
-                "PoolConfig.min_idle ({}) exceeds max_size ({})",
-                self.min_idle,
-                self.max_size
+                "PoolConfig.min_idle ({min_idle}) exceeds max_size ({max_size})",
+                min_idle = self.min_idle,
+                max_size = self.max_size
             ));
         }
         Ok(())
@@ -122,7 +122,7 @@ impl PoolInner {
             let mut state = inner
                 .state
                 .lock()
-                .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {}", e))?;
+                .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {e}"))?;
             for conn in warm {
                 inner.total.fetch_add(1, Ordering::SeqCst);
                 state.idle.push(IdleConnection {
@@ -147,7 +147,7 @@ impl PoolInner {
         let mut state = self
             .state
             .lock()
-            .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {e}"))?;
 
         loop {
             self.evict_idle_locked(&mut state);
@@ -172,22 +172,22 @@ impl PoolInner {
             let now = Instant::now();
             if now >= deadline {
                 return Err(anyhow!(
-                    "timed out waiting for pool connection (max_size={}, acquire_timeout_ms={})",
-                    self.config.max_size,
-                    self.config.acquire_timeout_ms
+                    "timed out waiting for pool connection (max_size={max_size}, acquire_timeout_ms={acquire_timeout_ms})",
+                    max_size = self.config.max_size,
+                    acquire_timeout_ms = self.config.acquire_timeout_ms
                 ));
             }
             let remaining = deadline.saturating_duration_since(now);
             let (guard, wait_result) = self
                 .condvar
                 .wait_timeout(state, remaining)
-                .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {}", e))?;
+                .map_err(|e| anyhow!("Flight SQL pool mutex poisoned: {e}"))?;
             state = guard;
             if wait_result.timed_out() {
                 return Err(anyhow!(
-                    "timed out waiting for pool connection (max_size={}, acquire_timeout_ms={})",
-                    self.config.max_size,
-                    self.config.acquire_timeout_ms
+                    "timed out waiting for pool connection (max_size={max_size}, acquire_timeout_ms={acquire_timeout_ms})",
+                    max_size = self.config.max_size,
+                    acquire_timeout_ms = self.config.acquire_timeout_ms
                 ));
             }
         }
@@ -254,8 +254,10 @@ impl PooledConnection {
     }
 
     /// Get mutable access to the underlying managed connection.
-    pub fn connection(&mut self) -> &mut ManagedConnection {
-        self.conn.as_mut().expect("pooled connection missing")
+    pub fn connection(&mut self) -> Result<&mut ManagedConnection> {
+        self.conn
+            .as_mut()
+            .ok_or_else(|| anyhow!("pooled connection missing"))
     }
 
     fn mark_error(&mut self) {
@@ -283,17 +285,17 @@ pub struct SessionHandle {
 impl SessionHandle {
     /// Execute a SQL query within this session.
     pub fn query(&mut self, sql: &str) -> Result<QueryResult> {
-        execute_query(self.pooled.connection(), sql)
+        execute_query(self.pooled.connection()?, sql)
     }
 
     /// Execute an update/DDL statement within this session.
     pub fn update(&mut self, sql: &str) -> Result<UpdateResult> {
-        execute_update(self.pooled.connection(), sql)
+        execute_update(self.pooled.connection()?, sql)
     }
 
     /// Prepare a query tied to this session.
     pub fn prepare_query<'a>(&'a mut self, sql: &str) -> Result<PreparedQuery<'a>> {
-        let mut stmt = self.pooled.connection().new_statement()?;
+        let mut stmt = self.pooled.connection()?.new_statement()?;
         stmt.set_sql_query(sql)?;
         stmt.prepare()?;
         Ok(PreparedQuery {
@@ -304,21 +306,21 @@ impl SessionHandle {
 
     /// Begin a transaction by disabling autocommit.
     pub fn begin_transaction(&mut self) -> Result<()> {
-        begin_transaction(self.pooled.connection())
+        begin_transaction(self.pooled.connection()?)
     }
 
     /// Commit the active transaction and re-enable autocommit.
     pub fn commit(&mut self) -> Result<()> {
-        commit_transaction(self.pooled.connection())
+        commit_transaction(self.pooled.connection()?)
     }
 
     /// Roll back the active transaction and re-enable autocommit.
     pub fn rollback(&mut self) -> Result<()> {
-        rollback_transaction(self.pooled.connection())
+        rollback_transaction(self.pooled.connection()?)
     }
 
     /// Get mutable access to the underlying managed connection.
-    pub fn connection(&mut self) -> &mut ManagedConnection {
+    pub fn connection(&mut self) -> Result<&mut ManagedConnection> {
         self.pooled.connection()
     }
 }
@@ -438,15 +440,15 @@ impl FlightSQLPool {
         loop {
             attempt += 1;
             let result = match &params {
-                Some(batch) => execute_query_with_params(pooled.connection(), sql, batch.clone()),
-                None => execute_query(pooled.connection(), sql),
+                Some(batch) => execute_query_with_params(pooled.connection()?, sql, batch.clone()),
+                None => execute_query(pooled.connection()?, sql),
             };
 
             match result {
                 Ok(result) => return Ok(result),
                 Err(err) => {
                     if retry_enabled && attempt == 1 {
-                        let healthy = self.inner.healthcheck(pooled.connection());
+                        let healthy = self.inner.healthcheck(pooled.connection()?);
                         if !healthy {
                             if let Some(conn) = pooled.take() {
                                 self.inner.drop_connection(conn);
@@ -474,8 +476,8 @@ impl FlightSQLPool {
 
         let mut pooled = self.acquire()?;
         let result = match batch {
-            Some(batch) => execute_update_with_batch(pooled.connection(), sql, batch),
-            None => execute_update(pooled.connection(), sql),
+            Some(batch) => execute_update_with_batch(pooled.connection()?, sql, batch),
+            None => execute_update(pooled.connection()?, sql),
         };
         match result {
             Ok(result) => Ok(result),

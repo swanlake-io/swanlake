@@ -10,6 +10,8 @@ use comfy_table::{
 };
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use std::fmt;
+use std::io::{self, Write};
 use std::time::Instant;
 use swanlake_client::FlightSQLClient;
 
@@ -45,10 +47,13 @@ fn main() -> Result<()> {
         .init();
 
     // Connect to server
-    println!("Connecting to SwanLake at {}...", args.endpoint);
+    outln(format_args!(
+        "Connecting to SwanLake at {}...",
+        args.endpoint
+    ))?;
     let mut client =
         FlightSQLClient::connect(&args.endpoint).context("Failed to connect to SwanLake server")?;
-    println!("Connected successfully!\n");
+    outln(format_args!("Connected successfully!\n"))?;
 
     // Execute query or start interactive mode
     if let Some(query) = args.query {
@@ -61,9 +66,11 @@ fn main() -> Result<()> {
 }
 
 fn interactive_mode(client: &mut FlightSQLClient, debug: bool) -> Result<()> {
-    println!("SwanLake Interactive SQL Shell");
-    println!("Type your SQL queries and press Enter. Type 'exit' or 'quit' to exit.");
-    println!("Press Ctrl-C twice to exit.\n");
+    outln(format_args!("SwanLake Interactive SQL Shell"))?;
+    outln(format_args!(
+        "Type your SQL queries and press Enter. Type 'exit' or 'quit' to exit."
+    ))?;
+    outln(format_args!("Press Ctrl-C twice to exit.\n"))?;
 
     let mut rl = DefaultEditor::new()?;
     let history_file = dirs::home_dir()
@@ -98,35 +105,35 @@ fn interactive_mode(client: &mut FlightSQLClient, debug: bool) -> Result<()> {
 
                 // Check for exit commands
                 if query.eq_ignore_ascii_case("exit") || query.eq_ignore_ascii_case("quit") {
-                    println!("Goodbye!");
+                    outln(format_args!("Goodbye!"))?;
                     break;
                 }
 
                 // Execute query
                 if let Err(e) = execute_and_display(client, query) {
-                    eprintln!("Error: {}", e);
+                    errln(format_args!("Error: {e}"))?;
                     if debug {
-                        eprintln!("Details: {:?}", e);
+                        errln(format_args!("Details: {e:?}"))?;
                     }
                 }
-                println!();
+                outln(format_args!(""))?;
             }
             Err(ReadlineError::Interrupted) => {
                 interrupt_count += 1;
                 if interrupt_count >= 2 {
-                    println!("\nGoodbye!");
+                    outln(format_args!("\nGoodbye!"))?;
                     break;
                 } else {
-                    println!("^C (press Ctrl-C again to exit)");
+                    outln(format_args!("^C (press Ctrl-C again to exit)"))?;
                     continue;
                 }
             }
             Err(ReadlineError::Eof) => {
-                println!("Goodbye!");
+                outln(format_args!("Goodbye!"))?;
                 break;
             }
             Err(err) => {
-                eprintln!("Error reading input: {}", err);
+                errln(format_args!("Error reading input: {err}"))?;
                 break;
             }
         }
@@ -151,28 +158,32 @@ fn execute_and_display(client: &mut FlightSQLClient, query: &str) -> Result<()> 
         let elapsed = start.elapsed();
 
         if result.is_empty() {
-            println!("(No rows returned)");
+            outln(format_args!("(No rows returned)"))?;
         } else {
             display_results(&result.batches)?;
         }
 
-        println!(
+        outln(format_args!(
             "{} row{} in {:.3}s",
             result.total_rows,
             if result.total_rows == 1 { "" } else { "s" },
             elapsed.as_secs_f64()
-        );
+        ))?;
     } else {
         let result = client.update(query)?;
         let elapsed = start.elapsed();
 
         if let Some(rows) = result.rows_affected {
-            println!("{} row{} affected", rows, if rows == 1 { "" } else { "s" });
+            outln(format_args!(
+                "{} row{} affected",
+                rows,
+                if rows == 1 { "" } else { "s" }
+            ))?;
         } else {
-            println!("Query executed successfully");
+            outln(format_args!("Query executed successfully"))?;
         }
 
-        println!("{:.3}s", elapsed.as_secs_f64());
+        outln(format_args!("{:.3}s", elapsed.as_secs_f64()))?;
     }
 
     Ok(())
@@ -241,10 +252,20 @@ fn display_results(batches: &[RecordBatch]) -> Result<()> {
         }
     }
 
-    println!("{}", table);
+    outln(format_args!("{table}"))?;
     Ok(())
 }
 
 fn format_cell_value(column: &dyn Array, row_idx: usize) -> Result<String> {
     array_value_to_string(column, row_idx).map_err(Into::into)
+}
+
+fn outln(args: fmt::Arguments<'_>) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{args}")
+}
+
+fn errln(args: fmt::Arguments<'_>) -> io::Result<()> {
+    let mut stderr = io::stderr().lock();
+    writeln!(stderr, "{args}")
 }

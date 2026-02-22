@@ -23,7 +23,7 @@ impl CachedDriver {
         let mut driver = self
             .driver
             .lock()
-            .map_err(|e| anyhow!("Flight SQL driver mutex poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Flight SQL driver mutex poisoned: {e}"))?;
         let database = driver
             .new_database_with_opts([(OptionDatabase::Uri, OptionValue::from(endpoint))])
             .with_context(|| "failed to create database handle")?;
@@ -48,6 +48,6 @@ pub(crate) fn get_cached_driver() -> Result<Arc<CachedDriver>> {
         .map(|driver| Arc::new(CachedDriver::new(driver)))
     }) {
         Ok(driver) => Ok(driver.clone()),
-        Err(e) => Err(anyhow!("failed to load Flight SQL driver: {}", e)),
+        Err(e) => Err(anyhow!("failed to load Flight SQL driver: {e}")),
     }
 }
