@@ -3,6 +3,7 @@ use anyhow::Result;
 
 pub mod appender_insert;
 pub mod execute_query_commands;
+pub mod metadata_discovery;
 pub mod parameter_types;
 pub mod prepared_statements;
 pub mod transaction_recovery;
@@ -12,6 +13,7 @@ pub fn run_all(args: &CliArgs) -> Result<()> {
     execute_query_commands::run_execute_query_commands(args)?;
     prepared_statements::run_prepared_statements(args)?;
     appender_insert::run(args)?;
+    metadata_discovery::run_metadata_discovery(args)?;
     transaction_recovery::run_transaction_recovery(args)?;
     Ok(())
 }

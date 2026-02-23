@@ -79,3 +79,20 @@ impl Drop for PostgresLock {
         // Dropping the client closes the connection, which releases the advisory lock.
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::PostgresLock;
+
+    #[test]
+    fn path_to_lock_key_is_deterministic_and_path_sensitive() {
+        let first = PostgresLock::path_to_lock_key(Path::new("/ducklake/checkpoint/swanlake"));
+        let second = PostgresLock::path_to_lock_key(Path::new("/ducklake/checkpoint/swanlake"));
+        let other = PostgresLock::path_to_lock_key(Path::new("/ducklake/checkpoint/other"));
+
+        assert_eq!(first, second);
+        assert_ne!(first, other);
+    }
+}

@@ -251,3 +251,79 @@ async fn ensure_checkpoint_table() -> Result<()> {
         .context("creating ducklake_checkpoints table")?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use anyhow::{anyhow, Result};
+
+    use super::*;
+
+    #[test]
+    fn parse_checkpoint_databases_filters_empty_entries() {
+        let parsed = parse_checkpoint_databases(Some(" swanlake, ,analytics,, logs "));
+        assert_eq!(
+            parsed,
+            vec![
+                "swanlake".to_string(),
+                "analytics".to_string(),
+                "logs".to_string()
+            ]
+        );
+        assert!(parse_checkpoint_databases(None).is_empty());
+        assert!(parse_checkpoint_databases(Some(" , , ")).is_empty());
+    }
+
+    #[test]
+    fn checkpoint_config_from_server_config_uses_defaults() -> Result<()> {
+        let config = ServerConfig {
+            checkpoint_databases: Some("swanlake,analytics".to_string()),
+            checkpoint_interval_hours: None,
+            checkpoint_poll_seconds: None,
+            ..ServerConfig::default()
+        };
+
+        let checkpoint = CheckpointConfig::from_server_config(&config)
+            .ok_or_else(|| anyhow!("expected checkpoint config for non-empty database list"))?;
+        assert_eq!(
+            checkpoint.databases(),
+            &vec!["swanlake".to_string(), "analytics".to_string()]
+        );
+        assert_eq!(checkpoint.interval(), Duration::from_secs(24 * 3600));
+        assert_eq!(checkpoint.tick(), Duration::from_secs(CHECK_TICK_SECS));
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_config_returns_none_without_databases() {
+        let config = ServerConfig {
+            checkpoint_databases: None,
+            ..ServerConfig::default()
+        };
+        assert!(CheckpointConfig::from_server_config(&config).is_none());
+    }
+
+    #[tokio::test]
+    async fn run_checkpoint_clears_cached_connection_after_failure() -> Result<()> {
+        let config = ServerConfig::default();
+        let factory = Arc::new(EngineFactory::new(&config).map_err(|e| anyhow!(e.to_string()))?);
+        let checkpoint = CheckpointConfig {
+            databases: vec!["missing_catalog".to_string()],
+            interval: Duration::from_secs(1),
+            tick: Duration::from_secs(1),
+        };
+        let service = CheckpointService::new(checkpoint, factory);
+
+        let result = service.run_checkpoint("missing_catalog").await;
+        assert!(result.is_err());
+
+        let guard = service
+            .checkpoint_conn
+            .lock()
+            .map_err(|_| anyhow!("checkpoint connection mutex poisoned"))?;
+        assert!(guard.is_none());
+        Ok(())
+    }
+}

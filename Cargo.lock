@@ -3784,15 +3784,19 @@ dependencies = [
 name = "swanlake-runner"
 version = "0.1.0"
 dependencies = [
+ "adbc_core",
  "anyhow",
  "arrow",
  "arrow-array",
  "arrow-buffer",
+ "arrow-flight",
  "arrow-schema",
  "chrono",
+ "futures",
  "hex",
  "swanlake-client",
  "tokio",
+ "tonic",
  "tracing",
  "tracing-subscriber",
 ]

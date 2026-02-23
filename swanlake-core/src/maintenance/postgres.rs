@@ -178,3 +178,75 @@ pub(super) async fn connect_client() -> Result<Client> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssl_mode_parser_handles_supported_and_unknown_values() {
+        assert!(matches!(PgSslMode::from_str("disable"), PgSslMode::Disable));
+        assert!(matches!(PgSslMode::from_str("prefer"), PgSslMode::Prefer));
+        assert!(matches!(PgSslMode::from_str("require"), PgSslMode::Require));
+        assert!(matches!(
+            PgSslMode::from_str("verify-ca"),
+            PgSslMode::VerifyCa
+        ));
+        assert!(matches!(
+            PgSslMode::from_str("verify-full"),
+            PgSslMode::VerifyFull
+        ));
+        assert!(matches!(
+            PgSslMode::from_str("unknown-value"),
+            PgSslMode::Disable
+        ));
+    }
+
+    #[test]
+    fn tls_config_builder_maps_modes_to_expected_variants() -> Result<()> {
+        let disable = build_tls_config(PgSslMode::Disable)?;
+        assert!(matches!(disable, TlsConfig::None));
+
+        let prefer = build_tls_config(PgSslMode::Prefer)?;
+        assert!(matches!(prefer, TlsConfig::Prefer(_)));
+
+        let require = build_tls_config(PgSslMode::Require)?;
+        assert!(matches!(require, TlsConfig::Enforced(_)));
+
+        let verify_ca = build_tls_config(PgSslMode::VerifyCa)?;
+        assert!(matches!(verify_ca, TlsConfig::Enforced(_)));
+
+        let verify_full = build_tls_config(PgSslMode::VerifyFull)?;
+        assert!(matches!(verify_full, TlsConfig::Enforced(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn tls_connector_builder_rejects_disable_mode() {
+        let disabled = build_tls_connector(PgSslMode::Disable);
+        assert!(disabled.is_err());
+    }
+
+    #[test]
+    fn tls_config_debug_representation_is_redacted() -> Result<()> {
+        let none = format!("{:?}", TlsConfig::None);
+        assert_eq!(none, "TlsConfig::None");
+
+        let prefer = format!("{:?}", build_tls_config(PgSslMode::Prefer)?);
+        assert_eq!(prefer, "TlsConfig::Prefer(..)");
+
+        let enforced = format!("{:?}", build_tls_config(PgSslMode::Require)?);
+        assert_eq!(enforced, "TlsConfig::Enforced(..)");
+        Ok(())
+    }
+
+    #[test]
+    fn pg_config_from_env_creates_connection_string() {
+        let cfg = PgConfig::from_env();
+        assert!(cfg.connection_string.contains("host="));
+        assert!(cfg.connection_string.contains("port="));
+        assert!(cfg.connection_string.contains("user="));
+        assert!(cfg.connection_string.contains("dbname="));
+    }
+}
