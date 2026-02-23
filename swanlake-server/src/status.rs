@@ -95,3 +95,86 @@ fn normalize_prefix(prefix: &str) -> String {
 }
 
 const STATUS_PAGE: &str = include_str!("status.html");
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use anyhow::{anyhow, Result};
+    use axum::extract::State;
+
+    use super::*;
+    use swanlake_core::engine::EngineFactory;
+
+    fn build_registry(max_sessions: usize, timeout_secs: u64) -> Result<Arc<SessionRegistry>> {
+        let config = ServerConfig {
+            max_sessions: Some(max_sessions),
+            session_timeout_seconds: Some(timeout_secs),
+            ..ServerConfig::default()
+        };
+        let factory = Arc::new(EngineFactory::new(&config).map_err(|e| anyhow!(e.to_string()))?);
+        let registry =
+            SessionRegistry::new(&config, factory).map_err(|e| anyhow!(e.to_string()))?;
+        Ok(Arc::new(registry))
+    }
+
+    #[test]
+    fn normalize_prefix_handles_empty_and_non_empty_inputs() {
+        assert_eq!(normalize_prefix(""), "");
+        assert_eq!(normalize_prefix("/"), "");
+        assert_eq!(normalize_prefix("status"), "/status");
+        assert_eq!(normalize_prefix("/status/"), "/status");
+    }
+
+    #[tokio::test]
+    async fn status_page_returns_embedded_html() {
+        let page = status_page().await;
+        assert!(page.0.contains("<html"));
+    }
+
+    #[tokio::test]
+    async fn status_json_returns_metrics_and_session_snapshots() -> Result<()> {
+        let metrics = Arc::new(Metrics::new(128, 32));
+        let registry = build_registry(7, 600)?;
+        let state = StatusState { metrics, registry };
+
+        let Json(payload) = status_json(State(state)).await;
+        assert!(payload.generated_at_ms > 0);
+        assert_eq!(payload.metrics.slow_query_threshold_ms, 128);
+        assert_eq!(payload.metrics.history_size, 32);
+        assert_eq!(payload.sessions.max_sessions, 7);
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_status_server_is_noop_when_disabled() -> Result<()> {
+        let config = ServerConfig {
+            status_enabled: false,
+            status_host: "not-a-valid-host:".to_string(),
+            ..ServerConfig::default()
+        };
+        let metrics = Arc::new(Metrics::new(32, 8));
+        let registry = build_registry(2, 60)?;
+        spawn_status_server(&config, metrics, registry)?;
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_status_server_validates_bind_address_when_enabled() -> Result<()> {
+        let config = ServerConfig {
+            status_enabled: true,
+            status_host: "invalid host".to_string(),
+            status_port: 9999,
+            ..ServerConfig::default()
+        };
+        let metrics = Arc::new(Metrics::new(32, 8));
+        let registry = build_registry(2, 60)?;
+        let err = spawn_status_server(&config, metrics, registry)
+            .err()
+            .ok_or_else(|| anyhow!("expected invalid bind address error"))?;
+        assert!(err
+            .to_string()
+            .contains("invalid status server bind address"));
+        Ok(())
+    }
+}

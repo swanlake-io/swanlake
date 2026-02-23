@@ -1,0 +1,33 @@
+# name: tests/sql/metadata_visibility.test
+# description: verify metadata visibility for user-created table and view
+# group: [sql]
+
+statement ok
+DROP VIEW IF EXISTS metadata_sql_view
+
+statement ok
+DROP TABLE IF EXISTS metadata_sql_table
+
+statement ok
+CREATE TABLE metadata_sql_table (id INTEGER, name VARCHAR)
+
+statement ok
+INSERT INTO metadata_sql_table VALUES (1, 'one'), (2, 'two')
+
+statement ok
+CREATE VIEW metadata_sql_view AS SELECT id, name FROM metadata_sql_table
+
+query TT
+SELECT table_name, table_type
+FROM information_schema.tables
+WHERE table_name IN ('metadata_sql_table', 'metadata_sql_view')
+ORDER BY table_name
+----
+metadata_sql_table	BASE TABLE
+metadata_sql_view	VIEW
+
+statement ok
+DROP VIEW metadata_sql_view
+
+statement ok
+DROP TABLE metadata_sql_table

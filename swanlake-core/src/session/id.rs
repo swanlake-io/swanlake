@@ -152,3 +152,54 @@ impl Default for StatementHandleGenerator {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_id_conversions_and_formatting_work() {
+        let custom = SessionId::from_string("session-123".to_string());
+        assert_eq!(custom.as_ref(), "session-123");
+        assert_eq!(custom.to_string(), "session-123");
+
+        let from_impl: SessionId = "other-session".to_string().into();
+        assert_eq!(from_impl.as_ref(), "other-session");
+
+        let generated = SessionId::new();
+        assert!(!generated.as_ref().is_empty());
+    }
+
+    #[test]
+    fn statement_and_transaction_ids_round_trip_bytes() {
+        let statement = StatementHandle::new(42);
+        let bytes = statement.to_bytes();
+        assert_eq!(bytes.len(), StatementHandle::BYTE_LEN);
+        let decoded_statement = StatementHandle::from_bytes(&bytes);
+        assert_eq!(decoded_statement.map(|id| id.id()), Some(42));
+
+        let transaction = TransactionId::new(99);
+        let tx_bytes = transaction.to_bytes();
+        assert_eq!(tx_bytes.len(), TransactionId::BYTE_LEN);
+        let decoded_transaction = TransactionId::from_bytes(&tx_bytes);
+        assert_eq!(decoded_transaction.map(|id| id.id()), Some(99));
+
+        assert!(StatementHandle::from_bytes(&[1, 2, 3]).is_none());
+        assert!(TransactionId::from_bytes(&[1, 2, 3]).is_none());
+    }
+
+    #[test]
+    fn id_generators_increment_monotonically() {
+        let statement_gen = StatementHandleGenerator::new();
+        let first_statement = statement_gen.next();
+        let second_statement = statement_gen.next();
+        assert_eq!(first_statement.id(), 1);
+        assert_eq!(second_statement.id(), 2);
+
+        let tx_gen = TransactionIdGenerator::new();
+        let first_tx = tx_gen.next();
+        let second_tx = tx_gen.next();
+        assert_eq!(first_tx.id(), 1);
+        assert_eq!(second_tx.id(), 2);
+    }
+}

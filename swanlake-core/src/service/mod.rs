@@ -149,3 +149,177 @@ impl SwanFlightSqlService {
         Box::pin(stream::iter(batches.into_iter().map(Ok)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use anyhow::{anyhow, Result};
+    use arrow_flight::error::FlightError;
+    use arrow_flight::FlightData;
+    use futures::StreamExt;
+    use tonic::transport::server::TcpConnectInfo;
+    use tonic::{Code, Request, Status};
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::config::{ServerConfig, SessionIdMode};
+    use crate::engine::EngineFactory;
+
+    fn test_service(mode: SessionIdMode) -> Result<SwanFlightSqlService> {
+        let config = ServerConfig {
+            session_id_mode: mode.clone(),
+            ..ServerConfig::default()
+        };
+        let factory = Arc::new(EngineFactory::new_for_tests(&config));
+        let registry =
+            Arc::new(SessionRegistry::new(&config, factory).map_err(|e| anyhow!(e.to_string()))?);
+        let metrics = Arc::new(Metrics::new(1_000, 64));
+        Ok(SwanFlightSqlService::new(registry, metrics, mode))
+    }
+
+    #[test]
+    fn extract_session_id_uses_peer_addr_and_peer_ip_modes() -> Result<()> {
+        let addr = "127.10.20.30:4321"
+            .parse()
+            .map_err(|e| anyhow!("failed to parse socket addr: {e}"))?;
+        let mut request = Request::new(());
+        request.extensions_mut().insert(TcpConnectInfo {
+            local_addr: None,
+            remote_addr: Some(addr),
+        });
+
+        let peer_addr_service = test_service(SessionIdMode::PeerAddr)?;
+        let peer_addr_id = peer_addr_service.extract_session_id(&request);
+        assert_eq!(peer_addr_id.as_ref(), "127.10.20.30:4321");
+
+        let peer_ip_service = test_service(SessionIdMode::PeerIp)?;
+        let peer_ip_id = peer_ip_service.extract_session_id(&request);
+        assert_eq!(peer_ip_id.as_ref(), "127.10.20.30");
+
+        let fallback_request = Request::new(());
+        let fallback_id = peer_ip_service.extract_session_id(&fallback_request);
+        assert!(Uuid::parse_str(fallback_id.as_ref()).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn status_from_error_maps_expected_codes() -> Result<()> {
+        let conn = duckdb::Connection::open_in_memory()?;
+        let duck_error = match conn.execute_batch("SELECT * FROM __missing_table__") {
+            Ok(()) => return Err(anyhow!("expected missing-table query to fail")),
+            Err(err) => err,
+        };
+        let duck_status = SwanFlightSqlService::status_from_error(ServerError::DuckDb(duck_error));
+        assert_eq!(duck_status.code(), Code::Internal);
+
+        let arrow_status = SwanFlightSqlService::status_from_error(ServerError::Arrow(
+            arrow_schema::ArrowError::ParseError("bad".to_string()),
+        ));
+        assert_eq!(arrow_status.code(), Code::Internal);
+
+        assert_eq!(
+            SwanFlightSqlService::status_from_error(ServerError::TransactionAborted).code(),
+            Code::FailedPrecondition
+        );
+        assert_eq!(
+            SwanFlightSqlService::status_from_error(ServerError::TransactionNotFound).code(),
+            Code::InvalidArgument
+        );
+        assert_eq!(
+            SwanFlightSqlService::status_from_error(ServerError::PreparedStatementNotFound).code(),
+            Code::InvalidArgument
+        );
+        assert_eq!(
+            SwanFlightSqlService::status_from_error(ServerError::MaxSessionsReached).code(),
+            Code::ResourceExhausted
+        );
+        assert_eq!(
+            SwanFlightSqlService::status_from_error(ServerError::UnsupportedParameter(
+                "x".to_string()
+            ))
+            .code(),
+            Code::InvalidArgument
+        );
+        assert_eq!(
+            SwanFlightSqlService::status_from_error(ServerError::Internal("x".to_string())).code(),
+            Code::Internal
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn status_from_join_handles_panic_and_cancellation() -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        let panic_join = runtime.block_on(async {
+            tokio::task::spawn_blocking(|| {
+                let values = [1_u8];
+                let idx = values.len();
+                let _ = values[idx];
+            })
+            .await
+        });
+        let panic_error = match panic_join {
+            Ok(()) => return Err(anyhow!("expected panicking task to return JoinError")),
+            Err(err) => err,
+        };
+        let panic_status = SwanFlightSqlService::status_from_join(panic_error);
+        assert_eq!(panic_status.code(), Code::Internal);
+        assert!(panic_status.message().contains("panicked"));
+
+        let cancelled_join = runtime.block_on(async {
+            let handle = tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            });
+            handle.abort();
+            handle.await
+        });
+        let cancelled_error = match cancelled_join {
+            Ok(()) => return Err(anyhow!("expected cancelled task to return JoinError")),
+            Err(err) => err,
+        };
+        let cancelled_status = SwanFlightSqlService::status_from_join(cancelled_error);
+        assert_eq!(cancelled_status.code(), Code::Internal);
+        assert!(cancelled_status.message().contains("cancelled"));
+        Ok(())
+    }
+
+    #[test]
+    fn status_from_flight_error_preserves_tonic_status() {
+        let tonic_status = Status::permission_denied("denied");
+        let mapped =
+            SwanFlightSqlService::status_from_flight_error(FlightError::from(tonic_status.clone()));
+        assert_eq!(mapped.code(), Code::PermissionDenied);
+        assert_eq!(mapped.message(), tonic_status.message());
+
+        let decode_status = SwanFlightSqlService::status_from_flight_error(
+            FlightError::DecodeError("bad payload".to_string()),
+        );
+        assert_eq!(decode_status.code(), Code::Internal);
+        assert!(decode_status.message().contains("decode"));
+    }
+
+    #[test]
+    fn into_stream_yields_all_batches() {
+        let mut stream = SwanFlightSqlService::into_stream(vec![
+            FlightData::default(),
+            FlightData::default(),
+            FlightData::default(),
+        ]);
+
+        let emitted = futures::executor::block_on(async {
+            let mut count = 0usize;
+            while let Some(item) = stream.next().await {
+                assert!(item.is_ok());
+                count += 1;
+            }
+            count
+        });
+
+        assert_eq!(emitted, 3);
+    }
+}

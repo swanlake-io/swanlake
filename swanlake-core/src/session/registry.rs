@@ -225,3 +225,158 @@ impl SessionRegistry {
         Ok(session)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use anyhow::{anyhow, Result};
+
+    use super::*;
+
+    fn build_registry(
+        max_sessions: usize,
+        timeout_secs: u64,
+    ) -> Result<(SessionRegistry, Arc<EngineFactory>)> {
+        let config = ServerConfig {
+            max_sessions: Some(max_sessions),
+            session_timeout_seconds: Some(timeout_secs),
+            ..ServerConfig::default()
+        };
+        let factory = Arc::new(EngineFactory::new_for_tests(&config));
+        let registry = SessionRegistry::new(&config, Arc::clone(&factory))
+            .map_err(|e| anyhow!(e.to_string()))?;
+        Ok((registry, factory))
+    }
+
+    #[test]
+    fn snapshot_for_empty_registry_reports_zero_idle_times() -> Result<()> {
+        let (registry, _) = build_registry(3, 60)?;
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.total_sessions, 0);
+        assert_eq!(snapshot.max_sessions, 3);
+        assert_eq!(snapshot.session_timeout_seconds, 60);
+        assert_eq!(snapshot.oldest_idle_ms, 0);
+        assert_eq!(snapshot.average_idle_ms, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn engine_factory_accessor_returns_registry_factory() -> Result<()> {
+        let (registry, factory) = build_registry(3, 60)?;
+        let exposed = registry.engine_factory();
+        assert!(Arc::ptr_eq(&factory, &exposed));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_or_create_reuses_existing_session_for_same_id() -> Result<()> {
+        let (registry, _) = build_registry(8, 60)?;
+        let session_id = SessionId::from_string("peer:reuse".to_string());
+
+        let first = registry
+            .get_or_create_by_id(&session_id)
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?;
+        let second = registry
+            .get_or_create_by_id(&session_id)
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(registry.snapshot().total_sessions, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_or_create_returns_max_sessions_error_when_limit_is_reached() -> Result<()> {
+        let (registry, _) = build_registry(1, 60)?;
+        let first = SessionId::from_string("peer:first".to_string());
+        let second = SessionId::from_string("peer:second".to_string());
+
+        let created = registry.get_or_create_by_id(&first).await;
+        assert!(created.is_ok());
+
+        let err = registry
+            .get_or_create_by_id(&second)
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("expected max-sessions error for second session"))?;
+        assert!(matches!(err, ServerError::MaxSessionsReached));
+        assert_eq!(registry.snapshot().total_sessions, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_idle_sessions_removes_only_stale_sessions() -> Result<()> {
+        let (registry, _) = build_registry(4, 5)?;
+        let stale_id = SessionId::from_string("peer:stale".to_string());
+        let fresh_id = SessionId::from_string("peer:fresh".to_string());
+
+        registry
+            .get_or_create_by_id(&stale_id)
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?;
+        registry
+            .get_or_create_by_id(&fresh_id)
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        {
+            let mut inner = registry
+                .inner
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let stale = inner
+                .sessions
+                .get_mut(&stale_id)
+                .ok_or_else(|| anyhow!("missing stale session"))?;
+            let mut last_activity = stale
+                .session
+                .last_activity
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *last_activity = Instant::now() - Duration::from_secs(20);
+        }
+
+        let removed = registry.cleanup_idle_sessions();
+        assert_eq!(removed, 1);
+
+        let inner = registry
+            .inner
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(!inner.sessions.contains_key(&stale_id));
+        assert!(inner.sessions.contains_key(&fresh_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_id_creation_returns_single_session_instance() -> Result<()> {
+        let (registry, _) = build_registry(4, 60)?;
+        let session_id = SessionId::from_string("peer:concurrent".to_string());
+
+        let left_registry = registry.clone();
+        let right_registry = registry.clone();
+        let left_id = session_id.clone();
+        let right_id = session_id.clone();
+
+        let left = tokio::spawn(async move { left_registry.get_or_create_by_id(&left_id).await });
+        let right =
+            tokio::spawn(async move { right_registry.get_or_create_by_id(&right_id).await });
+
+        let left_session = left
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?
+            .map_err(|e| anyhow!(e.to_string()))?;
+        let right_session = right
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        assert!(Arc::ptr_eq(&left_session, &right_session));
+        assert_eq!(registry.snapshot().total_sessions, 1);
+        Ok(())
+    }
+}

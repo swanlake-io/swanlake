@@ -8,14 +8,18 @@ name = "runner"
 path = "src/main.rs"
 
 [dependencies]
+adbc_core = "0.22"
 anyhow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
+arrow-flight = { workspace = true, features = ["flight-sql"] }
 arrow-schema = { workspace = true }
 arrow = { workspace = true, features = ["prettyprint"] }
 chrono = "0.4"
+futures = "0.3"
 swanlake-client = { path = "../../swanlake-client" }
 tokio = { workspace = true }
+tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 hex = "0.4"

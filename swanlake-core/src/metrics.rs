@@ -543,3 +543,207 @@ fn now_millis() -> u64 {
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_millis() as u64
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn metrics_defaults_apply_for_zero_values() {
+        let metrics = Metrics::new(0, 0);
+        let snapshot = metrics.snapshot();
+
+        assert_eq!(
+            snapshot.slow_query_threshold_ms,
+            DEFAULT_SLOW_QUERY_THRESHOLD_MS
+        );
+        assert_eq!(snapshot.history_size, DEFAULT_HISTORY_SIZE);
+    }
+
+    #[test]
+    fn in_flight_guards_increment_and_decrement_counts() {
+        let metrics = Metrics::new(100, 8);
+        assert_eq!(metrics.snapshot().in_flight.queries, 0);
+        assert_eq!(metrics.snapshot().in_flight.updates, 0);
+
+        {
+            let _query_guard = metrics.start_query();
+            let _update_guard = metrics.start_update();
+            let snapshot = metrics.snapshot();
+            assert_eq!(snapshot.in_flight.queries, 1);
+            assert_eq!(snapshot.in_flight.updates, 1);
+        }
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.in_flight.queries, 0);
+        assert_eq!(snapshot.in_flight.updates, 0);
+    }
+
+    #[test]
+    fn record_paths_update_totals_and_ring_histories() {
+        let metrics = Metrics::new(10, 2);
+
+        metrics.record_query_success("SELECT 1", Duration::from_millis(5), 1, 16);
+        metrics.record_query_error(
+            "SELECT * FROM t",
+            Duration::from_millis(15),
+            "query failed".to_string(),
+        );
+        metrics.record_query_success(
+            "SELECT * FROM big_table JOIN dim USING (id) ORDER BY id",
+            Duration::from_millis(35),
+            120_000,
+            60 * 1024 * 1024,
+        );
+        metrics.record_update_success(
+            "UPDATE t SET value = 1 WHERE name LIKE '%abc'",
+            Duration::from_millis(20),
+            Some(-1),
+        );
+        metrics.record_update_error(
+            "DELETE FROM t WHERE id = 10",
+            Duration::from_millis(25),
+            "delete failed".to_string(),
+        );
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.totals.queries, 3);
+        assert_eq!(snapshot.totals.updates, 2);
+        assert_eq!(snapshot.totals.errors, 2);
+        assert_eq!(snapshot.totals.slow_queries, 4);
+
+        // history_size=2 caps latency histories and event rings.
+        assert_eq!(snapshot.latency.queries.count, 2);
+        assert_eq!(snapshot.latency.updates.count, 2);
+        assert_eq!(snapshot.recent_errors.len(), 2);
+        assert_eq!(snapshot.slow_queries.len(), 2);
+        assert!(snapshot.slow_query_groups.len() <= 2);
+    }
+
+    #[test]
+    fn summarize_latencies_handles_empty_and_percentiles() {
+        let empty = summarize_latencies(vec![]);
+        assert_eq!(empty.count, 0);
+        assert_eq!(empty.avg_ms, 0);
+        assert_eq!(empty.p50_ms, 0);
+        assert_eq!(empty.max_ms, 0);
+
+        let summary = summarize_latencies(vec![100, 10, 30, 20]);
+        assert_eq!(summary.count, 4);
+        assert_eq!(summary.avg_ms, 40);
+        assert_eq!(summary.p50_ms, 30);
+        assert_eq!(summary.p95_ms, 100);
+        assert_eq!(summary.p99_ms, 100);
+        assert_eq!(summary.max_ms, 100);
+    }
+
+    #[test]
+    fn slow_query_group_summary_aggregates_and_truncates() {
+        let queries = vec![
+            SlowQuery {
+                timestamp_ms: 1,
+                duration_ms: 100,
+                sql: "SELECT 1".to_string(),
+                rows: Some(1),
+                bytes: Some(8),
+                is_query: true,
+                reasons: vec!["A".to_string()],
+            },
+            SlowQuery {
+                timestamp_ms: 3,
+                duration_ms: 50,
+                sql: "SELECT 1".to_string(),
+                rows: Some(1),
+                bytes: Some(8),
+                is_query: true,
+                reasons: vec!["B".to_string()],
+            },
+            SlowQuery {
+                timestamp_ms: 2,
+                duration_ms: 200,
+                sql: "UPDATE t SET v = 1".to_string(),
+                rows: Some(1),
+                bytes: None,
+                is_query: false,
+                reasons: vec!["C".to_string()],
+            },
+        ];
+
+        let grouped = summarize_slow_query_groups(&queries, 10);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].sql, "UPDATE t SET v = 1");
+        assert_eq!(grouped[0].total_ms, 200);
+        assert_eq!(grouped[1].sql, "SELECT 1");
+        assert_eq!(grouped[1].count, 2);
+        assert_eq!(grouped[1].avg_ms, 75);
+        assert_eq!(grouped[1].latest_timestamp_ms, 3);
+
+        let limited = summarize_slow_query_groups(&queries, 1);
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].sql, "UPDATE t SET v = 1");
+    }
+
+    #[test]
+    fn sql_compaction_and_truncation_are_stable() {
+        let compacted = compact_sql("SELECT   *\nFROM   test_table\tWHERE  id = 1");
+        assert_eq!(compacted, "SELECT * FROM test_table WHERE id = 1");
+
+        let exact = truncate_ascii_like("abc".to_string(), 3);
+        assert_eq!(exact, "abc");
+
+        let truncated = truncate_ascii_like("abcdef".to_string(), 3);
+        assert_eq!(truncated, "abc...");
+
+        let long_sql = format!("SELECT {}", "x".repeat(MAX_SQL_LEN + 32));
+        let compacted_long = compact_sql(&long_sql);
+        assert!(compacted_long.ends_with("..."));
+        assert!(compacted_long.chars().count() <= MAX_SQL_LEN + 3);
+    }
+
+    #[test]
+    fn infer_reasons_reports_expected_signals() {
+        let reasons = infer_reasons(
+            "SELECT * FROM t JOIN u ON t.id = u.id WHERE name LIKE '%abc' GROUP BY t.id ORDER BY t.id UNION SELECT * FROM v WINDOW w AS (PARTITION BY id)",
+            false,
+            Some(100_000),
+            Some(50 * 1024 * 1024),
+            4_000,
+            1_000,
+            true,
+        );
+
+        assert!(reasons.contains(&"Large result set".to_string()));
+        assert!(reasons.contains(&"Large payload".to_string()));
+        assert!(reasons.contains(&"Join/aggregation/sort".to_string()));
+        assert!(reasons.contains(&"Wide select".to_string()));
+        assert!(reasons.contains(&"Leading wildcard match".to_string()));
+        assert!(reasons.contains(&"Write-heavy statement".to_string()));
+        assert!(reasons.contains(&"Very long-running".to_string()));
+        assert!(reasons.contains(&"Errored before completion".to_string()));
+
+        let no_reasons = infer_reasons(
+            "SELECT id FROM t WHERE id = 1",
+            true,
+            Some(1),
+            Some(8),
+            100,
+            1_000,
+            false,
+        );
+        assert!(no_reasons.is_empty());
+    }
+
+    #[test]
+    fn push_ring_obeys_capacity_and_now_millis_is_positive() {
+        let mut ring = VecDeque::new();
+        push_ring(&mut ring, 1, 2);
+        push_ring(&mut ring, 2, 2);
+        push_ring(&mut ring, 3, 2);
+        assert_eq!(ring.into_iter().collect::<Vec<_>>(), vec![2, 3]);
+
+        assert!(now_millis() > 0);
+    }
+}

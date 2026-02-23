@@ -261,7 +261,8 @@ pub fn align_batch_to_table_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::Int32Array;
+    use anyhow::{Context, Result};
+    use arrow_array::{Int32Array, Int64Array, StringArray};
     use arrow_schema::DataType;
 
     fn make_batch(names: &[&str]) -> RecordBatch {
@@ -287,5 +288,144 @@ mod tests {
 
         let dollar_prefixed = make_batch(&["$1", "$2", "$3"]);
         assert!(has_positional_field_names(&dollar_prefixed));
+    }
+
+    #[test]
+    fn reshape_batch_transposes_multi_row_parameter_layout() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("1", DataType::Int32, false),
+            Field::new("2", DataType::Int32, false),
+            Field::new("3", DataType::Int32, false),
+            Field::new("4", DataType::Int32, false),
+            Field::new("5", DataType::Int32, false),
+            Field::new("6", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![2])),
+                Arc::new(Int32Array::from(vec![3])),
+                Arc::new(Int32Array::from(vec![4])),
+                Arc::new(Int32Array::from(vec![5])),
+                Arc::new(Int32Array::from(vec![6])),
+            ],
+        )
+        .context("failed to create multi-row source batch")?;
+
+        let reshaped = reshape_batch_for_multi_row_insert(&batch, 2)?;
+        assert_eq!(reshaped.num_columns(), 2);
+        assert_eq!(reshaped.num_rows(), 3);
+
+        let first = reshaped
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .context("expected Int32 in first reshaped column")?;
+        let second = reshaped
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .context("expected Int32 in second reshaped column")?;
+
+        assert_eq!(
+            (0..first.len()).map(|i| first.value(i)).collect::<Vec<_>>(),
+            vec![1, 3, 5]
+        );
+        assert_eq!(
+            (0..second.len())
+                .map(|i| second.value(i))
+                .collect::<Vec<_>>(),
+            vec![2, 4, 6]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn align_batch_casts_types_and_fills_missing_columns() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("age", DataType::Int32, true),
+        ]));
+        let batch_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            batch_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![7])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["alice"])),
+            ],
+        )
+        .context("failed to create alignment source batch")?;
+
+        let aligned = align_batch_to_table_schema(&batch, &table_schema, None)?;
+        assert_eq!(aligned.num_columns(), 3);
+        assert_eq!(aligned.num_rows(), 1);
+
+        let ids = aligned
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .context("expected id column to be cast to Int64")?;
+        assert_eq!(ids.value(0), 7);
+        assert!(aligned.column(2).is_null(0));
+        Ok(())
+    }
+
+    #[test]
+    fn align_batch_empty_input_uses_table_shape() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let empty = RecordBatch::new_empty(Arc::new(Schema::empty()));
+
+        let aligned = align_batch_to_table_schema(&empty, &table_schema, None)?;
+        assert_eq!(aligned.num_columns(), 2);
+        assert_eq!(aligned.num_rows(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn lookup_and_reshape_errors_return_meaningful_messages() -> Result<()> {
+        let batch = make_batch(&["id"]);
+        let table_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+
+        let mismatch = build_lookup(
+            &batch,
+            &table_schema,
+            Some(&["id".to_string(), "name".to_string()]),
+        );
+        assert!(mismatch.is_err());
+        if let Err(ServerError::Internal(message)) = mismatch {
+            assert!(message.contains("column count mismatch"));
+        } else {
+            return Err(anyhow::anyhow!(
+                "expected internal error for column count mismatch"
+            ));
+        }
+
+        let unknown = build_lookup(&batch, &table_schema, Some(&["unknown".to_string()]));
+        assert!(unknown.is_err());
+        if let Err(ServerError::Internal(message)) = unknown {
+            assert!(message.contains("not found in batch schema"));
+        } else {
+            return Err(anyhow::anyhow!(
+                "expected internal error for unknown column"
+            ));
+        }
+
+        let invalid_shape = reshape_batch_for_multi_row_insert(&batch, 2);
+        assert!(invalid_shape.is_err());
+        if let Err(ServerError::Internal(message)) = invalid_shape {
+            assert!(message.contains("not divisible"));
+        } else {
+            return Err(anyhow::anyhow!("expected reshape divisibility error"));
+        }
+
+        Ok(())
     }
 }

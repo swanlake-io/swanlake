@@ -488,3 +488,41 @@ impl FlightSQLPool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PoolConfig, QueryOptions};
+
+    #[test]
+    fn pool_config_validate_rejects_invalid_sizes() {
+        let zero_max = PoolConfig {
+            max_size: 0,
+            ..PoolConfig::default()
+        };
+        assert!(zero_max.validate().is_err());
+
+        let min_gt_max = PoolConfig {
+            min_idle: 3,
+            max_size: 2,
+            ..PoolConfig::default()
+        };
+        assert!(min_gt_max.validate().is_err());
+    }
+
+    #[test]
+    fn pool_config_default_is_valid() {
+        let default = PoolConfig::default();
+        assert!(default.max_size >= 4);
+        assert!(default.max_size <= 16);
+        assert!(default.validate().is_ok());
+    }
+
+    #[test]
+    fn query_options_builder_sets_timeout_and_retry() {
+        let opts = QueryOptions::new()
+            .with_timeout_ms(123)
+            .with_retry_on_failure(false);
+        assert_eq!(opts.timeout_ms, Some(123));
+        assert_eq!(opts.retry_on_failure, Some(false));
+    }
+}
