@@ -27,113 +27,102 @@ pub fn run_metadata_discovery(args: &CliArgs) -> Result<()> {
         .context("failed to connect to FlightSQL server for metadata tests")?;
     client.update("use swanlake")?;
 
-    run_adbc_metadata_checks(&mut client)?;
-    run_flight_sql_metadata_checks(&args.endpoint)?;
+    setup_metadata_fixture(&mut client)?;
+
+    let test_result = (|| -> Result<()> {
+        run_adbc_metadata_checks(&mut client)?;
+        run_flight_sql_metadata_checks(&args.endpoint)?;
+        Ok(())
+    })();
+
+    cleanup_metadata_fixture(&mut client)?;
+    test_result?;
 
     info!("Metadata discovery tests completed successfully");
     Ok(())
 }
 
 fn run_adbc_metadata_checks(client: &mut FlightSQLClient) -> Result<()> {
-    client.update(&format!("DROP VIEW IF EXISTS swanlake.{VIEW_NAME}"))?;
-    client.update(&format!("DROP TABLE IF EXISTS swanlake.{TABLE_NAME}"))?;
-
-    let test_result = (|| -> Result<()> {
-        client.update(&format!(
-            "CREATE TABLE swanlake.{TABLE_NAME} (id INTEGER, name VARCHAR)"
-        ))?;
-        client.update(&format!(
-            "INSERT INTO swanlake.{TABLE_NAME} VALUES (1, 'alpha'), (2, 'beta')"
-        ))?;
-        client.update(&format!(
-            "CREATE VIEW swanlake.{VIEW_NAME} AS SELECT id, name FROM swanlake.{TABLE_NAME}"
-        ))?;
-
-        let mut table_types = HashSet::new();
-        let type_reader = client.connection().get_table_types()?;
-        for batch in type_reader {
-            let batch = batch?;
-            let column = batch.column(0);
-            if let Some(values) = column.as_any().downcast_ref::<StringArray>() {
-                for idx in 0..values.len() {
-                    if !values.is_null(idx) {
-                        table_types.insert(values.value(idx).to_uppercase());
-                    }
+    let mut table_types = HashSet::new();
+    let type_reader = client.connection().get_table_types()?;
+    for batch in type_reader {
+        let batch = batch?;
+        let column = batch.column(0);
+        if let Some(values) = column.as_any().downcast_ref::<StringArray>() {
+            for idx in 0..values.len() {
+                if !values.is_null(idx) {
+                    table_types.insert(values.value(idx).to_uppercase());
                 }
-            } else if let Some(values) = column.as_any().downcast_ref::<LargeStringArray>() {
-                for idx in 0..values.len() {
-                    if !values.is_null(idx) {
-                        table_types.insert(values.value(idx).to_uppercase());
-                    }
-                }
-            } else {
-                return Err(anyhow!(
-                    "get_table_types returned non-string table_type column"
-                ));
             }
+        } else if let Some(values) = column.as_any().downcast_ref::<LargeStringArray>() {
+            for idx in 0..values.len() {
+                if !values.is_null(idx) {
+                    table_types.insert(values.value(idx).to_uppercase());
+                }
+            }
+        } else {
+            return Err(anyhow!(
+                "get_table_types returned non-string table_type column"
+            ));
         }
-        ensure!(
-            table_types.contains("TABLE"),
-            "metadata table types did not include TABLE"
-        );
-        ensure!(
-            table_types.contains("VIEW"),
-            "metadata table types did not include VIEW"
-        );
+    }
+    ensure!(
+        table_types.contains("TABLE"),
+        "metadata table types did not include TABLE"
+    );
+    ensure!(
+        table_types.contains("VIEW"),
+        "metadata table types did not include VIEW"
+    );
 
-        let catalog_rows = count_reader_rows(client.connection().get_objects(
-            ObjectDepth::Catalogs,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )?)?;
-        ensure!(catalog_rows > 0, "expected at least one catalog row");
+    let catalog_rows = count_reader_rows(client.connection().get_objects(
+        ObjectDepth::Catalogs,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?)?;
+    ensure!(catalog_rows > 0, "expected at least one catalog row");
 
-        let schema_rows = count_reader_rows(client.connection().get_objects(
-            ObjectDepth::Schemas,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )?)?;
-        ensure!(schema_rows > 0, "expected at least one schema row");
+    let schema_rows = count_reader_rows(client.connection().get_objects(
+        ObjectDepth::Schemas,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?)?;
+    ensure!(schema_rows > 0, "expected at least one schema row");
 
-        let table_rows = count_reader_rows(client.connection().get_objects(
-            ObjectDepth::Tables,
-            Some("swanlake"),
-            Some("main"),
-            Some(TABLE_NAME),
-            None,
-            None,
-        )?)?;
-        ensure!(
-            table_rows > 0,
-            "expected table metadata rows for {TABLE_NAME}"
-        );
+    let table_rows = count_reader_rows(client.connection().get_objects(
+        ObjectDepth::Tables,
+        Some("swanlake"),
+        Some("main"),
+        Some(TABLE_NAME),
+        None,
+        None,
+    )?)?;
+    ensure!(
+        table_rows > 0,
+        "expected table metadata rows for {TABLE_NAME}"
+    );
 
-        let table_schema = client
-            .connection()
-            .get_table_schema(None, None, TABLE_NAME)
-            .context("failed to load table schema via ADBC metadata API")?;
-        let field_names = table_schema
-            .fields()
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect::<Vec<_>>();
-        ensure!(
-            field_names == vec!["id", "name"],
-            "unexpected table schema field names: {field_names:?}"
-        );
+    let table_schema = client
+        .connection()
+        .get_table_schema(None, None, TABLE_NAME)
+        .context("failed to load table schema via ADBC metadata API")?;
+    let field_names = table_schema
+        .fields()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect::<Vec<_>>();
+    ensure!(
+        field_names == vec!["id", "name"],
+        "unexpected table schema field names: {field_names:?}"
+    );
 
-        Ok(())
-    })();
-
-    client.update(&format!("DROP VIEW IF EXISTS swanlake.{VIEW_NAME}"))?;
-    client.update(&format!("DROP TABLE IF EXISTS swanlake.{TABLE_NAME}"))?;
-    test_result
+    Ok(())
 }
 
 fn run_flight_sql_metadata_checks(endpoint: &str) -> Result<()> {
@@ -183,9 +172,9 @@ fn run_flight_sql_metadata_checks(endpoint: &str) -> Result<()> {
 
         let tables_info = client
             .get_tables(CommandGetTables {
-                catalog: None,
-                db_schema_filter_pattern: None,
-                table_name_filter_pattern: None,
+                catalog: Some("swanlake".to_string()),
+                db_schema_filter_pattern: Some("main".to_string()),
+                table_name_filter_pattern: Some(TABLE_NAME.to_string()),
                 table_types: Vec::new(),
                 include_schema: true,
             })
@@ -268,6 +257,26 @@ fn run_flight_sql_metadata_checks(endpoint: &str) -> Result<()> {
 
         Ok(())
     })
+}
+
+fn setup_metadata_fixture(client: &mut FlightSQLClient) -> Result<()> {
+    cleanup_metadata_fixture(client)?;
+    client.update(&format!(
+        "CREATE TABLE swanlake.{TABLE_NAME} (id INTEGER, name VARCHAR)"
+    ))?;
+    client.update(&format!(
+        "INSERT INTO swanlake.{TABLE_NAME} VALUES (1, 'alpha'), (2, 'beta')"
+    ))?;
+    client.update(&format!(
+        "CREATE VIEW swanlake.{VIEW_NAME} AS SELECT id, name FROM swanlake.{TABLE_NAME}"
+    ))?;
+    Ok(())
+}
+
+fn cleanup_metadata_fixture(client: &mut FlightSQLClient) -> Result<()> {
+    client.update(&format!("DROP VIEW IF EXISTS swanlake.{VIEW_NAME}"))?;
+    client.update(&format!("DROP TABLE IF EXISTS swanlake.{TABLE_NAME}"))?;
+    Ok(())
 }
 
 async fn consume_flight_info_rows(
