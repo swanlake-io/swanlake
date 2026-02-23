@@ -135,8 +135,15 @@ jobs:
           source <(cargo llvm-cov show-env --export-prefix)
           cargo llvm-cov report --lcov --output-path "$GITHUB_WORKSPACE/lcov.info" --package swanlake-server --package swanlake-core
 
-      - name: Coveralls GitHub Action
-        uses: coverallsapp/github-action@v2
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          fail_ci_if_error: true
+          files: ./lcov.info
+          flags: unittests
+          name: codecov-umbrella
+          token: ${{ secrets.CODECOV_TOKEN }}
+          verbose: true
 
   docker:
     runs-on: ubuntu-latest
