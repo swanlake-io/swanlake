@@ -23,12 +23,23 @@ impl EngineFactory {
     /// Create a new factory from configuration
     #[instrument(skip(config))]
     pub fn new(config: &ServerConfig) -> Result<Self, ServerError> {
+        Ok(Self::new_with_extension_bootstrap(config, true))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_tests(config: &ServerConfig) -> Self {
+        Self::new_with_extension_bootstrap(config, false)
+    }
+
+    fn new_with_extension_bootstrap(config: &ServerConfig, bootstrap_extensions: bool) -> Self {
         let mut init_statements = Vec::new();
-        init_statements.push(
-            "INSTALL ducklake; INSTALL httpfs; INSTALL aws; INSTALL postgres; \
-            LOAD ducklake; LOAD httpfs; LOAD aws; LOAD postgres;"
-                .to_string(),
-        );
+        if bootstrap_extensions {
+            init_statements.push(
+                "INSTALL ducklake; INSTALL httpfs; INSTALL aws; INSTALL postgres; \
+                LOAD ducklake; LOAD httpfs; LOAD aws; LOAD postgres;"
+                    .to_string(),
+            );
+        }
 
         if let Some(threads) = config.duckdb_threads {
             let threads = threads.max(1);
@@ -45,12 +56,16 @@ impl EngineFactory {
         }
 
         let init_sql = init_statements.join("\n");
-        info!("base init sql {}", init_sql);
+        if init_sql.is_empty() {
+            info!("no additional DuckDB init SQL configured");
+        } else {
+            info!("base init sql {}", init_sql);
+        }
 
-        Ok(Self {
+        Self {
             init_sql,
             init_lock: Arc::new(Mutex::new(())),
-        })
+        }
     }
 
     /// Create a new initialized DuckDB connection
@@ -70,8 +85,22 @@ impl EngineFactory {
             .enable_autoload_extension(true)?
             .allow_unsigned_extensions()?;
         let conn = Connection::open_in_memory_with_flags(config)?;
-        conn.execute_batch(&self.init_sql)?;
+        if !self.init_sql.is_empty() {
+            conn.execute_batch(&self.init_sql)?;
+        }
         info!("created new DuckDB connection");
         Ok(DuckDbConnection::new(conn))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EngineFactory;
+    use crate::config::ServerConfig;
+
+    #[test]
+    fn new_for_tests_skips_extension_bootstrap_sql() {
+        let factory = EngineFactory::new_for_tests(&ServerConfig::default());
+        assert!(!factory.init_sql.contains("INSTALL ducklake"));
     }
 }

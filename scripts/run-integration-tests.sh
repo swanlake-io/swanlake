@@ -173,7 +173,7 @@ echo "Integration tests completed. Coverage data collected in target/"
 # ============================================================================
 
 if [[ "$GENERATE_COVERAGE_REPORT" == "1" ]]; then
-  cargo llvm-cov report --lcov --output-path "$ROOT_DIR/lcov.info" --package swanlake-server --package swanlake-core
+  cargo llvm-cov report --lcov --output-path "$ROOT_DIR/lcov.info" --package swanlake-server --package swanlake-core --package swanlake-client
 else
   echo "Skipping coverage report generation (GENERATE_COVERAGE_REPORT=$GENERATE_COVERAGE_REPORT)"
 fi

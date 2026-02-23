@@ -172,7 +172,7 @@ mod tests {
             session_id_mode: mode.clone(),
             ..ServerConfig::default()
         };
-        let factory = Arc::new(EngineFactory::new(&config).map_err(|e| anyhow!(e.to_string()))?);
+        let factory = Arc::new(EngineFactory::new_for_tests(&config));
         let registry =
             Arc::new(SessionRegistry::new(&config, factory).map_err(|e| anyhow!(e.to_string()))?);
         let metrics = Arc::new(Metrics::new(1_000, 64));

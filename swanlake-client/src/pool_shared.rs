@@ -27,3 +27,24 @@ pub(crate) fn evict_idle(state: &mut PoolState, idle_ttl_ms: u64) -> usize {
     });
     removed
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evict_idle_keeps_connections_when_ttl_is_zero() {
+        let mut state = PoolState { idle: Vec::new() };
+        let removed = evict_idle(&mut state, 0);
+        assert_eq!(removed, 0);
+        assert!(state.idle.is_empty());
+    }
+
+    #[test]
+    fn evict_idle_is_stable_for_empty_state_with_non_zero_ttl() {
+        let mut state = PoolState { idle: Vec::new() };
+        let removed = evict_idle(&mut state, 5);
+        assert_eq!(removed, 0);
+        assert!(state.idle.is_empty());
+    }
+}

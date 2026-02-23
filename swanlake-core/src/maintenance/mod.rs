@@ -308,7 +308,7 @@ mod tests {
     #[tokio::test]
     async fn run_checkpoint_clears_cached_connection_after_failure() -> Result<()> {
         let config = ServerConfig::default();
-        let factory = Arc::new(EngineFactory::new(&config).map_err(|e| anyhow!(e.to_string()))?);
+        let factory = Arc::new(EngineFactory::new_for_tests(&config));
         let checkpoint = CheckpointConfig {
             databases: vec!["missing_catalog".to_string()],
             interval: Duration::from_secs(1),

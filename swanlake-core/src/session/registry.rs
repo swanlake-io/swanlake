@@ -244,7 +244,7 @@ mod tests {
             session_timeout_seconds: Some(timeout_secs),
             ..ServerConfig::default()
         };
-        let factory = Arc::new(EngineFactory::new(&config).map_err(|e| anyhow!(e.to_string()))?);
+        let factory = Arc::new(EngineFactory::new_for_tests(&config));
         let registry = SessionRegistry::new(&config, Arc::clone(&factory))
             .map_err(|e| anyhow!(e.to_string()))?;
         Ok((registry, factory))

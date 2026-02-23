@@ -133,7 +133,7 @@ jobs:
         run: |
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
           source <(cargo llvm-cov show-env --export-prefix)
-          cargo llvm-cov report --lcov --output-path "$GITHUB_WORKSPACE/lcov.info" --package swanlake-server --package swanlake-core
+          cargo llvm-cov report --lcov --output-path "$GITHUB_WORKSPACE/lcov.info" --package swanlake-server --package swanlake-core --package swanlake-client
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

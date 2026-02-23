@@ -174,6 +174,11 @@ impl FlightSQLClient {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::Int32Array;
+    use arrow_schema::{DataType, Field, Schema};
+
     use super::*;
 
     #[test]
@@ -181,5 +186,18 @@ mod tests {
         let result = QueryResult::new(vec![]);
         assert!(result.is_empty());
         assert_eq!(result.total_rows, 0);
+    }
+
+    #[test]
+    fn test_query_result_schema_and_rows_affected_helpers() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+        let result = QueryResult::with_rows_affected(vec![batch], Some(2));
+
+        assert!(!result.is_empty());
+        assert_eq!(result.total_rows, 2);
+        assert_eq!(result.rows_affected, Some(2));
+        assert!(result.schema().is_some());
+        Ok(())
     }
 }
