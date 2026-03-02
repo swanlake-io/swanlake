@@ -13,16 +13,16 @@ anyhow = "1.0"
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "signal", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "json"] }
-arrow = "57"
-arrow-array = "57"
-arrow-buffer = "57"
-arrow-schema = "57"
-arrow-flight = { version = "57", features = ["flight-sql"] }
-arrow-ipc = "57"
-arrow-cast = "57"
-arrow-select = "57"
+arrow = "58"
+arrow-array = "58"
+arrow-buffer = "58"
+arrow-schema = "58"
+arrow-flight = { version = "58", features = ["flight-sql"] }
+arrow-ipc = "58"
+arrow-cast = "58"
+arrow-select = "58"
 duckdb = { git = "https://github.com/duckdb/duckdb-rs", rev = "a2639608d946690e04b1d5f6448302d57bb99d7e", default-features = false, features = ["appender-arrow"] }
-tonic = { version = "0.14.4", features = ["transport"] }
+tonic = { version = "0.14.5", features = ["transport"] }
 thiserror = "2.0.18"
 
 [workspace.lints.rust]
