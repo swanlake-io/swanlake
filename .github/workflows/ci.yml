@@ -63,7 +63,7 @@ jobs:
             m2-${{ runner.os }}-
 
       - name: Set up Docker Compose
-        uses: docker/setup-compose-action@v1
+        uses: docker/setup-compose-action@v2
 
       - name: Start services
         run: docker compose up -d

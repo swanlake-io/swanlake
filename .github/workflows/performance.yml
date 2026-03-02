@@ -91,7 +91,7 @@ jobs:
             perf-m2-${{ runner.os }}-
 
       - name: Set up Docker Compose
-        uses: docker/setup-compose-action@v1
+        uses: docker/setup-compose-action@v2
 
       - name: Start services
         run: docker compose up -d
@@ -206,7 +206,7 @@ jobs:
 
       - name: Upload BenchBase artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: benchbase-tpch-${{ matrix.storage }}
           path: |
