@@ -79,9 +79,6 @@ cargo llvm-cov clean --workspace
 # Build with coverage
 cargo build --package swanlake-server --package swanlake-core
 
-# Source DuckDB environment to set library paths
-source "$ROOT_DIR/swanlake-core/.duckdb/env.sh"
-
 # Run Rust unit tests under coverage instrumentation
 cargo test --package swanlake-server --package swanlake-core
 

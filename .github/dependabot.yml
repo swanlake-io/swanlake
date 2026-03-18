@@ -13,10 +13,20 @@ updates:
       - "dependencies"
       - "rust"
     groups:
+      # Keep duckdb/arrow changes together; CI enforces the exact alignment.
+      duckdb-arrow:
+        patterns:
+          - "duckdb"
+          - "arrow"
+          - "arrow-*"
       # Group all Rust dependency updates together
       rust-dependencies:
         patterns:
           - "*"
+        exclude-patterns:
+          - "duckdb"
+          - "arrow"
+          - "arrow-*"
 
   # Monitor GitHub Actions
   - package-ecosystem: "github-actions"

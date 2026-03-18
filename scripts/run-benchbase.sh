@@ -547,7 +547,6 @@ install_arrow_driver
 
 SERVER_BIN="${SERVER_BIN:-$ROOT_DIR/target/debug/swanlake}"
 SERVER_MODE="${SERVER_MODE:-cargo}"
-DUCKDB_ENV_FILE="$ROOT_DIR/swanlake-core/.duckdb/env.sh"
 
 if [[ "$SERVER_MODE" == "cargo" ]]; then
   # Keep startup timeout focused on server bootstrap, not first-time compile.
@@ -566,15 +565,6 @@ else
   if [[ -f "$CONFIG_FILE" ]]; then
     SERVER_CMD+=("--config" "$CONFIG_FILE")
   fi
-fi
-
-# Ensure DuckDB environment variables are available for the server runtime.
-# On fresh CI runs, build.rs may generate this file during the build above.
-log "Loading DuckDB environment..."
-if [[ -f "$DUCKDB_ENV_FILE" ]]; then
-  source "$DUCKDB_ENV_FILE"
-else
-  log "DuckDB environment file not found at $DUCKDB_ENV_FILE; continuing without it"
 fi
 
 if [[ "$BENCHBASE_ENABLE_CACHE_HTTPFS" == "true" ]]; then

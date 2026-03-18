@@ -29,3 +29,4 @@ __marimo__
 
 recipe.json
 __pycache__/
+*.profraw

@@ -1,0 +1,4 @@
+[env]
+# Tells libduckdb-sys to download the prebuilt DuckDB library during build.
+# See https://github.com/duckdb/duckdb-rs for details.
+DUCKDB_DOWNLOAD_LIB = "1"

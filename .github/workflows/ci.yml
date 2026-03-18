@@ -71,8 +71,12 @@ jobs:
       - name: Cache DuckDB
         uses: actions/cache@v5
         with:
-          path: .duckdb
-          key: duckdb-${{ runner.os }}
+          path: |
+            target/duckdb-download
+            target/*/duckdb-download
+          key: duckdb-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml') }}
+          restore-keys: |
+            duckdb-${{ runner.os }}-
       
       - name: Cache BenchBase artifacts
         uses: actions/cache@v5
@@ -84,6 +88,9 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt -- --check
+
+      - name: Check Arrow and DuckDB alignment
+        run: python3 scripts/check_arrow_duckdb_alignment.py
 
       - name: Check clippy
         run: cargo clippy --workspace -- -D warnings
