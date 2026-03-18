@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 import tomllib
 
@@ -35,7 +36,7 @@ def parse_major(version_req: str) -> int | None:
     return int(match.group(1))
 
 
-def dependency_version_requirement(dependency: object) -> str | None:
+def dependency_version_requirement(dependency: Any) -> str | None:
     if isinstance(dependency, str):
         return dependency
     if isinstance(dependency, dict):
@@ -45,7 +46,7 @@ def dependency_version_requirement(dependency: object) -> str | None:
     return None
 
 
-def duckdb_arrow_major(lock_data: dict[str, object]) -> tuple[int, str] | None:
+def duckdb_arrow_major(lock_data: dict[str, Any]) -> tuple[int, str] | None:
     packages = lock_data.get("package")
     if not isinstance(packages, list):
         return None

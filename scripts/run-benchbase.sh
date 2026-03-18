@@ -567,6 +567,9 @@ else
   fi
 fi
 
+# Set LD_LIBRARY_PATH / DYLD_FALLBACK_LIBRARY_PATH so the binary can find libduckdb
+source "$ROOT_DIR/scripts/duckdb-lib-env.sh"
+
 if [[ "$BENCHBASE_ENABLE_CACHE_HTTPFS" == "true" ]]; then
   if [[ "${SWANLAKE_DUCKLAKE_INIT_SQL:-}" == *"cache_httpfs"* ]]; then
     log "cache_httpfs already present in SWANLAKE_DUCKLAKE_INIT_SQL"
