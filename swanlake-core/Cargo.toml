@@ -25,7 +25,7 @@ tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
 postgres-native-tls = { version = "0.5" }
 native-tls = { version = "0.2" }
 tracing = { workspace = true }
-config = "0.15.21"
+config = "0.15.22"
 siphasher = { version = "1.0" }
 chrono = { version = "0.4", features = ["clock"] }
 
