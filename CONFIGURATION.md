@@ -38,6 +38,24 @@ and boolean flags accept `true/false` (case-insensitive).
 | `SWANLAKE_METRICS_SLOW_QUERY_THRESHOLD_MS` | Slow query threshold (ms) used for tagging slow queries | `5000` |
 | `SWANLAKE_METRICS_HISTORY_SIZE` | Number of latency/error/slow-query entries retained | `200` |
 
+## Status Server  
+  
+The status server provides real-time monitoring endpoints:  
+  
+### Endpoints  
+- `/` - HTML dashboard with live metrics  
+- `/status.json` - JSON API for programmatic access  
+  
+### JSON Response Format  
+```json  
+{  
+  "generated_at_ms": 1640995200000,  
+  "metrics": { ... },  
+  "sessions": { ... }  
+}
+```
+
+
 ## DuckLake / DuckDB Initialization
 
 | Env Var | Description | Default |

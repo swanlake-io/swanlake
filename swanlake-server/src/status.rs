@@ -40,10 +40,10 @@ pub fn spawn_status_server(
     let prefix = normalize_prefix(&config.status_path_prefix);
     let root_path = format!("{prefix}/");
     let json_path = format!("{prefix}/status.json");
-
     let app = Router::new()
         .route(&root_path, get(status_page))
         .route(&json_path, get(status_json))
+        .route("/healthz", get(healthz))
         .with_state(state);
 
     tokio::spawn(async move {
@@ -95,6 +95,12 @@ fn normalize_prefix(prefix: &str) -> String {
 }
 
 const STATUS_PAGE: &str = include_str!("status.html");
+
+async fn healthz() -> &'static str{
+    "OK"
+}
+
+
 
 #[cfg(test)]
 mod tests {
@@ -187,8 +193,6 @@ mod tests {
         status_port:0,
         ..ServerConfig::default()
      };
-     let metrics = Arc::new(Metrics::new(32,8));
-     let registry = build_registry(2, 60);
      // Test that routes are properly configured with prefix 
      let prefix = normalize_prefix(&config.status_path_prefix);
      assert_eq!(prefix,"/admin");
