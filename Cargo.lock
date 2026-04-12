@@ -25,12 +25,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "adbc_core"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46b169525a7c41670fe95874103c7c6ce713ac699123f81a200bc31f9ad3b02e"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+]
+
+[[package]]
 name = "adbc_driver_manager"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5beaa87308b040adcf482fb760f64ced1cbcd9469fe86ddd5be221dabbbc544e"
 dependencies = [
- "adbc_core",
+ "adbc_core 0.22.0",
  "adbc_ffi",
  "arrow-array",
  "arrow-schema",
@@ -46,7 +56,7 @@ version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3600ae9aec2907516d088189e3b863029280f1953dd0eab903c7f4c862a0ce81"
 dependencies = [
- "adbc_core",
+ "adbc_core 0.22.0",
  "arrow-array",
  "arrow-schema",
 ]
@@ -3498,7 +3508,7 @@ name = "swanlake-client"
 version = "0.1.1"
 dependencies = [
  "adbc-driver-flightsql",
- "adbc_core",
+ "adbc_core 0.23.0",
  "adbc_driver_manager",
  "anyhow",
  "arrow",
@@ -3547,7 +3557,7 @@ dependencies = [
 name = "swanlake-runner"
 version = "0.1.0"
 dependencies = [
- "adbc_core",
+ "adbc_core 0.23.0",
  "anyhow",
  "arrow",
  "arrow-array",
@@ -3764,9 +3774,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.51.0"
+version = "1.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd1c4c0fc4a7ab90fc15ef6daaa3ec3b893f004f915f2392557ed23237820cd"
+checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
 dependencies = [
  "bytes",
  "libc",
