@@ -30,3 +30,5 @@ __marimo__
 recipe.json
 __pycache__/
 *.profraw
+.superpowers-skills
+.rules

@@ -15,6 +15,24 @@ pub fn quote_identifier(name: &str) -> String {
     format!(r#""{escaped}""#)
 }
 
+/// Quotes a potentially dot-separated qualified name (e.g. `schema.table`)
+/// by quoting each component independently so the dot is interpreted as a
+/// schema/catalog separator rather than part of the identifier.
+///
+/// # Examples
+///
+/// ```
+/// # use swanlake_core::util::quote_qualified_name;
+/// assert_eq!(quote_qualified_name("swanlake.my_table"), r#""swanlake"."my_table""#);
+/// assert_eq!(quote_qualified_name("plain"), r#""plain""#);
+/// ```
+pub fn quote_qualified_name(name: &str) -> String {
+    name.split('.')
+        .map(|part| quote_identifier(part))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,6 +57,27 @@ mod tests {
         assert_eq!(
             quote_identifier("some table; DROP TABLE--"),
             r#""some table; DROP TABLE--""#
+        );
+    }
+
+    #[test]
+    fn qualified_name_schema_table() {
+        assert_eq!(
+            quote_qualified_name("swanlake.my_table"),
+            r#""swanlake"."my_table""#
+        );
+    }
+
+    #[test]
+    fn qualified_name_single_part() {
+        assert_eq!(quote_qualified_name("users"), r#""users""#);
+    }
+
+    #[test]
+    fn qualified_name_three_parts() {
+        assert_eq!(
+            quote_qualified_name("catalog.schema.table"),
+            r#""catalog"."schema"."table""#
         );
     }
 }

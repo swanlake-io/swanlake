@@ -13,7 +13,7 @@ use duckdb::{Arrow, Statement};
 use tracing::{debug, info, instrument};
 
 use crate::error::ServerError;
-use crate::util::quote_identifier;
+use crate::util::{quote_identifier, quote_qualified_name};
 
 use crate::types::duckdb_type_to_arrow;
 
@@ -203,7 +203,7 @@ impl DuckDbConnection {
             .map_err(|_| ServerError::Internal("connection mutex poisoned".to_string()))?;
 
         // Use DESC to get table schema without preparing parameters
-        let desc_query = format!("DESC SELECT * FROM {}", quote_identifier(table_name));
+        let desc_query = format!("DESC SELECT * FROM {}", quote_qualified_name(table_name));
         let mut stmt = conn.prepare(&desc_query).map_err(ServerError::DuckDb)?;
         let rows = stmt
             .query_map([], |row| {
