@@ -150,7 +150,7 @@ jobs:
                 echo "AWS_SECRET_ACCESS_KEY=$BENCHBASE_S3_SECRET_ACCESS_KEY"
                 echo "AWS_REGION=$BENCHBASE_S3_REGION"
                 echo "AWS_DEFAULT_REGION=$BENCHBASE_S3_REGION"
-                echo "SWANLAKE_DUCKLAKE_INIT_SQL=CREATE OR REPLACE SECRET s3_secret (TYPE s3, PROVIDER credential_chain); ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH 's3://$BENCHBASE_S3_BUCKET/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
+                echo "SWANLAKE_DUCKLAKE_INIT_SQL=CREATE OR REPLACE SECRET s3_secret (TYPE s3, PROVIDER credential_chain); ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH 's3://$BENCHBASE_S3_BUCKET/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true, AUTOMATIC_MIGRATION true); USE swanlake;"
               } >> "$GITHUB_ENV"
               ;;
             postgres_r2)
@@ -171,7 +171,7 @@ jobs:
                 echo "AWS_SECRET_ACCESS_KEY=$BENCHBASE_R2_SECRET_ACCESS_KEY"
                 echo "AWS_SECRET_ACCOUNT_ID=$BENCHBASE_R2_ACCOUNT_ID"
                 echo "DUCKDB_S3_ENDPOINT=$BENCHBASE_R2_ACCOUNT_ID.r2.cloudflarestorage.com"
-                echo "SWANLAKE_DUCKLAKE_INIT_SQL=CREATE OR REPLACE SECRET r2_secret (TYPE r2, ENDPOINT '$BENCHBASE_R2_ACCOUNT_ID.r2.cloudflarestorage.com'); ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH 'r2://$BENCHBASE_R2_BUCKET/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
+                echo "SWANLAKE_DUCKLAKE_INIT_SQL=CREATE OR REPLACE SECRET r2_secret (TYPE r2, ENDPOINT '$BENCHBASE_R2_ACCOUNT_ID.r2.cloudflarestorage.com'); ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH 'r2://$BENCHBASE_R2_BUCKET/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true, AUTOMATIC_MIGRATION true); USE swanlake;"
               } >> "$GITHUB_ENV"
               ;;
             postgres_local_file)
@@ -180,7 +180,7 @@ jobs:
               fi
 
               {
-                echo "SWANLAKE_DUCKLAKE_INIT_SQL=ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '/tmp/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true); USE swanlake;"
+                echo "SWANLAKE_DUCKLAKE_INIT_SQL=ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '/tmp/swanlake-benchbase/tpch', OVERRIDE_DATA_PATH true, AUTOMATIC_MIGRATION true); USE swanlake;"
               } >> "$GITHUB_ENV"
               ;;
             *)

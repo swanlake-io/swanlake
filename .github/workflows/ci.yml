@@ -77,7 +77,7 @@ jobs:
           key: duckdb-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml') }}
           restore-keys: |
             duckdb-${{ runner.os }}-
-      
+
       - name: Cache BenchBase artifacts
         uses: actions/cache@v5
         with:
@@ -133,7 +133,7 @@ jobs:
           PGHOST: 127.0.0.1
           PGPORT: 5442
           PGUSER: postgres
-          SWANLAKE_DUCKLAKE_INIT_SQL: "ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '/tmp/swanlake-benchbase', OVERRIDE_DATA_PATH true); USE swanlake;"
+          SWANLAKE_DUCKLAKE_INIT_SQL: "ATTACH 'ducklake:postgres:dbname=swanlake_test' AS swanlake (DATA_PATH '/tmp/swanlake-benchbase', OVERRIDE_DATA_PATH true, AUTOMATIC_MIGRATION true); USE swanlake;"
           SWANLAKE_CHECKPOINT_DATABASES: swanlake
 
       - name: Generate combined coverage report
