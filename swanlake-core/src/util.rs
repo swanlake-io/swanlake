@@ -28,7 +28,7 @@ pub fn quote_identifier(name: &str) -> String {
 /// ```
 pub fn quote_qualified_name(name: &str) -> String {
     name.split('.')
-        .map(|part| quote_identifier(part))
+        .map(quote_identifier)
         .collect::<Vec<_>>()
         .join(".")
 }

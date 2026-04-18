@@ -684,3 +684,276 @@ impl Session {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::{anyhow, Result};
+    use duckdb::Connection;
+
+    /// Helper: create a `Session` backed by a real in-memory DuckDB connection.
+    fn test_session() -> Result<Session> {
+        let raw = Connection::open_in_memory().map_err(|e| anyhow!("open_in_memory: {e}"))?;
+        let conn = DuckDbConnection::new(raw);
+        Ok(Session::new_with_id(
+            SessionId::from_string("test:session".into()),
+            conn,
+        ))
+    }
+
+    /// Helper: create a prepared statement and return its handle.
+    fn create_test_handle(session: &Session) -> Result<StatementHandle> {
+        session
+            .create_prepared_statement("SELECT 1".into(), true, PreparedStatementOptions::new())
+            .map_err(|e| anyhow!("create_prepared_statement: {e}"))
+    }
+
+    // ---------------------------------------------------------------
+    // remove_prepared_statement
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn remove_prepared_statement_clears_entry_from_map() -> Result<()> {
+        let session = test_session()?;
+        let handle = create_test_handle(&session)?;
+
+        // Sanity: handle exists before removal.
+        assert!(session.get_prepared_statement_meta(handle).is_ok());
+
+        session.remove_prepared_statement(handle);
+
+        // After force-remove the handle must be gone.
+        assert!(matches!(
+            session.get_prepared_statement_meta(handle),
+            Err(ServerError::PreparedStatementNotFound)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn remove_prepared_statement_clears_last_handle_when_matching() -> Result<()> {
+        let session = test_session()?;
+        let handle = create_test_handle(&session)?;
+
+        // The just-created handle should be the last handle.
+        assert_eq!(session.last_prepared_statement_handle(), Some(handle));
+
+        session.remove_prepared_statement(handle);
+
+        // last_handle should be cleared.
+        assert_eq!(session.last_prepared_statement_handle(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn remove_prepared_statement_is_idempotent() -> Result<()> {
+        let session = test_session()?;
+        let handle = create_test_handle(&session)?;
+
+        session.remove_prepared_statement(handle);
+        // Calling again should not panic or error.
+        session.remove_prepared_statement(handle);
+
+        assert!(matches!(
+            session.get_prepared_statement_meta(handle),
+            Err(ServerError::PreparedStatementNotFound)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn remove_prepared_statement_does_not_affect_other_handles() -> Result<()> {
+        let session = test_session()?;
+        let h1 = create_test_handle(&session)?;
+        let h2 = session
+            .create_prepared_statement("SELECT 2".into(), true, PreparedStatementOptions::new())
+            .map_err(|e| anyhow!("create h2: {e}"))?;
+
+        session.remove_prepared_statement(h1);
+
+        // h2 should still be accessible.
+        assert!(session.get_prepared_statement_meta(h2).is_ok());
+        // h1 is gone.
+        assert!(matches!(
+            session.get_prepared_statement_meta(h1),
+            Err(ServerError::PreparedStatementNotFound)
+        ));
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // recover_from_transaction_abort — success path
+    // ---------------------------------------------------------------
+
+    /// Build a ServerError that triggers is_transaction_abort_error.
+    fn make_abort_error() -> ServerError {
+        ServerError::DuckDb(duckdb::Error::DuckDBFailure(
+            duckdb::ffi::Error {
+                code: duckdb::ErrorCode::Unknown,
+                extended_code: 0,
+            },
+            Some("Current transaction is aborted".into()),
+        ))
+    }
+
+    #[test]
+    fn recover_clears_transactions_on_abort_error() -> Result<()> {
+        let session = test_session()?;
+
+        // Start a real transaction so DuckDB is in a transaction state.
+        session
+            .connection
+            .execute_batch("BEGIN TRANSACTION")
+            .map_err(|e| anyhow!("BEGIN: {e}"))?;
+
+        // Simulate Rust-side tracking: insert a transaction ID.
+        let tx_id = session.transaction_id_gen.next();
+        {
+            let mut txs = session
+                .transactions
+                .lock()
+                .map_err(|e| anyhow!("lock: {e}"))?;
+            txs.insert(tx_id);
+        }
+
+        session.recover_from_transaction_abort(&make_abort_error());
+
+        // transactions set should be cleared.
+        let txs = session
+            .transactions
+            .lock()
+            .map_err(|e| anyhow!("lock: {e}"))?;
+        assert!(
+            txs.is_empty(),
+            "transactions should be cleared after recovery"
+        );
+
+        // tx_id should appear in aborted_transactions.
+        let aborted = session
+            .aborted_transactions
+            .lock()
+            .map_err(|e| anyhow!("lock: {e}"))?;
+        assert!(
+            aborted.contains(&tx_id),
+            "aborted_transactions should contain the cleared tx_id"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn recover_is_noop_for_non_abort_errors() -> Result<()> {
+        let session = test_session()?;
+
+        // Add a transaction to the set.
+        let tx_id = session.transaction_id_gen.next();
+        {
+            let mut txs = session
+                .transactions
+                .lock()
+                .map_err(|e| anyhow!("lock: {e}"))?;
+            txs.insert(tx_id);
+        }
+
+        // A non-abort error should not trigger recovery.
+        let err = ServerError::Internal("some random error".into());
+        session.recover_from_transaction_abort(&err);
+
+        let txs = session
+            .transactions
+            .lock()
+            .map_err(|e| anyhow!("lock: {e}"))?;
+        assert!(
+            txs.contains(&tx_id),
+            "transactions should be untouched for non-abort errors"
+        );
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // recover_from_transaction_abort — multiple transactions path
+    //
+    // Verifies the key invariant: all tracked tx_ids move to
+    // aborted_transactions regardless of how many are tracked.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn recover_clears_all_transactions_and_moves_to_aborted() -> Result<()> {
+        let session = test_session()?;
+
+        // Insert multiple tracked transactions.
+        let tx_id = session.transaction_id_gen.next();
+        let tx_id2 = session.transaction_id_gen.next();
+        {
+            let mut txs = session
+                .transactions
+                .lock()
+                .map_err(|e| anyhow!("lock: {e}"))?;
+            txs.insert(tx_id);
+            txs.insert(tx_id2);
+        }
+
+        // Start a real transaction so DuckDB has something to ROLLBACK.
+        session
+            .connection
+            .execute_batch("BEGIN TRANSACTION")
+            .map_err(|e| anyhow!("BEGIN: {e}"))?;
+
+        session.recover_from_transaction_abort(&make_abort_error());
+
+        // Both transaction IDs should be cleared from transactions.
+        let txs = session
+            .transactions
+            .lock()
+            .map_err(|e| anyhow!("lock: {e}"))?;
+        assert!(txs.is_empty(), "all transactions should be cleared");
+
+        // Both should be in aborted set.
+        let aborted = session
+            .aborted_transactions
+            .lock()
+            .map_err(|e| anyhow!("lock: {e}"))?;
+        assert!(aborted.contains(&tx_id), "tx_id should be in aborted set");
+        assert!(aborted.contains(&tx_id2), "tx_id2 should be in aborted set");
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // transaction_absent — verifies aborted transaction detection
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn transaction_absent_returns_aborted_for_known_aborted_tx() -> Result<()> {
+        let session = test_session()?;
+        let tx_id = session.transaction_id_gen.next();
+
+        // Pre-populate aborted set (as recovery would).
+        {
+            let mut aborted = session
+                .aborted_transactions
+                .lock()
+                .map_err(|e| anyhow!("lock: {e}"))?;
+            aborted.insert(tx_id);
+        }
+
+        let result = session.transaction_absent(tx_id);
+        assert!(matches!(result, Err(ServerError::TransactionAborted)));
+
+        // Should be removed from aborted set after detection.
+        let aborted = session
+            .aborted_transactions
+            .lock()
+            .map_err(|e| anyhow!("lock: {e}"))?;
+        assert!(!aborted.contains(&tx_id));
+        Ok(())
+    }
+
+    #[test]
+    fn transaction_absent_returns_ok_for_unknown_tx() -> Result<()> {
+        let session = test_session()?;
+        let tx_id = session.transaction_id_gen.next();
+
+        let result = session.transaction_absent(tx_id);
+        assert!(result.is_ok());
+        Ok(())
+    }
+}
