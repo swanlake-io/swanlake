@@ -1,0 +1,36 @@
+# name: tests/sql/sql_injection_identifiers.test
+# description: verify identifiers with special characters (quotes, semicolons, SQL keywords) are handled safely
+# group: [sql]
+
+# table name containing a literal double quote
+statement ok
+CREATE TABLE "test""injection" (id INT, val TEXT)
+
+statement ok
+INSERT INTO "test""injection" VALUES (1, 'hello'), (2, 'world')
+
+query IT
+SELECT id, val FROM "test""injection" ORDER BY id
+----
+1	hello
+2	world
+
+# table with special characters in column names
+statement ok
+CREATE TABLE injection_cols ("col;drop" INT, "col -- comment" TEXT)
+
+statement ok
+INSERT INTO injection_cols ("col;drop", "col -- comment") VALUES (42, 'safe'), (99, 'also safe')
+
+query IT
+SELECT "col;drop", "col -- comment" FROM injection_cols ORDER BY "col;drop"
+----
+42	safe
+99	also safe
+
+# cleanup
+statement ok
+DROP TABLE "test""injection"
+
+statement ok
+DROP TABLE injection_cols

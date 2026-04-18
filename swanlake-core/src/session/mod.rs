@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use arrow_schema::Schema;
 use duckdb::types::Value;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::engine::{DuckDbConnection, QueryResult};
 use crate::error::ServerError;
@@ -245,7 +245,28 @@ impl Session {
                 );
             }
             Err(rollback_err) => {
-                warn!(error = %rollback_err, "failed to rollback aborted transaction");
+                let mut txs = self
+                    .transactions
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let ids: Vec<_> = txs.iter().copied().collect();
+                txs.clear();
+                drop(txs);
+
+                let mut aborted = self
+                    .aborted_transactions
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                for id in ids {
+                    aborted.insert(id);
+                }
+                drop(aborted);
+
+                error!(
+                    error = %rollback_err,
+                    "failed to rollback aborted transaction; \
+                     cleared Rust-side transaction tracking but session may be in an inconsistent state"
+                );
             }
         }
     }
@@ -558,6 +579,25 @@ impl Session {
         }
         debug!(handle = %handle, "closed prepared statement");
         Ok(())
+    }
+
+    /// Unconditionally remove a prepared statement handle from the session map.
+    /// Unlike [`close_prepared_statement`], this never returns an error — it is
+    /// a best-effort cleanup used when a prior close attempt has already failed.
+    pub fn remove_prepared_statement(&self, handle: StatementHandle) {
+        let mut prepared = self
+            .prepared_statements
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prepared.remove(&handle);
+        let mut last_handle = self
+            .last_prepared_statement_handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if last_handle.as_ref() == Some(&handle) {
+            *last_handle = None;
+        }
+        debug!(handle = %handle, "force-removed prepared statement from session map");
     }
 
     pub fn last_prepared_statement_handle(&self) -> Option<StatementHandle> {

@@ -2,6 +2,7 @@ use crate::CliArgs;
 use anyhow::Result;
 
 pub mod appender_insert;
+pub mod concurrent_sessions;
 pub mod execute_query_commands;
 pub mod metadata_discovery;
 pub mod parameter_types;
@@ -15,5 +16,6 @@ pub fn run_all(args: &CliArgs) -> Result<()> {
     appender_insert::run(args)?;
     metadata_discovery::run_metadata_discovery(args)?;
     transaction_recovery::run_transaction_recovery(args)?;
+    concurrent_sessions::run_concurrent_sessions(args)?;
     Ok(())
 }

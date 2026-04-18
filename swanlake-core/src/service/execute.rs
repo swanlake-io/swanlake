@@ -66,8 +66,9 @@ impl SwanFlightSqlService {
                 warn!(
                     handle = %handle,
                     %err,
-                    "failed to close ephemeral prepared statement"
+                    "failed to close ephemeral prepared statement; force-removing handle"
                 );
+                session.remove_prepared_statement(handle);
             }
         }
 
@@ -155,8 +156,9 @@ impl SwanFlightSqlService {
                 warn!(
                     handle = %handle,
                     %err,
-                    "failed to close ephemeral prepared statement"
+                    "failed to close ephemeral prepared statement; force-removing handle"
                 );
+                session.remove_prepared_statement(handle);
             }
         }
 

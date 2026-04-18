@@ -189,6 +189,23 @@ impl SessionRegistry {
                 ServerError::MaxSessionsReached
             })?;
 
+        // Re-check under write lock before creating the expensive DuckDB connection
+        // to prevent TOCTOU race where two concurrent requests for the same session_id
+        // both pass the initial read-lock check and create duplicate connections.
+        {
+            let inner = self
+                .inner
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(entry) = inner.sessions.get(session_id) {
+                debug!(
+                    session_id = %session_id,
+                    "session appeared after permit acquisition, reusing"
+                );
+                return Ok(entry.session.clone());
+            }
+        }
+
         // Create new connection in spawn_blocking to avoid blocking async runtime
         // (DuckDB connection creation involves I/O: loading extensions, init SQL, etc.)
         let factory = self.factory.clone();
@@ -199,7 +216,7 @@ impl SessionRegistry {
         // Create session with the specified ID
         let session = Arc::new(Session::new_with_id(session_id.clone(), connection));
 
-        // Register session
+        // Register session under write lock, with a final check for races
         {
             let mut inner = self
                 .inner

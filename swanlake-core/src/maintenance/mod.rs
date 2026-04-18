@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::ServerConfig;
 use crate::engine::{DuckDbConnection, EngineFactory};
+use crate::util::quote_identifier;
 
 mod lock;
 mod postgres;
@@ -203,7 +204,7 @@ impl CheckpointService {
                 *guard = Some(conn);
             }
 
-            let sql = format!("USE {db}; CHECKPOINT;");
+            let sql = format!("USE {}; CHECKPOINT;", quote_identifier(&db));
             let exec = if let Some(conn) = guard.as_ref() {
                 conn.execute_batch(&sql).map_err(|e| anyhow!(e.to_string()))
             } else {
