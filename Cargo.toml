@@ -10,7 +10,7 @@ resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1.0"
-tokio = { version = "1.51.0", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 arrow = "58"
@@ -21,7 +21,7 @@ arrow-flight = { version = "58", features = ["flight-sql"] }
 arrow-ipc = "58"
 arrow-cast = "58"
 arrow-select = "58"
-duckdb = { version = "1.10501.0", default-features = false, features = ["appender-arrow"] }
+duckdb = { version = "1.10502.0", default-features = false, features = ["appender-arrow"] }
 tonic = { version = "0.14.5", features = ["transport"] }
 thiserror = "2.0.18"
 

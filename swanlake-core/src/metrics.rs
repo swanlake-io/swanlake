@@ -439,9 +439,7 @@ fn summarize_slow_query_groups(slow_queries: &[SlowQuery], limit: usize) -> Vec<
 
     let mut out = grouped.into_values().collect::<Vec<_>>();
     for group in &mut out {
-        if group.count > 0 {
-            group.avg_ms = group.total_ms / group.count;
-        }
+        group.avg_ms = group.total_ms.checked_div(group.count).unwrap_or(0);
     }
 
     out.sort_unstable_by(|a, b| {
