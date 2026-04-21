@@ -40,10 +40,10 @@ pub fn spawn_status_server(
     let prefix = normalize_prefix(&config.status_path_prefix);
     let root_path = format!("{prefix}/");
     let json_path = format!("{prefix}/status.json");
-
     let app = Router::new()
         .route(&root_path, get(status_page))
         .route(&json_path, get(status_json))
+        .route("/healthz", get(healthz))
         .with_state(state);
 
     tokio::spawn(async move {
@@ -96,15 +96,19 @@ fn normalize_prefix(prefix: &str) -> String {
 
 const STATUS_PAGE: &str = include_str!("status.html");
 
+async fn healthz() -> &'static str {
+    "OK"
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use anyhow::{anyhow, Result};
+    use anyhow::{anyhow, Ok, Result};
     use axum::extract::State;
 
     use super::*;
-    use swanlake_core::engine::EngineFactory;
+    use swanlake_core::{engine::EngineFactory, session::SessionId};
 
     fn build_registry(max_sessions: usize, timeout_secs: u64) -> Result<Arc<SessionRegistry>> {
         let config = ServerConfig {
@@ -175,6 +179,82 @@ mod tests {
         assert!(err
             .to_string()
             .contains("invalid status server bind address"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn status_with_custom_prefix() -> Result<()> {
+        let config = ServerConfig {
+            status_enabled: true,
+            status_path_prefix: "/admin".to_string(),
+            status_host: "0.0.0.0".to_string(),
+            status_port: 0,
+            ..ServerConfig::default()
+        };
+        // Test that routes are properly configured with prefix
+        let prefix = normalize_prefix(&config.status_path_prefix);
+        assert_eq!(prefix, "/admin");
+
+        // Verify root and json paths
+        let root_path = format!("{prefix}/");
+        let json_path = format!("{prefix}/status.json");
+        assert_eq!(root_path, "/admin/");
+        assert_eq!(json_path, "/admin/status.json");
+
+        Ok(())
+    }
+    #[test]
+    fn status_server_config_changes() -> Result<()> {
+        // Test with disabled status server
+        let config_disabled = ServerConfig {
+            status_enabled: false,
+            ..ServerConfig::default()
+        };
+
+        let metrics = Arc::new(Metrics::new(32, 8));
+        let registry = build_registry(2, 60)?;
+
+        //should return early without error when disabled
+        spawn_status_server(&config_disabled, metrics.clone(), registry.clone())?;
+
+        // Test with enabled but invalid config
+        let config_invalid = ServerConfig {
+            status_enabled: true,
+            status_host: "invalid-host".to_string(),
+            status_port: 9999,
+            ..ServerConfig::default()
+        };
+
+        // Should return error for invalid bind address
+        let result = spawn_status_server(&config_invalid, metrics, registry);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid status server bind address"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn status_json_includes_all_session_fields() -> Result<()> {
+        let metrics = Arc::new(Metrics::new(128, 32));
+        let registry = build_registry(7, 600)?;
+        let state = StatusState { metrics, registry };
+
+        //create session to test non-zero values
+        let session_id = SessionId::from_string("test".to_string());
+        let _session = state.registry.get_or_create_by_id(&session_id).await?;
+
+        let Json(payload) = status_json(State(state)).await;
+
+        // Validate session fields
+        assert_eq!(payload.sessions.total_sessions, 1);
+        assert_eq!(payload.sessions.max_sessions, 7);
+        assert_eq!(payload.sessions.session_timeout_seconds, 600);
+        assert!(payload.sessions.oldest_idle_ms < 1000);
+        assert!(payload.sessions.average_idle_ms < 1000);
+
         Ok(())
     }
 }
