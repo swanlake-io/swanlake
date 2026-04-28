@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Ok, Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
@@ -593,7 +593,7 @@ impl<'a> PreparedStatementTester<'a> {
         assert!(result.is_err());
 
         //case2 too many parameters
-        let double_param_schema = Arc::new(Schema::new(vec![Field::new(col1, DataType::Int32, false),Field::new(col2,DataType::Int32,false)]));
+        let double_param_schema = Arc::new(Schema::new(vec![Field::new("col1", DataType::Int32, false),Field::new("col2",DataType::Int32,false)]));
         let double_param_batch = RecordBatch::try_new(double_param_schema, vec![
             Arc::new(Int32Array::from(vec![1])) as ArrayRef,
             Arc::new(Int32Array::from(vec![1])) as ArrayRef,
