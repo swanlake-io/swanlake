@@ -29,6 +29,9 @@ pub fn run_prepared_statements(args: &CliArgs) -> Result<()> {
     tester.test_insert_with_column_alignment()?;
     tester.test_current_catalog_unqualified_insert()?;
     tester.test_default_catalog_unqualified_insert()?;
+    tester.test_parameter_mismatch_errors()?;
+    tester.test_null_empty_parameters()?;
+    tester.test_ephemeral_prepared_statements()?;
     Ok(())
 }
 
@@ -575,6 +578,120 @@ impl<'a> PreparedStatementTester<'a> {
             (Err(err), _) => Err(err),
             (Ok(()), Err(drop_err)) => Err(drop_err),
         }
+    }
+
+    fn test_parameter_mismatch_errors(&mut self) -> Result<()> {
+        self.drop_table_if_exists("param_mismatch_test")?;
+        let test_result = (|| -> Result<()> {
+            //create test table
+            self.update("CREATE TABLE param_mismatch_test(col1 INTEGER,col2 INTEGER)")?;
+
+            //case1 too few parameters
+            let single_param_schema = Arc::new(Schema::new(vec![Field::new(
+                "col1",
+                DataType::Int32,
+                false,
+            )]));
+            let single_param_batch = RecordBatch::try_new(
+                single_param_schema,
+                vec![Arc::new(Int32Array::from(vec![1])) as ArrayRef],
+            )?;
+            let result = self.client.update_with_record_batch(
+                "INSERT INTO param_mismatch_test (col1, col2) VALUES (?, ?)",
+                single_param_batch,
+            );
+            assert!(result.is_err());
+
+            //case2 too many parameters
+            let double_param_schema = Arc::new(Schema::new(vec![
+                Field::new("col1", DataType::Int32, false),
+                Field::new("col2", DataType::Int32, false),
+            ]));
+            let double_param_batch = RecordBatch::try_new(
+                double_param_schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                ],
+            )?;
+
+            let result = self.client.update_with_record_batch(
+                "INSERT INTO param_mismatch_test (col1) VALUES (?)",
+                double_param_batch,
+            );
+            assert!(result.is_err());
+            Ok(())
+        })();
+
+        self.finalize_table("param_mismatch_test", test_result)
+    }
+
+    fn test_null_empty_parameters(&mut self) -> Result<()> {
+        self.drop_table_if_exists("null_empty_test")?;
+        let test_result = (|| -> Result<()> {
+            //create table
+            self.update("CREATE TABLE null_empty_test (id INTEGER, name VARCHAR, value INTEGER)")?;
+
+            //test null parameter
+            let null_schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("value", DataType::Int32, true),
+            ]));
+
+            let null_batch = RecordBatch::try_new(
+                null_schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                    Arc::new(StringArray::from(vec![Option::<&str>::None])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![Option::<i32>::None])) as ArrayRef,
+                ],
+            )?;
+
+            self.client.update_with_record_batch(
+                "INSERT INTO null_empty_test (id, name, value) VALUES (?, ?, ?)",
+                null_batch,
+            )?;
+
+            //verify null values were inserted
+            let result = self
+                .client
+                .query("SELECT name, value FROM null_empty_test WHERE id = 1")?;
+            let batch = result
+                .batches
+                .first()
+                .context("expected row after null insert")?;
+            assert!(batch.column(0).is_null(0));
+            assert!(batch.column(1).is_null(0));
+            Ok(())
+        })();
+
+        self.finalize_table("null_empty_test", test_result)
+    }
+
+    fn test_ephemeral_prepared_statements(&mut self) -> Result<()> {
+        self.drop_table_if_exists("ephemeral_test")?;
+        let test_result = (|| -> Result<()> {
+            //create table
+            self.update("CREATE TABLE ephemeral_test (id INTEGER, name VARCHAR)")?;
+            self.update("INSERT INTO ephemeral_test VALUES (1, 'test')")?;
+
+            //test with regular prepared statement(for comparison)
+            let regular_params = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+                vec![Arc::new(Int32Array::from(vec![1])) as ArrayRef],
+            )?;
+
+            let regular_result = self.client.query_with_param(
+                "SELECT name FROM ephemeral_test WHERE id = ?",
+                regular_params,
+            )?;
+            assert_eq!(regular_result.total_rows, 1);
+
+            Ok(())
+        })();
+
+        self.finalize_table("ephemeral_test", test_result)
     }
 }
 
