@@ -1,3 +1,13 @@
+/// SQL rewrite utilities for SwanLake.  
+///  
+/// SwanLake does not support row-level locking clauses in SELECT statements  
+/// (e.g., FOR UPDATE, FOR SHARE) due to DuckDB compatibility. This module  
+/// provides utilities to strip these clauses from incoming SQL queries.  
+///  
+/// Note: Only locking clauses supported by sqlparser's GenericDialect are  
+/// stripped. PostgreSQL-specific variants like FOR NO KEY UPDATE or  
+/// FOR UPDATE OF may not be recognized.
+
 use sqlparser::ast::Statement;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
