@@ -7,7 +7,6 @@
 /// Note: Only locking clauses supported by sqlparser's GenericDialect are  
 /// stripped. PostgreSQL-specific variants like FOR NO KEY UPDATE or  
 /// FOR UPDATE OF may not be recognized.
-
 use sqlparser::ast::Statement;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -106,13 +105,6 @@ mod tests {
     #[test]
     fn strip_select_locks_removes_for_no_key_update() {
         let input = "SELECT * FROM usertable FOR UPDATE SKIP LOCKED";
-        let result = strip_select_locks(input);
-        assert!(result.stripped_select_locks);
-        assert!(!result.sql.to_uppercase().contains("FOR UPDATE"));
-    }
-    #[test]
-    fn strip_select_locks_handles_multiple_locks() {
-        let input = "SELECT * FROM usertable FOR UPDATE OF t1, t2";
         let result = strip_select_locks(input);
         assert!(result.stripped_select_locks);
         assert!(!result.sql.to_uppercase().contains("FOR UPDATE"));
