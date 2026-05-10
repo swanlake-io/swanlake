@@ -58,6 +58,8 @@ pub fn strip_select_locks(sql: &str) -> SqlRewriteResult {
 
 #[cfg(test)]
 mod tests {
+    use std::result;
+
     use super::*;
 
     #[test]
@@ -82,5 +84,27 @@ mod tests {
         let result = strip_select_locks(input);
         assert!(result.stripped_select_locks);
         assert_eq!(result.sql, "USE swanlake; SELECT * FROM usertable");
+    }
+    #[test]
+    fn strip_select_locks_removes_for_share() {
+        let input = "SELECT * FROM usertable WHERE ycsb_key = ? FOR SHARE";
+        let result = strip_select_locks(input);
+        assert!(result.stripped_select_locks);
+        assert!(!result.sql.to_uppercase().contains("FOR SHARE"));
+    }
+
+    #[test]
+    fn strip_select_locks_removes_for_no_key_update() {
+        let input = "SELECT * FROM usertable FOR UPDATE SKIP LOCKED";
+        let result = strip_select_locks(input);
+        assert!(result.stripped_select_locks);
+        assert!(!result.sql.to_uppercase().contains("FOR UPDATE"));
+    }
+    #[test]
+    fn strip_select_locks_handles_multiple_locks() {
+        let input = "SELECT * FROM usertable FOR UPDATE OF t1, t2";
+        let result = strip_select_locks(input);
+        assert!(result.stripped_select_locks);
+        assert!(!result.sql.to_uppercase().contains("FOR UPDATE"));
     }
 }
