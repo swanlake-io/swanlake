@@ -33,7 +33,7 @@ def _(conn, mo):
 def _(conn, mo):
     _df = mo.sql(
         f"""
-        use swanlake;
+        use main;
         """,
         engine=conn
     )
