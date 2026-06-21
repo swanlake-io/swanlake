@@ -53,7 +53,7 @@ jobs:
             scale_factor: "0.1"
     name: BenchBase TPCH (${{ matrix.label }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
