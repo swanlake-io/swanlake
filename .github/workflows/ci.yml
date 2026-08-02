@@ -17,7 +17,7 @@ jobs:
       contents: write
       actions: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -40,7 +40,7 @@ jobs:
           shared-key: swanlake-rust
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: "1.25"
           cache: true
@@ -49,13 +49,13 @@ jobs:
             examples/go-*/go.sum
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v5.6.0
         with:
           distribution: "oracle"
           java-version: "23"
 
       - name: Cache Maven repo (BenchBase deps)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.m2/repository
           key: m2-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase.sh') }}
@@ -69,7 +69,7 @@ jobs:
         run: docker compose up -d
 
       - name: Cache DuckDB
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/duckdb-download
@@ -79,7 +79,7 @@ jobs:
             duckdb-${{ runner.os }}-
 
       - name: Cache BenchBase artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: target/benchbase-ycsb
           key: benchbase-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase.sh', 'tests/benchbase/ycsb-flight-sql.xml', 'tests/benchbase/ycsb-ddl-ducklake.sql') }}
@@ -102,7 +102,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Cache uv environments
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/uv
@@ -159,7 +159,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -184,7 +184,7 @@ jobs:
 
       - name: Cache Cargo Registry (Tarball)
         id: cache-registry-tar
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: registry.tar.zst
           key: v2-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
@@ -193,7 +193,7 @@ jobs:
 
       - name: Cache SwanLake Target (Tarball)
         id: cache-target-tar
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: target.tar.zst
           key: v2-swanlake-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('swanlake-*/**/*.rs') }}
@@ -225,14 +225,14 @@ jobs:
 
       - name: Save Cargo Registry Cache (Tarball)
         if: steps.cache-registry-tar.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: registry.tar.zst
           key: v2-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Save SwanLake Target Cache (Tarball)
         if: steps.cache-target-tar.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: target.tar.zst
           key: v2-swanlake-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('swanlake-*/**/*.rs') }}

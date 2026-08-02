@@ -53,7 +53,7 @@ jobs:
             scale_factor: "0.1"
     name: BenchBase TPCH (${{ matrix.label }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -77,13 +77,13 @@ jobs:
           cache-on-failure: true
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v5.6.0
         with:
           distribution: "oracle"
           java-version: "23"
 
       - name: Cache Maven repo (BenchBase deps)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.m2/repository
           key: perf-m2-${{ runner.os }}-${{ hashFiles('scripts/run-benchbase.sh') }}
@@ -97,7 +97,7 @@ jobs:
         run: docker compose up -d
 
       - name: Cache DuckDB
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/duckdb-download
@@ -107,7 +107,7 @@ jobs:
             perf-duckdb-${{ runner.os }}-
 
       - name: Cache BenchBase artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: target/benchbase-tpch-${{ matrix.storage }}
           key: perf-benchbase-${{ runner.os }}-${{ matrix.storage }}-${{ hashFiles('scripts/run-benchbase.sh', 'tests/benchbase/tpch-flight-sql.xml', 'tests/benchbase/tpch-ddl-ducklake.sql') }}
