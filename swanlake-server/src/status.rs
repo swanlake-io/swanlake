@@ -1,9 +1,10 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use axum::{extract::State, response::Html, routing::get, Json, Router};
 use serde::Serialize;
+use tokio::sync::oneshot;
 
 use swanlake_core::config::ServerConfig;
 use swanlake_core::metrics::{Metrics, MetricsSnapshot};
@@ -22,13 +23,20 @@ struct StatusPayload {
     sessions: SessionRegistrySnapshot,
 }
 
-pub fn spawn_status_server(
+/// Spawns the status HTTP server.
+///
+/// Returns `Ok(None)` when the status server is disabled. When enabled,
+/// waits for the listener to bind (bind failure is fatal and returned as
+/// an error), then returns `Ok(Some(receiver))`. The receiver fires if the
+/// status server later fails at runtime, so the caller can react (e.g.
+/// shut down) instead of silently losing health/metrics endpoints.
+pub async fn spawn_status_server(
     config: &ServerConfig,
     metrics: Arc<Metrics>,
     registry: Arc<SessionRegistry>,
-) -> Result<()> {
+) -> Result<Option<oneshot::Receiver<anyhow::Error>>> {
     if !config.status_enabled {
-        return Ok(());
+        return Ok(None);
     }
 
     let addr: SocketAddr = format!("{}:{}", config.status_host, config.status_port)
@@ -46,21 +54,17 @@ pub fn spawn_status_server(
         .route("/healthz", get(healthz))
         .with_state(state);
 
-    tokio::spawn(async move {
-        match tokio::net::TcpListener::bind(addr).await {
-            Ok(listener) => {
-                if let Err(err) = axum::serve(listener, app).await {
-                    tracing::error!(%err, "status server failed");
-                }
-            }
-            Err(err) => {
-                tracing::error!(%err, "status server bind failed");
-            }
-        }
-    });
+    let (bind_tx, bind_rx) = oneshot::channel();
+    let (failure_tx, failure_rx) = oneshot::channel();
 
-    tracing::info!(%addr, "status server listening");
-    Ok(())
+    tokio::spawn(run_listener(
+        addr,
+        bind_tx,
+        failure_tx,
+        move |listener| async move { axum::serve(listener, app).await },
+    ));
+
+    resolve_bind(addr, bind_rx.await, failure_rx)
 }
 
 async fn status_page() -> Html<&'static str> {
@@ -91,6 +95,67 @@ fn normalize_prefix(prefix: &str) -> String {
         String::new()
     } else {
         format!("/{trimmed}")
+    }
+}
+
+/// Builds the fatal error describing why the status `serve` loop ended.
+/// `axum::serve` normally runs forever, so both arms are abnormal.
+fn serve_outcome(result: std::io::Result<()>) -> anyhow::Error {
+    match result {
+        Ok(()) => anyhow!("status server exited unexpectedly"),
+        Err(err) => anyhow!("status server failed: {err}"),
+    }
+}
+
+/// Builds the fatal error returned when the listener fails to bind.
+fn bind_failure(err: std::io::Error) -> anyhow::Error {
+    anyhow!("status server bind failed: {err}")
+}
+
+/// Result of awaiting the listener task's bind notification.
+type BindOutcome = std::result::Result<Result<()>, oneshot::error::RecvError>;
+
+/// Drives the status server's listener task: binds the socket, reports the bind
+/// result to the caller, then waits for the (normally infinite) serve future to
+/// return — any return is treated as a fatal runtime failure. The `serve`
+/// closure is injected so tests can drive the post-serve path deterministically.
+async fn run_listener<F, Fut>(
+    addr: SocketAddr,
+    bind_tx: oneshot::Sender<Result<()>>,
+    failure_tx: oneshot::Sender<anyhow::Error>,
+    serve: F,
+) where
+    F: FnOnce(tokio::net::TcpListener) -> Fut,
+    Fut: std::future::Future<Output = std::io::Result<()>>,
+{
+    match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => {
+            // Notify caller that bind succeeded before entering serve loop
+            let _ = bind_tx.send(Ok(()));
+            // `axum::serve` normally runs forever; any return is abnormal.
+            let outcome = serve_outcome(serve(listener).await);
+            tracing::error!(error = %outcome, "status server stopped serving");
+            let _ = failure_tx.send(outcome);
+        }
+        Err(err) => {
+            let _ = bind_tx.send(Err(bind_failure(err)));
+        }
+    }
+}
+
+/// Translates the listener task's bind notification into the spawn result.
+fn resolve_bind(
+    addr: SocketAddr,
+    bind_result: BindOutcome,
+    failure_rx: oneshot::Receiver<anyhow::Error>,
+) -> Result<Option<oneshot::Receiver<anyhow::Error>>> {
+    match bind_result {
+        Ok(Ok(())) => {
+            tracing::info!(%addr, "status server listening");
+            Ok(Some(failure_rx))
+        }
+        Ok(Err(err)) => Err(err),
+        Err(_) => Err(anyhow!("status server task panicked before binding")),
     }
 }
 
@@ -150,8 +215,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn spawn_status_server_is_noop_when_disabled() -> Result<()> {
+    #[tokio::test]
+    async fn spawn_status_server_is_noop_when_disabled() -> Result<()> {
         let config = ServerConfig {
             status_enabled: false,
             status_host: "not-a-valid-host:".to_string(),
@@ -159,12 +224,16 @@ mod tests {
         };
         let metrics = Arc::new(Metrics::new(32, 8));
         let registry = build_registry(2, 60)?;
-        spawn_status_server(&config, metrics, registry)?;
+        let handle = spawn_status_server(&config, metrics, registry).await?;
+        assert!(
+            handle.is_none(),
+            "disabled status server should return None"
+        );
         Ok(())
     }
 
-    #[test]
-    fn spawn_status_server_validates_bind_address_when_enabled() -> Result<()> {
+    #[tokio::test]
+    async fn spawn_status_server_validates_bind_address_when_enabled() -> Result<()> {
         let config = ServerConfig {
             status_enabled: true,
             status_host: "invalid host".to_string(),
@@ -174,6 +243,7 @@ mod tests {
         let metrics = Arc::new(Metrics::new(32, 8));
         let registry = build_registry(2, 60)?;
         let err = spawn_status_server(&config, metrics, registry)
+            .await
             .err()
             .ok_or_else(|| anyhow!("expected invalid bind address error"))?;
         assert!(err
@@ -203,8 +273,8 @@ mod tests {
 
         Ok(())
     }
-    #[test]
-    fn status_server_config_changes() -> Result<()> {
+    #[tokio::test]
+    async fn status_server_config_changes() -> Result<()> {
         // Test with disabled status server
         let config_disabled = ServerConfig {
             status_enabled: false,
@@ -215,7 +285,12 @@ mod tests {
         let registry = build_registry(2, 60)?;
 
         //should return early without error when disabled
-        spawn_status_server(&config_disabled, metrics.clone(), registry.clone())?;
+        let handle =
+            spawn_status_server(&config_disabled, metrics.clone(), registry.clone()).await?;
+        assert!(
+            handle.is_none(),
+            "disabled status server should return None"
+        );
 
         // Test with enabled but invalid config
         let config_invalid = ServerConfig {
@@ -226,7 +301,7 @@ mod tests {
         };
 
         // Should return error for invalid bind address
-        let result = spawn_status_server(&config_invalid, metrics, registry);
+        let result = spawn_status_server(&config_invalid, metrics, registry).await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -254,6 +329,90 @@ mod tests {
         assert_eq!(payload.sessions.session_timeout_seconds, 600);
         assert!(payload.sessions.oldest_idle_ms < 1000);
         assert!(payload.sessions.average_idle_ms < 1000);
+
+        Ok(())
+    }
+
+    #[test]
+    fn serve_outcome_maps_both_arms() {
+        let exited: std::io::Result<()> = std::result::Result::Ok(());
+        let exited_msg = serve_outcome(exited).to_string();
+        assert!(exited_msg.contains("exited unexpectedly"));
+
+        let failed: std::io::Result<()> = std::result::Result::Err(std::io::Error::other("boom"));
+        let failed_msg = serve_outcome(failed).to_string();
+        assert!(failed_msg.contains("status server failed"));
+    }
+
+    #[test]
+    fn bind_failure_describes_error() {
+        let msg = bind_failure(std::io::Error::other("in use")).to_string();
+        assert!(msg.contains("status server bind failed"));
+    }
+
+    #[tokio::test]
+    async fn run_listener_reports_serve_exit() -> Result<()> {
+        let addr: SocketAddr = "127.0.0.1:0".parse()?;
+        let (bind_tx, bind_rx) = oneshot::channel();
+        let (failure_tx, failure_rx) = oneshot::channel();
+
+        // Inject a serve future that returns immediately, exercising the
+        // post-serve failure path (log + notify caller).
+        run_listener(addr, bind_tx, failure_tx, |_listener| async {
+            std::result::Result::<(), std::io::Error>::Ok(())
+        })
+        .await;
+
+        assert!(bind_rx.await.is_ok());
+        let failure = failure_rx.await.map_err(|e| anyhow!(e))?;
+        let msg = failure.to_string();
+        assert!(msg.contains("exited unexpectedly"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolve_bind_reports_task_panic() -> Result<()> {
+        let addr: SocketAddr = "127.0.0.1:0".parse()?;
+        let (_failure_tx, failure_rx) = oneshot::channel::<anyhow::Error>();
+
+        // Listener task dropped the bind sender without sending: simulates a
+        // panic before binding, surfaced to the caller as a RecvError.
+        let (bind_tx, bind_rx) = oneshot::channel::<Result<()>>();
+        drop(bind_tx);
+        let bind_result = bind_rx.await;
+
+        let outcome = resolve_bind(addr, bind_result, failure_rx);
+        let err = outcome
+            .err()
+            .ok_or_else(|| anyhow!("expected task-panic error"))?;
+        let msg = err.to_string();
+        assert!(msg.contains("panicked before binding"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn spawn_status_server_reports_bind_conflict() -> Result<()> {
+        // Hold a port open so the status server's listener bind fails.
+        let blocker = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let port = blocker.local_addr()?.port();
+
+        let config = ServerConfig {
+            status_enabled: true,
+            status_host: "127.0.0.1".to_string(),
+            status_port: port,
+            ..ServerConfig::default()
+        };
+        let metrics = Arc::new(Metrics::new(32, 8));
+        let registry = build_registry(2, 60)?;
+
+        let err = spawn_status_server(&config, metrics, registry)
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("expected bind conflict error"))?;
+        let msg = err.to_string();
+        assert!(msg.contains("status server bind failed"));
 
         Ok(())
     }
